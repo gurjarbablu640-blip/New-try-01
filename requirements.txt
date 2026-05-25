@@ -1,0 +1,54 @@
+# Salesoorja AI Sales Intelligence - Python Dependencies
+# =====================================================
+
+# Web Framework
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+pgvector>=0.2.4
+alembic>=1.13.0
+
+# Celery (Task Queue)
+celery[redis]>=5.3.0
+redis>=5.0.0
+
+# AI / LLM
+anthropic>=0.25.0
+google-generativeai>=0.5.0
+
+# HTTP Client
+httpx>=0.27.0
+requests>=2.31.0
+
+# Scraping & Parsing
+beautifulsoup4>=4.12.0
+feedparser>=6.0.10
+newspaper3k>=0.2.8
+lxml>=5.1.0
+
+# Fuzzy Matching
+jellyfish>=1.0.0
+python-Levenshtein>=0.25.0
+
+# Google APIs
+google-auth>=2.28.0
+
+# Configuration & Settings
+pydantic-settings>=2.2.0
+pydantic>=2.6.0
+python-dotenv>=1.0.0
+
+# Scheduling
+schedule>=1.2.0
+
+# Data Processing
+numpy>=1.26.0
+
+# Utilities
+python-dateutil>=2.8.2
+
+# ASGI/WSGI Server
+gunicorn>=21.2.0
