@@ -73,7 +73,7 @@ services:
     command: >
       sh -c "
         alembic upgrade head &&
-        uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+        uvicorn main:app --host 0.0.0.0 --port 8000 --reload
       "
 
   # ============================================================
@@ -103,7 +103,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: celery -A backend.celery_app:celery_app worker --loglevel=info --concurrency=2
+    command: celery -A celery_app:celery_app worker --loglevel=info --concurrency=2
 
   # ============================================================
   # Celery Beat Scheduler
@@ -132,7 +132,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: celery -A backend.celery_app:celery_app beat --loglevel=info
+    command: celery -A celery_app:celery_app beat --loglevel=info
 
   # ============================================================
   # React + Vite Frontend

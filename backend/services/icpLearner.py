@@ -20,12 +20,12 @@ import anthropic
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
-from backend.celery_app import celery_app
-from backend.config import settings
-from backend.database import SessionLocal
-from backend.models.company import Company
-from backend.models.pipeline import LeadRating
-from backend.models.website_intel import CompanyWebsiteIntel
+from celery_app import celery_app
+from config import settings
+from database import SessionLocal
+from models.company import Company
+from models.pipeline import LeadRating
+from models.website_intel import CompanyWebsiteIntel
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ def rate_lead(company_id: int, rating: int, reason: str = None, db: Session = No
 # ICP LEARNING (Weekly Celery Task)
 # ============================================================
 
-@celery_app.task(name="backend.services.icpLearner.learn_icp_patterns")
+@celery_app.task(name="services.icpLearner.learn_icp_patterns")
 def learn_icp_patterns() -> Dict:
     """
     Weekly task: analyze rated leads to learn ICP patterns.

@@ -18,11 +18,11 @@ from typing import Dict, Any, Optional
 import anthropic
 from sqlalchemy.orm import Session
 
-from backend.config import settings
-from backend.database import SessionLocal
-from backend.models.company import Company
-from backend.models.outreach_draft import OutreachDraft
-from backend.services.personalizationEngine import build_personalization_context
+from config import settings
+from database import SessionLocal
+from models.company import Company
+from models.outreach_draft import OutreachDraft
+from services.personalizationEngine import build_personalization_context
 
 logger = logging.getLogger(__name__)
 

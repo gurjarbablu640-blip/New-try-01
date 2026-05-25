@@ -10,8 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from backend.database import SessionLocal
-from backend.models.company import Company
+from database import SessionLocal
+from models.company import Company
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["API"])
@@ -55,7 +55,7 @@ class ApproveLookalikesRequest(BaseModel):
 @router.post("/triggers/run-now")
 def run_triggers():
     """Manually trigger all buying trigger engines."""
-    from backend.workers.triggerEngine import run_all_triggers
+    from workers.triggerEngine import run_all_triggers
 
     try:
         result = run_all_triggers()
@@ -68,7 +68,7 @@ def run_triggers():
 @router.get("/buying-window")
 def get_buying_window(db: Session = Depends(get_db)):
     """Get companies organized by 30/60/90 day buying window."""
-    from backend.services.buyingWindow import get_buying_window_board
+    from services.buyingWindow import get_buying_window_board
 
     result = get_buying_window_board(db)
     return result
@@ -77,7 +77,7 @@ def get_buying_window(db: Session = Depends(get_db)):
 @router.get("/tasks/today")
 def get_today_tasks(db: Session = Depends(get_db)):
     """Get today's action queue sorted by urgency + ICP."""
-    from backend.routes.pipeline import get_todays_tasks
+    from routes.pipeline import get_todays_tasks
 
     return get_todays_tasks(db=db)
 
@@ -85,7 +85,7 @@ def get_today_tasks(db: Session = Depends(get_db)):
 @router.post("/companies/{company_id}/rate")
 def rate_company(company_id: int, body: RateLeadRequest, db: Session = Depends(get_db)):
     """Rate a lead 1-5 stars for ICP learning."""
-    from backend.services.icpLearner import rate_lead
+    from services.icpLearner import rate_lead
 
     if body.rating < 1 or body.rating > 5:
         raise HTTPException(400, "Rating must be 1-5")
@@ -99,7 +99,7 @@ def rate_company(company_id: int, body: RateLeadRequest, db: Session = Depends(g
 @router.get("/lookalikes")
 def get_lookalikes(db: Session = Depends(get_db)):
     """Get all AI-identified lookalike leads not yet contacted."""
-    from backend.services.lookalikeEngine import get_lookalike_leads
+    from services.lookalikeEngine import get_lookalike_leads
 
     leads = get_lookalike_leads(db)
     return {"leads": leads, "total": len(leads)}
@@ -108,7 +108,7 @@ def get_lookalikes(db: Session = Depends(get_db)):
 @router.post("/lookalikes/approve")
 def approve_lookalikes_route(body: ApproveLookalikesRequest, db: Session = Depends(get_db)):
     """Approve batch of lookalike leads for outreach."""
-    from backend.services.lookalikeEngine import approve_lookalikes
+    from services.lookalikeEngine import approve_lookalikes
 
     if not body.company_ids:
         raise HTTPException(400, "company_ids list required")
@@ -119,7 +119,7 @@ def approve_lookalikes_route(body: ApproveLookalikesRequest, db: Session = Depen
 @router.post("/search/semantic")
 def semantic_search_route(body: SemanticSearchRequest, db: Session = Depends(get_db)):
     """Natural language lead search."""
-    from backend.services.semanticSearch import semantic_search
+    from services.semanticSearch import semantic_search
 
     results = semantic_search(body.query, limit=body.limit, db=db, filters=body.filters)
     return {"results": results, "total": len(results), "query": body.query}
@@ -128,7 +128,7 @@ def semantic_search_route(body: SemanticSearchRequest, db: Session = Depends(get
 @router.get("/ab-insights")
 def get_ab_insights_route(db: Session = Depends(get_db)):
     """Get subject line A/B performance data."""
-    from backend.services.abOptimizer import get_ab_insights
+    from services.abOptimizer import get_ab_insights
 
     return get_ab_insights(db)
 
@@ -136,7 +136,7 @@ def get_ab_insights_route(db: Session = Depends(get_db)):
 @router.get("/icp-insights")
 def get_icp_insights_route(db: Session = Depends(get_db)):
     """Get what the AI has learned about ICP."""
-    from backend.services.icpLearner import get_icp_insights
+    from services.icpLearner import get_icp_insights
 
     return get_icp_insights(db)
 
@@ -144,7 +144,7 @@ def get_icp_insights_route(db: Session = Depends(get_db)):
 @router.post("/outreach/generate")
 def generate_outreach_route(body: OutreachGenerateRequest, db: Session = Depends(get_db)):
     """Generate personalized outreach for a company."""
-    from backend.services.ai_synthesis import generate_outreach
+    from services.ai_synthesis import generate_outreach
 
     result = generate_outreach(body.company_id, db)
     if "error" in result:
@@ -155,7 +155,7 @@ def generate_outreach_route(body: OutreachGenerateRequest, db: Session = Depends
 @router.post("/outreach/generate-batch")
 def generate_outreach_batch_route(body: OutreachBatchRequest, db: Session = Depends(get_db)):
     """Generate outreach for multiple companies."""
-    from backend.services.ai_synthesis import generate_outreach_batch
+    from services.ai_synthesis import generate_outreach_batch
 
     if not body.company_ids:
         raise HTTPException(400, "company_ids list required")
@@ -165,7 +165,7 @@ def generate_outreach_batch_route(body: OutreachBatchRequest, db: Session = Depe
 @router.get("/companies/{company_id}/next-action")
 def get_next_action(company_id: int, db: Session = Depends(get_db)):
     """Get AI recommended next action for a company."""
-    from backend.services.nextBestAction import get_next_best_action
+    from services.nextBestAction import get_next_best_action
 
     result = get_next_best_action(company_id, db)
     if "error" in result:
@@ -176,7 +176,7 @@ def get_next_action(company_id: int, db: Session = Depends(get_db)):
 @router.post("/companies/{company_id}/rescore")
 def rescore_company(company_id: int, db: Session = Depends(get_db)):
     """Recalculate ICP score for a company."""
-    from backend.services.scoringEngine import calculate_icp_score
+    from services.scoringEngine import calculate_icp_score
 
     result = calculate_icp_score(company_id, db)
     if "error" in result:
@@ -187,7 +187,7 @@ def rescore_company(company_id: int, db: Session = Depends(get_db)):
 @router.post("/scoring/rescore-all")
 def rescore_all(db: Session = Depends(get_db)):
     """Rescore all companies (admin action)."""
-    from backend.services.scoringEngine import rescore_all_companies
+    from services.scoringEngine import rescore_all_companies
 
     return rescore_all_companies(db)
 
@@ -195,6 +195,6 @@ def rescore_all(db: Session = Depends(get_db)):
 @router.post("/search/index-all")
 def index_all_companies(db: Session = Depends(get_db)):
     """Index all companies for semantic search (admin action)."""
-    from backend.services.semanticSearch import index_all_companies as do_index
+    from services.semanticSearch import index_all_companies as do_index
 
     return do_index(db)

@@ -14,10 +14,10 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, desc
 from sqlalchemy.orm import Session
 
-from backend.celery_app import celery_app
-from backend.database import SessionLocal
-from backend.models.pipeline import ABTestResult
-from backend.models.company import Company
+from celery_app import celery_app
+from database import SessionLocal
+from models.pipeline import ABTestResult
+from models.company import Company
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # A/B ANALYSIS (Weekly Celery Task)
 # ============================================================
 
-@celery_app.task(name="backend.services.abOptimizer.analyze_ab_results")
+@celery_app.task(name="services.abOptimizer.analyze_ab_results")
 def analyze_ab_results() -> Dict:
     """
     Weekly analysis: which subject line variants perform best?

@@ -4,7 +4,7 @@ from sqlalchemy import (
     Numeric, func
 )
 from sqlalchemy.orm import relationship
-from backend.database import Base
+from database import Base
 
 
 class Company(Base):

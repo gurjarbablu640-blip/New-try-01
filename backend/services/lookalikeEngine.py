@@ -19,12 +19,12 @@ from typing import List, Dict, Optional
 from sqlalchemy import text, desc, func
 from sqlalchemy.orm import Session
 
-from backend.celery_app import celery_app
-from backend.database import SessionLocal
-from backend.models.company import Company
-from backend.models.pipeline import PipelineStage
-from backend.models.website_intel import CompanyWebsiteIntel
-from backend.services.semanticSearch import find_similar_companies
+from celery_app import celery_app
+from database import SessionLocal
+from models.company import Company
+from models.pipeline import PipelineStage
+from models.website_intel import CompanyWebsiteIntel
+from services.semanticSearch import find_similar_companies
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ def register_won_customer(company_id: int, db: Session = None):
 # LOOKALIKE FINDER (Celery task)
 # ============================================================
 
-@celery_app.task(name="backend.services.lookalikeEngine.find_lookalikes")
+@celery_app.task(name="services.lookalikeEngine.find_lookalikes")
 def find_lookalikes() -> Dict:
     """
     Find companies similar to all won customers.

@@ -12,10 +12,10 @@ from typing import Dict, List, Optional
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from backend.database import SessionLocal
-from backend.models.company import Company
-from backend.models.website_intel import CompanyWebsiteIntel
-from backend.models.intent_signal import CompanyIntentSignal
+from database import SessionLocal
+from models.company import Company
+from models.website_intel import CompanyWebsiteIntel
+from models.intent_signal import CompanyIntentSignal
 
 logger = logging.getLogger(__name__)
 

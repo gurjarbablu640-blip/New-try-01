@@ -3,7 +3,7 @@ from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, Text, ARRAY, Float, Boolean, func
 )
 from sqlalchemy.orm import relationship
-from backend.database import Base
+from database import Base
 
 
 class CompanyWebsiteIntel(Base):

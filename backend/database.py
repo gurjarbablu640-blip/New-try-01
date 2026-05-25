@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
 
-from backend.config import settings
+from config import settings
 
 # ============================================================
 # Async engine (FastAPI endpoints)

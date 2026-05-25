@@ -18,11 +18,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, desc
 from sqlalchemy.orm import Session
 
-from backend.database import SessionLocal
-from backend.models.company import Company
-from backend.models.person import Person
-from backend.models.pipeline import PipelineStage, Activity, ABTestResult
-from backend.models.intent_signal import CompanyIntentSignal
+from database import SessionLocal
+from models.company import Company
+from models.person import Person
+from models.pipeline import PipelineStage, Activity, ABTestResult
+from models.intent_signal import CompanyIntentSignal
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/pipeline", tags=["Pipeline"])
@@ -61,7 +61,7 @@ class PipelineMoveRequest(BaseModel):
 
 class ActivityRequest(BaseModel):
     company_id: int
-    activity_type: str = Field(..., alias="type", default=None)
+    activity_type: str | None = Field(None, alias="type")
     outcome: Optional[str] = None
     notes: Optional[str] = None
     person_id: Optional[int] = None

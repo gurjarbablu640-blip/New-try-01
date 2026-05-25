@@ -2,7 +2,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, ARRAY, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
-from backend.database import Base
+from database import Base
 
 
 class OutreachDraft(Base):

@@ -1,7 +1,7 @@
 """Company Intent Signals model."""
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Float, func
 from sqlalchemy.orm import relationship
-from backend.database import Base
+from database import Base
 
 
 class CompanyIntentSignal(Base):

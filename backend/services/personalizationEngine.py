@@ -14,11 +14,11 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
-from backend.database import SessionLocal
-from backend.models.company import Company
-from backend.models.person import Person
-from backend.models.website_intel import CompanyWebsiteIntel
-from backend.models.intent_signal import CompanyIntentSignal
+from database import SessionLocal
+from models.company import Company
+from models.person import Person
+from models.website_intel import CompanyWebsiteIntel
+from models.intent_signal import CompanyIntentSignal
 
 logger = logging.getLogger(__name__)
 

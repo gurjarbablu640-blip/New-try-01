@@ -14,11 +14,11 @@ from typing import Dict, List
 from sqlalchemy import desc, text
 from sqlalchemy.orm import Session
 
-from backend.celery_app import celery_app
-from backend.database import SessionLocal
-from backend.models.company import Company
-from backend.models.pipeline import PipelineStage
-from backend.models.intent_signal import CompanyIntentSignal
+from celery_app import celery_app
+from database import SessionLocal
+from models.company import Company
+from models.pipeline import PipelineStage
+from models.intent_signal import CompanyIntentSignal
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # BUYING WINDOW CALCULATION (Daily Celery Task)
 # ============================================================
 
-@celery_app.task(name="backend.services.buyingWindow.calculate_buying_windows")
+@celery_app.task(name="services.buyingWindow.calculate_buying_windows")
 def calculate_buying_windows() -> Dict:
     """
     Daily task: calculate and update buying_window for all companies.

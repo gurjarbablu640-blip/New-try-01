@@ -24,12 +24,12 @@ from bs4 import BeautifulSoup
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
-from backend.celery_app import celery_app
-from backend.database import SessionLocal
-from backend.config import settings
-from backend.models.company import Company
-from backend.models.intent_signal import CompanyIntentSignal
-from backend.models.website_intel import CompanyWebsiteIntel
+from celery_app import celery_app
+from database import SessionLocal
+from config import settings
+from models.company import Company
+from models.intent_signal import CompanyIntentSignal
+from models.website_intel import CompanyWebsiteIntel
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +180,7 @@ def recalculate_intent_velocity(db: Session, company_id: int):
 # 8a. NAUKRI JOB BOARD SCRAPER
 # ============================================================
 
-@celery_app.task(name="backend.workers.triggerEngine.scan_naukri_jobs")
+@celery_app.task(name="workers.triggerEngine.scan_naukri_jobs")
 def scan_naukri_jobs():
     """
     Scrape Naukri for QA/calibration job postings.
@@ -316,7 +316,7 @@ def _infer_seniority(title: str) -> str:
 # 8b. GOOGLE NEWS SIGNAL SCRAPER
 # ============================================================
 
-@celery_app.task(name="backend.workers.triggerEngine.scan_google_news")
+@celery_app.task(name="workers.triggerEngine.scan_google_news")
 def scan_google_news():
     """
     Scan Google News RSS for expansion signals related to companies in DB.
@@ -427,7 +427,7 @@ def _scan_regional_news(state: str, db: Session):
 # 8c. NABL RENEWAL CYCLE TRACKER
 # ============================================================
 
-@celery_app.task(name="backend.workers.triggerEngine.check_nabl_renewals")
+@celery_app.task(name="workers.triggerEngine.check_nabl_renewals")
 def check_nabl_renewals():
     """
     NABL accreditations renew every 2 years.
@@ -502,7 +502,7 @@ def _calculate_missing_renewal_dates(db: Session):
 # 8d. ISO AUDIT WINDOW DETECTOR
 # ============================================================
 
-@celery_app.task(name="backend.workers.triggerEngine.check_iso_audit_windows")
+@celery_app.task(name="workers.triggerEngine.check_iso_audit_windows")
 def check_iso_audit_windows():
     """
     ISO 9001 / ISO 17025 surveillance audits happen every 12 months.
@@ -559,7 +559,7 @@ def check_iso_audit_windows():
 # 8e. IMPORT SPIKE DETECTOR
 # ============================================================
 
-@celery_app.task(name="backend.workers.triggerEngine.detect_import_spikes")
+@celery_app.task(name="workers.triggerEngine.detect_import_spikes")
 def detect_import_spikes():
     """
     Compare company's latest import activity vs 3-month average.
@@ -628,7 +628,7 @@ def _check_import_spike(company: Company, db: Session) -> bool:
 # 8f. GOOGLE REVIEWS MINING
 # ============================================================
 
-@celery_app.task(name="backend.workers.triggerEngine.mine_google_reviews")
+@celery_app.task(name="workers.triggerEngine.mine_google_reviews")
 def mine_google_reviews():
     """
     For companies with Google Maps place_id, analyze their reviews
@@ -751,7 +751,7 @@ def _analyze_company_reviews(company: Company, db: Session) -> Dict:
 # UTILITY: Manual trigger run
 # ============================================================
 
-@celery_app.task(name="backend.workers.triggerEngine.run_all_triggers")
+@celery_app.task(name="workers.triggerEngine.run_all_triggers")
 def run_all_triggers():
     """Run all trigger engines manually (for /api/triggers/run-now endpoint)."""
     results = {}
@@ -794,7 +794,7 @@ def run_all_triggers():
 # UTILITY: Expire old signals
 # ============================================================
 
-@celery_app.task(name="backend.workers.triggerEngine.expire_old_signals")
+@celery_app.task(name="workers.triggerEngine.expire_old_signals")
 def expire_old_signals():
     """Mark expired signals as inactive."""
     db = get_db_session()

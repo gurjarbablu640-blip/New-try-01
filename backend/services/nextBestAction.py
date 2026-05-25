@@ -17,12 +17,12 @@ import anthropic
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from backend.config import settings
-from backend.database import SessionLocal
-from backend.models.company import Company
-from backend.models.person import Person
-from backend.models.pipeline import PipelineStage, Activity
-from backend.models.intent_signal import CompanyIntentSignal
+from config import settings
+from database import SessionLocal
+from models.company import Company
+from models.person import Person
+from models.pipeline import PipelineStage, Activity
+from models.intent_signal import CompanyIntentSignal
 
 logger = logging.getLogger(__name__)
 

@@ -3,39 +3,66 @@ Salesoorja AI Sales Intelligence - FastAPI Application
 =======================================================
 Main application entry point with lifespan management.
 """
+
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.config import settings
+from config import settings
 
-# Configure logging
+# ============================================================
+# LOGGING CONFIGURATION
+# ============================================================
+
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+
 logger = logging.getLogger(__name__)
 
 
+# ============================================================
+# APPLICATION LIFESPAN
+# ============================================================
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan: startup and shutdown events."""
+    """
+    Application startup/shutdown lifecycle.
+    """
+
     logger.info("Salesoorja AI Sales Intelligence starting up...")
+
     yield
+
     logger.info("Salesoorja AI Sales Intelligence shutting down...")
 
+
+# ============================================================
+# FASTAPI APP
+# ============================================================
 
 app = FastAPI(
     title="Salesoorja AI Sales Intelligence",
     version="2.0.0",
-    description="Full AI Sales Intelligence system with trigger-based outreach",
+    description="AI-powered calibration sales intelligence platform",
     lifespan=lifespan,
 )
 
+
+# ============================================================
 # CORS
-origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+# ============================================================
+
+origins = [
+    o.strip()
+    for o in settings.CORS_ORIGINS.split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins or ["*"],
@@ -44,18 +71,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register routers
-from backend.routes.api import router as api_router  # noqa: E402
-from backend.routes.pipeline import router as pipeline_router  # noqa: E402
+
+# ============================================================
+# IMPORT ROUTERS
+# ============================================================
+
+from routes.api import router as api_router  # noqa: E402
+from routes.pipeline import router as pipeline_router  # noqa: E402
+from routes.leads import router as leads_router  # noqa: E402
+
+
+# ============================================================
+# REGISTER ROUTERS
+# ============================================================
 
 app.include_router(api_router)
 app.include_router(pipeline_router)
+app.include_router(leads_router)
 
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "service": "salesoorja-ai"}
+    return {
+        "status": "healthy",
+        "service": "salesoorja-ai",
+    }
 
+
+# ============================================================
+# ROOT ENDPOINT
+# ============================================================
 
 @app.get("/")
 async def root():
@@ -64,6 +113,7 @@ async def root():
         "version": "2.0.0",
         "docs": "/docs",
         "modules": [
+            "Lead Ingestion Engine",
             "Buying Trigger Engine",
             "Hyper-Personalization Engine",
             "AI Outreach Synthesis",

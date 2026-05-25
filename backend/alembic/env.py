@@ -13,11 +13,11 @@ from sqlalchemy import engine_from_config, pool
 # Ensure the backend package is importable
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from backend.config import settings  # noqa: E402
-from backend.database import Base  # noqa: E402
+from config import settings  # noqa: E402
+from database import Base  # noqa: E402
 
 # Import ALL models so Base.metadata is populated
-from backend.models import (  # noqa: E402, F401
+from models import (  # noqa: E402, F401
     Company,
     Person,
     CompanyWebsiteIntel,
