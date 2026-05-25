@@ -1,35 +1,35 @@
-"""Application configuration."""
-import os
+"""Application configuration — loaded from environment variables."""
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables."""
+    """Application settings loaded from environment variables / .env file."""
 
     # Database
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql://salesoorja:salesoorja@localhost:5432/salesoorja"
-    )
+    DATABASE_URL: str = "postgresql+asyncpg://salesoorja:salesoorja@localhost:5432/salesoorja"
+    DATABASE_URL_SYNC: str = "postgresql://salesoorja:salesoorja@localhost:5432/salesoorja"
 
     # Redis / Celery
-    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-    CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
+    REDIS_URL: str = "redis://localhost:6379/0"
+    CELERY_BROKER_URL: str = "redis://localhost:6379/0"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
 
     # Claude / Anthropic
-    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    ANTHROPIC_API_KEY: str = ""
 
     # Google / Gemini
-    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-    GOOGLE_MAPS_API_KEY: str = os.getenv("GOOGLE_MAPS_API_KEY", "")
+    GOOGLE_API_KEY: str = ""
+    GOOGLE_MAPS_API_KEY: str = ""
 
     # App settings
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "change-me-in-production")
-    DEBUG: bool = os.getenv("DEBUG", "true").lower() == "true"
+    SECRET_KEY: str = "change-me-in-production"
+    DEBUG: bool = True
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
 
     class Config:
         env_file = ".env"
+        env_file_encoding = "utf-8"
+        extra = "ignore"
 
 
 settings = Settings()

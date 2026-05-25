@@ -37,3 +37,12 @@ Thumbs.db
 # Logs
 *.log
 celery*.pid
+
+# Docker
+docker-compose.override.yml
+
+# Vite
+frontend/dist/
+
+# Alembic
+*.pyc

@@ -1,0 +1,158 @@
+version: "3.9"
+
+services:
+  # ============================================================
+  # PostgreSQL 16 with pgvector extension
+  # ============================================================
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: salesoorja-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-salesoorja}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-salesoorja}
+      POSTGRES_DB: ${POSTGRES_DB:-salesoorja}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-salesoorja}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Redis 7
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: salesoorja-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ============================================================
+  # FastAPI Backend
+  # ============================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: salesoorja-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-salesoorja}:${POSTGRES_PASSWORD:-salesoorja}@db:5432/${POSTGRES_DB:-salesoorja}
+      - DATABASE_URL_SYNC=postgresql://${POSTGRES_USER:-salesoorja}:${POSTGRES_PASSWORD:-salesoorja}@db:5432/${POSTGRES_DB:-salesoorja}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - DEBUG=${DEBUG:-true}
+      - CORS_ORIGINS=http://localhost:5173,http://frontend:5173
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+
+  # ============================================================
+  # Celery Worker
+  # ============================================================
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: salesoorja-celery-worker
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-salesoorja}:${POSTGRES_PASSWORD:-salesoorja}@db:5432/${POSTGRES_DB:-salesoorja}
+      - DATABASE_URL_SYNC=postgresql://${POSTGRES_USER:-salesoorja}:${POSTGRES_PASSWORD:-salesoorja}@db:5432/${POSTGRES_DB:-salesoorja}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - DEBUG=${DEBUG:-false}
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A backend.celery_app:celery_app worker --loglevel=info --concurrency=2
+
+  # ============================================================
+  # Celery Beat Scheduler
+  # ============================================================
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: salesoorja-celery-beat
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-salesoorja}:${POSTGRES_PASSWORD:-salesoorja}@db:5432/${POSTGRES_DB:-salesoorja}
+      - DATABASE_URL_SYNC=postgresql://${POSTGRES_USER:-salesoorja}:${POSTGRES_PASSWORD:-salesoorja}@db:5432/${POSTGRES_DB:-salesoorja}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - DEBUG=${DEBUG:-false}
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A backend.celery_app:celery_app beat --loglevel=info
+
+  # ============================================================
+  # React + Vite Frontend
+  # ============================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: salesoorja-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8000/api
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:
