@@ -4,7 +4,12 @@ from models.person import Person
 from models.website_intel import CompanyWebsiteIntel
 from models.intent_signal import CompanyIntentSignal
 from models.outreach_draft import OutreachDraft
-from models.pipeline import PipelineStage, Activity, ABTestResult, LeadRating
+from models.pipeline import (
+    PipelineStage,
+    PipelineActivity,
+    ABTestResult,
+    LeadRating,
+)
 
 __all__ = [
     "Company",
@@ -13,7 +18,7 @@ __all__ = [
     "CompanyIntentSignal",
     "OutreachDraft",
     "PipelineStage",
-    "Activity",
+    "PipelineActivity",
     "ABTestResult",
     "LeadRating",
 ]

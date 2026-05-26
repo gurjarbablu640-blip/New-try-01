@@ -5,20 +5,43 @@ Main application entry point with lifespan management.
 """
 
 import logging
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+
+from fastapi.middleware.cors import (
+    CORSMiddleware
+)
 
 from config import settings
+
 
 # ============================================================
 # LOGGING CONFIGURATION
 # ============================================================
 
 logging.basicConfig(
-    level=logging.DEBUG if settings.DEBUG else logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+
+    level=(
+
+        logging.DEBUG
+
+        if settings.DEBUG
+
+        else logging.INFO
+    ),
+
+    format=(
+
+        "%(asctime)s - "
+
+        "%(name)s - "
+
+        "%(levelname)s - "
+
+        "%(message)s"
+    ),
 )
 
 logger = logging.getLogger(__name__)
@@ -30,15 +53,16 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Application startup/shutdown lifecycle.
-    """
 
-    logger.info("Salesoorja AI Sales Intelligence starting up...")
+    logger.info(
+        "Salesoorja AI Sales Intelligence starting up..."
+    )
 
     yield
 
-    logger.info("Salesoorja AI Sales Intelligence shutting down...")
+    logger.info(
+        "Salesoorja AI Sales Intelligence shutting down..."
+    )
 
 
 # ============================================================
@@ -46,9 +70,15 @@ async def lifespan(app: FastAPI):
 # ============================================================
 
 app = FastAPI(
+
     title="Salesoorja AI Sales Intelligence",
+
     version="2.0.0",
-    description="AI-powered calibration sales intelligence platform",
+
+    description=(
+        "AI-powered calibration sales intelligence platform"
+    ),
+
     lifespan=lifespan,
 )
 
@@ -58,16 +88,24 @@ app = FastAPI(
 # ============================================================
 
 origins = [
+
     o.strip()
+
     for o in settings.CORS_ORIGINS.split(",")
+
     if o.strip()
 ]
 
 app.add_middleware(
+
     CORSMiddleware,
+
     allow_origins=origins or ["*"],
+
     allow_credentials=True,
+
     allow_methods=["*"],
+
     allow_headers=["*"],
 )
 
@@ -76,9 +114,29 @@ app.add_middleware(
 # IMPORT ROUTERS
 # ============================================================
 
-from routes.api import router as api_router  # noqa: E402
-from routes.pipeline import router as pipeline_router  # noqa: E402
-from routes.leads import router as leads_router  # noqa: E402
+from routes.api import (
+    router as api_router
+)  # noqa: E402
+
+from routes.pipeline import (
+    router as pipeline_router
+)  # noqa: E402
+
+from routes.leads import (
+    router as leads_router
+)  # noqa: E402
+
+from routes.scraper import (
+    router as scraper_router
+)  # noqa: E402
+
+from routes.outreach import (
+    router as outreach_router
+)  # noqa: E402
+
+from routes.activities import (
+    router as activities_router
+)  # noqa: E402
 
 
 # ============================================================
@@ -86,8 +144,16 @@ from routes.leads import router as leads_router  # noqa: E402
 # ============================================================
 
 app.include_router(api_router)
+
 app.include_router(pipeline_router)
+
 app.include_router(leads_router)
+
+app.include_router(scraper_router)
+
+app.include_router(outreach_router)
+
+app.include_router(activities_router)
 
 
 # ============================================================
@@ -96,8 +162,11 @@ app.include_router(leads_router)
 
 @app.get("/health")
 async def health():
+
     return {
+
         "status": "healthy",
+
         "service": "salesoorja-ai",
     }
 
@@ -108,21 +177,62 @@ async def health():
 
 @app.get("/")
 async def root():
+
     return {
-        "service": "Salesoorja AI Sales Intelligence",
-        "version": "2.0.0",
-        "docs": "/docs",
+
+        "service":
+            "Salesoorja AI Sales Intelligence",
+
+        "version":
+            "2.0.0",
+
+        "docs":
+            "/docs",
+
         "modules": [
+
             "Lead Ingestion Engine",
+
+            "CSV/XLSX Upload Engine",
+
+            "Google Maps Scraper Engine",
+
+            "Contact Intelligence Engine",
+
+            "Email Extraction Engine",
+
+            "Phone Extraction Engine",
+
+            "LinkedIn Discovery Engine",
+
+            "AI Outreach Generator",
+
             "Buying Trigger Engine",
+
             "Hyper-Personalization Engine",
+
             "AI Outreach Synthesis",
+
             "Pipeline CRM",
+
+            "Activity Tracking Engine",
+
+            "Followup Scheduler",
+
+            "Call Tracking Engine",
+
+            "Lead Status Engine",
+
             "Next Best Action Engine",
+
             "Semantic Search",
+
             "Lookalike Expansion",
+
             "ICP Learning Engine",
+
             "Buying Window Dashboard",
+
             "A/B Optimizer",
         ],
     }

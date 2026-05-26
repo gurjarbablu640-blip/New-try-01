@@ -24,4 +24,7 @@ class Person(Base):
     # Relationships
     company = relationship("Company", back_populates="persons")
     pipeline_stages = relationship("PipelineStage", back_populates="person")
-    activities = relationship("Activity", back_populates="person")
+    activities = relationship(
+    "PipelineActivity",
+    back_populates="person"
+)

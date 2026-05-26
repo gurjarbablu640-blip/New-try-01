@@ -1,0 +1,200 @@
+salesoorja-backend  | Traceback (most recent call last):
+salesoorja-backend  |   File "/usr/local/bin/alembic", line 8, in <module>
+salesoorja-backend  |     sys.exit(main())
+salesoorja-backend  |              ^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+salesoorja-backend  |     CommandLine(prog=prog).main(argv=argv)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+salesoorja-backend  |     self.run_cmd(cfg, options)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+salesoorja-backend  |     fn(
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+salesoorja-backend  |     script.run_env()
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+salesoorja-backend  |     util.load_python_file(self.dir, "env.py")
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+salesoorja-backend  |     module = load_module_py(module_id, path)
+salesoorja-backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+salesoorja-backend  |     spec.loader.exec_module(module)  # type: ignore
+salesoorja-backend  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+salesoorja-backend  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+salesoorja-backend  |   File "/app/alembic/env.py", line 20, in <module>
+salesoorja-backend  |     from models import (  # noqa: E402, F401
+salesoorja-backend  | ImportError: cannot import name 'Activity' from 'models' (/app/models/__init__.py)
+salesoorja-backend  | Traceback (most recent call last):
+salesoorja-backend  |   File "/usr/local/bin/alembic", line 8, in <module>
+salesoorja-backend  |     sys.exit(main())
+salesoorja-backend  |              ^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+salesoorja-backend  |     CommandLine(prog=prog).main(argv=argv)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+salesoorja-backend  |     self.run_cmd(cfg, options)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+salesoorja-backend  |     fn(
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+salesoorja-backend  |     script.run_env()
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+salesoorja-backend  |     util.load_python_file(self.dir, "env.py")
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+salesoorja-backend  |     module = load_module_py(module_id, path)
+salesoorja-backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+salesoorja-backend  |     spec.loader.exec_module(module)  # type: ignore
+salesoorja-backend  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+salesoorja-backend  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+salesoorja-backend  |   File "/app/alembic/env.py", line 20, in <module>
+salesoorja-backend  |     from models import (  # noqa: E402, F401
+salesoorja-backend  | ImportError: cannot import name 'Activity' from 'models' (/app/models/__init__.py)
+salesoorja-backend  | Traceback (most recent call last):
+salesoorja-backend  |   File "/usr/local/bin/alembic", line 8, in <module>
+salesoorja-backend  |     sys.exit(main())
+salesoorja-backend  |              ^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+salesoorja-backend  |     CommandLine(prog=prog).main(argv=argv)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+salesoorja-backend  |     self.run_cmd(cfg, options)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+salesoorja-backend  |     fn(
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+salesoorja-backend  |     script.run_env()
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+salesoorja-backend  |     util.load_python_file(self.dir, "env.py")
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+salesoorja-backend  |     module = load_module_py(module_id, path)
+salesoorja-backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+salesoorja-backend  |     spec.loader.exec_module(module)  # type: ignore
+salesoorja-backend  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+salesoorja-backend  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+salesoorja-backend  |   File "/app/alembic/env.py", line 20, in <module>
+salesoorja-backend  |     from models import (  # noqa: E402, F401
+salesoorja-backend  | ImportError: cannot import name 'Activity' from 'models' (/app/models/__init__.py)
+salesoorja-backend  | Traceback (most recent call last):
+salesoorja-backend  |   File "/usr/local/bin/alembic", line 8, in <module>
+salesoorja-backend  |     sys.exit(main())
+salesoorja-backend  |              ^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+salesoorja-backend  |     CommandLine(prog=prog).main(argv=argv)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+salesoorja-backend  |     self.run_cmd(cfg, options)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+salesoorja-backend  |     fn(
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+salesoorja-backend  |     script.run_env()
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+salesoorja-backend  |     util.load_python_file(self.dir, "env.py")
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+salesoorja-backend  |     module = load_module_py(module_id, path)
+salesoorja-backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+salesoorja-backend  |     spec.loader.exec_module(module)  # type: ignore
+salesoorja-backend  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+salesoorja-backend  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+salesoorja-backend  |   File "/app/alembic/env.py", line 20, in <module>
+salesoorja-backend  |     from models import (  # noqa: E402, F401
+salesoorja-backend  | ImportError: cannot import name 'Activity' from 'models' (/app/models/__init__.py)
+salesoorja-backend  | Traceback (most recent call last):
+salesoorja-backend  |   File "/usr/local/bin/alembic", line 8, in <module>
+salesoorja-backend  |     sys.exit(main())
+salesoorja-backend  |              ^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+salesoorja-backend  |     CommandLine(prog=prog).main(argv=argv)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+salesoorja-backend  |     self.run_cmd(cfg, options)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+salesoorja-backend  |     fn(
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+salesoorja-backend  |     script.run_env()
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+salesoorja-backend  |     util.load_python_file(self.dir, "env.py")
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+salesoorja-backend  |     module = load_module_py(module_id, path)
+salesoorja-backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+salesoorja-backend  |     spec.loader.exec_module(module)  # type: ignore
+salesoorja-backend  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+salesoorja-backend  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+salesoorja-backend  |   File "/app/alembic/env.py", line 20, in <module>
+salesoorja-backend  |     from models import (  # noqa: E402, F401
+salesoorja-backend  | ImportError: cannot import name 'Activity' from 'models' (/app/models/__init__.py)
+salesoorja-backend  | Traceback (most recent call last):
+salesoorja-backend  |   File "/usr/local/bin/alembic", line 8, in <module>
+salesoorja-backend  |     sys.exit(main())
+salesoorja-backend  |              ^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+salesoorja-backend  |     CommandLine(prog=prog).main(argv=argv)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+salesoorja-backend  |     self.run_cmd(cfg, options)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+salesoorja-backend  |     fn(
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+salesoorja-backend  |     script.run_env()
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+salesoorja-backend  |     util.load_python_file(self.dir, "env.py")
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+salesoorja-backend  |     module = load_module_py(module_id, path)
+salesoorja-backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+salesoorja-backend  |     spec.loader.exec_module(module)  # type: ignore
+salesoorja-backend  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+salesoorja-backend  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+salesoorja-backend  |   File "/app/alembic/env.py", line 20, in <module>
+salesoorja-backend  |     from models import (  # noqa: E402, F401
+salesoorja-backend  | ImportError: cannot import name 'Activity' from 'models' (/app/models/__init__.py)
+salesoorja-backend  | Traceback (most recent call last):
+salesoorja-backend  |   File "/usr/local/bin/alembic", line 8, in <module>
+salesoorja-backend  |     sys.exit(main())
+salesoorja-backend  |              ^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+salesoorja-backend  |     CommandLine(prog=prog).main(argv=argv)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+salesoorja-backend  |     self.run_cmd(cfg, options)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+salesoorja-backend  |     fn(
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+salesoorja-backend  |     script.run_env()
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+salesoorja-backend  |     util.load_python_file(self.dir, "env.py")
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+salesoorja-backend  |     module = load_module_py(module_id, path)
+salesoorja-backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+salesoorja-backend  |     spec.loader.exec_module(module)  # type: ignore
+salesoorja-backend  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+salesoorja-backend  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+salesoorja-backend  |   File "/app/alembic/env.py", line 20, in <module>
+salesoorja-backend  |     from models import (  # noqa: E402, F401
+salesoorja-backend  | ImportError: cannot import name 'Activity' from 'models' (/app/models/__init__.py)
+salesoorja-backend  | Traceback (most recent call last):
+salesoorja-backend  |   File "/usr/local/bin/alembic", line 8, in <module>
+salesoorja-backend  |     sys.exit(main())
+salesoorja-backend  |              ^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 636, in main
+salesoorja-backend  |     CommandLine(prog=prog).main(argv=argv)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 626, in main
+salesoorja-backend  |     self.run_cmd(cfg, options)
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/config.py", line 603, in run_cmd
+salesoorja-backend  |     fn(
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/command.py", line 406, in upgrade
+salesoorja-backend  |     script.run_env()
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/script/base.py", line 586, in run_env
+salesoorja-backend  |     util.load_python_file(self.dir, "env.py")
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 95, in load_python_file
+salesoorja-backend  |     module = load_module_py(module_id, path)
+salesoorja-backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py", line 113, in load_module_py
+salesoorja-backend  |     spec.loader.exec_module(module)  # type: ignore
+salesoorja-backend  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+salesoorja-backend  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+salesoorja-backend  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+salesoorja-backend  |   File "/app/alembic/env.py", line 20, in <module>
+salesoorja-backend  |     from models import (  # noqa: E402, F401
+salesoorja-backend  | ImportError: cannot import name 'Activity' from 'models' (/app/models/__init__.py)

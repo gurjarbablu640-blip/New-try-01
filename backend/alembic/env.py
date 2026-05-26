@@ -24,7 +24,7 @@ from models import (  # noqa: E402, F401
     CompanyIntentSignal,
     OutreachDraft,
     PipelineStage,
-    Activity,
+    PipelineActivity,
     ABTestResult,
     LeadRating,
 )
