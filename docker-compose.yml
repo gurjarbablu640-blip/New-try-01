@@ -6,6 +6,7 @@ services:
 
   db:
     image: pgvector/pgvector:pg16
+
     container_name: salesoorja-db
 
     restart: unless-stopped
@@ -38,6 +39,7 @@ services:
 
   redis:
     image: redis:7-alpine
+
     container_name: salesoorja-redis
 
     restart: unless-stopped
@@ -76,16 +78,14 @@ services:
 
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+
       DATABASE_URL_SYNC: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
 
       REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
 
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       APIFY_API_TOKEN: ${APIFY_API_TOKEN}
-
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY}
 
@@ -109,90 +109,6 @@ services:
         alembic upgrade head &&
         uvicorn main:app --host 0.0.0.0 --port 8000 --reload
       "
-
-
-  # ============================================================
-  # CELERY WORKER
-  # ============================================================
-
-  celery_worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-
-    container_name: salesoorja-celery-worker
-
-    restart: unless-stopped
-
-    env_file:
-      - .env
-
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
-
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
-      APIFY_API_TOKEN: ${APIFY_API_TOKEN}
-
-      SECRET_KEY: ${SECRET_KEY}
-
-    volumes:
-      - ./backend:/app
-
-    depends_on:
-      db:
-        condition: service_healthy
-
-      redis:
-        condition: service_healthy
-
-    command: celery -A celery_app:celery_app worker --loglevel=info --concurrency=2
-
-
-  # ============================================================
-  # CELERY BEAT
-  # ============================================================
-
-  celery_beat:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-
-    container_name: salesoorja-celery-beat
-
-    restart: unless-stopped
-
-    env_file:
-      - .env
-
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
-
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
-      APIFY_API_TOKEN: ${APIFY_API_TOKEN}
-
-      SECRET_KEY: ${SECRET_KEY}
-
-    volumes:
-      - ./backend:/app
-
-    depends_on:
-      db:
-        condition: service_healthy
-
-      redis:
-        condition: service_healthy
-
-    command: celery -A celery_app:celery_app beat --loglevel=info
 
 
   # ============================================================

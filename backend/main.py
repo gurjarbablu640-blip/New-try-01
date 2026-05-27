@@ -138,6 +138,14 @@ from routes.activities import (
     router as activities_router
 )  # noqa: E402
 
+from routes.export import (
+    router as export_router
+)  # noqa: E402
+
+from routes.orders import (
+    router as orders_router
+)  # noqa: E402
+
 
 # ============================================================
 # REGISTER ROUTERS
@@ -154,6 +162,10 @@ app.include_router(scraper_router)
 app.include_router(outreach_router)
 
 app.include_router(activities_router)
+
+app.include_router(export_router)
+
+app.include_router(orders_router)
 
 
 # ============================================================
@@ -222,6 +234,12 @@ async def root():
             "Call Tracking Engine",
 
             "Lead Status Engine",
+
+            "Excel Export Engine",
+
+            "Order Tracking Engine",
+
+            "Revenue Dashboard",
 
             "Next Best Action Engine",
 

@@ -20,6 +20,7 @@ from database import Base  # noqa: E402
 from models import (  # noqa: E402, F401
     Company,
     Person,
+    CRMActivity,
     CompanyWebsiteIntel,
     CompanyIntentSignal,
     OutreachDraft,

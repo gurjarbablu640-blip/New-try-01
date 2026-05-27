@@ -19,6 +19,10 @@ router = APIRouter(
 )
 
 
+# ============================================================
+# REQUEST MODEL
+# ============================================================
+
 class ActivityCreateRequest(BaseModel):
 
     company_id: int
@@ -39,6 +43,10 @@ class ActivityCreateRequest(BaseModel):
 
     next_followup_date: str | None = None
 
+
+# ============================================================
+# ADD ACTIVITY
+# ============================================================
 
 @router.post("/add")
 async def add_activity(
@@ -95,15 +103,21 @@ async def add_activity(
 
         db.add(activity)
 
-        company.last_contact_date = datetime.utcnow()
+        # ====================================================
+        # UPDATE COMPANY CRM INFO
+        # ====================================================
+
+        company.last_contact_date = (
+            datetime.utcnow()
+        )
+
+        company.lead_status = data.status
 
         if followup_date:
 
             company.next_followup_date = (
                 followup_date
             )
-
-        company.lead_status = data.status
 
         db.commit()
 
@@ -119,8 +133,296 @@ async def add_activity(
     except Exception as e:
 
         return {
+
             "success": False,
-            "error": str(e)
+
+            "error": str(e),
+        }
+
+    finally:
+
+        db.close()
+
+
+# ============================================================
+# GET ALL ACTIVITIES
+# ============================================================
+
+@router.get("/")
+async def get_activities():
+
+    db: Session = SessionLocal()
+
+    try:
+
+        activities = (
+            db.query(CRMActivity)
+            .order_by(
+                CRMActivity.created_at.desc()
+            )
+            .all()
+        )
+
+        results = []
+
+        for activity in activities:
+
+            company = (
+                db.query(Company)
+                .filter(
+                    Company.id
+                    == activity.company_id
+                )
+                .first()
+            )
+
+            results.append({
+
+                "id":
+                    activity.id,
+
+                "company_id":
+                    activity.company_id,
+
+                "company_name":
+                    company.name if company else None,
+
+                "activity_type":
+                    activity.activity_type,
+
+                "status":
+                    activity.status,
+
+                "remarks":
+                    activity.remarks,
+
+                "contact_person":
+                    activity.contact_person,
+
+                "division":
+                    activity.division,
+
+                "phone":
+                    activity.phone,
+
+                "email":
+                    activity.email,
+
+                "next_followup_date":
+                    activity.next_followup_date,
+
+                "created_at":
+                    activity.created_at,
+            })
+
+        return {
+
+            "success": True,
+
+            "total": len(results),
+
+            "results": results,
+        }
+
+    finally:
+
+        db.close()
+
+
+# ============================================================
+# COMPANY ACTIVITIES
+# ============================================================
+
+@router.get("/company/{company_id}")
+async def get_company_activities(
+    company_id: int
+):
+
+    db: Session = SessionLocal()
+
+    try:
+
+        activities = (
+            db.query(CRMActivity)
+            .filter(
+                CRMActivity.company_id
+                == company_id
+            )
+            .order_by(
+                CRMActivity.created_at.desc()
+            )
+            .all()
+        )
+
+        results = []
+
+        for activity in activities:
+
+            results.append({
+
+                "id":
+                    activity.id,
+
+                "activity_type":
+                    activity.activity_type,
+
+                "status":
+                    activity.status,
+
+                "remarks":
+                    activity.remarks,
+
+                "contact_person":
+                    activity.contact_person,
+
+                "division":
+                    activity.division,
+
+                "phone":
+                    activity.phone,
+
+                "email":
+                    activity.email,
+
+                "next_followup_date":
+                    activity.next_followup_date,
+
+                "created_at":
+                    activity.created_at,
+            })
+
+        return {
+
+            "success": True,
+
+            "total": len(results),
+
+            "results": results,
+        }
+
+    finally:
+
+        db.close()
+
+
+# ============================================================
+# TODAY FOLLOWUPS
+# ============================================================
+
+@router.get("/today")
+async def today_followups():
+
+    db: Session = SessionLocal()
+
+    try:
+
+        today = datetime.utcnow().date()
+
+        activities = (
+            db.query(CRMActivity)
+            .all()
+        )
+
+        results = []
+
+        for activity in activities:
+
+            if not activity.next_followup_date:
+                continue
+
+            if (
+                activity.next_followup_date.date()
+                <= today
+            ):
+
+                company = (
+                    db.query(Company)
+                    .filter(
+                        Company.id
+                        == activity.company_id
+                    )
+                    .first()
+                )
+
+                results.append({
+
+                    "id":
+                        activity.id,
+
+                    "company_name":
+                        company.name
+                        if company else None,
+
+                    "contact_person":
+                        activity.contact_person,
+
+                    "phone":
+                        activity.phone,
+
+                    "status":
+                        activity.status,
+
+                    "remarks":
+                        activity.remarks,
+
+                    "next_followup_date":
+                        activity.next_followup_date,
+                })
+
+        return {
+
+            "success": True,
+
+            "total": len(results),
+
+            "results": results,
+        }
+
+    finally:
+
+        db.close()
+
+
+# ============================================================
+# MARK FOLLOWUP COMPLETE
+# ============================================================
+
+@router.put("/complete/{activity_id}")
+async def complete_activity(
+    activity_id: int
+):
+
+    db: Session = SessionLocal()
+
+    try:
+
+        activity = (
+            db.query(CRMActivity)
+            .filter(
+                CRMActivity.id == activity_id
+            )
+            .first()
+        )
+
+        if not activity:
+
+            return {
+                "success": False,
+                "error": "Activity not found"
+            }
+
+        # ====================================================
+        # UPDATE STATUS
+        # ====================================================
+
+        activity.status = "Completed"
+
+        activity.next_followup_date = None
+
+        db.commit()
+
+        return {
+            "success": True
         }
 
     finally:

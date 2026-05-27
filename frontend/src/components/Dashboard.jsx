@@ -20,6 +20,12 @@ import ABInsights from './ABInsights';
 
 import ICPInsights from './ICPInsights';
 
+import ActivityPanel from "./ActivityPanel";
+
+import TodayFollowups from "./TodayFollowups";
+
+import OrdersPanel from "./OrdersPanel";
+
 import LeadDashboard from './LeadDashboard';
 
 
@@ -219,6 +225,24 @@ export default function Dashboard() {
             handleCompanyClick
           }
         />
+
+        {/* ================================================= */}
+        {/* TODAY FOLLOWUPS */}
+        {/* ================================================= */}
+
+        <TodayFollowups />
+
+        {/* ================================================= */}
+        {/* ACTIVITY PANEL */}
+        {/* ================================================= */}
+
+        <ActivityPanel />
+
+        {/* ================================================= */}
+        {/* ORDERS PANEL */}
+        {/* ================================================= */}
+
+        <OrdersPanel />
 
         {/* ================================================= */}
         {/* ANALYTICS */}
