@@ -25,28 +25,13 @@ from models.sales_os import (
     LearningRule,
 )
 from models.web_research import WebResearchItem
+from models.campaign import Campaign, CampaignStep, CampaignRecipient, CampaignEvent
 
 __all__ = [
-    "Company",
-    "Person",
-    "CompanyWebsiteIntel",
-    "CompanyIntentSignal",
-    "OutreachDraft",
-    "PipelineStage",
-    "PipelineActivity",
-    "ABTestResult",
-    "LeadRating",
-    "Order",
-    "CRMActivity",
-    "Opportunity",
-    "SalesTask",
-    "SalesNote",
-    "Quotation",
-    "QuotationItem",
-    "Instrument",
-    "InstrumentAlias",
-    "PriceHistory",
-    "AIFeedback",
-    "LearningRule",
-    "WebResearchItem",
+    "Company", "Person", "CompanyWebsiteIntel", "CompanyIntentSignal",
+    "OutreachDraft", "PipelineStage", "PipelineActivity", "ABTestResult",
+    "LeadRating", "Order", "CRMActivity", "Opportunity", "SalesTask",
+    "SalesNote", "Quotation", "QuotationItem", "Instrument", "InstrumentAlias",
+    "PriceHistory", "AIFeedback", "LearningRule", "WebResearchItem",
+    "Campaign", "CampaignStep", "CampaignRecipient", "CampaignEvent",
 ]
