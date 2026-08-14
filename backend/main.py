@@ -20,7 +20,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Oorja Sales OS",
-    version="2.2.0",
+    version="2.3.0",
     description="AI-powered sales operating system for Oorja Technical Services",
     lifespan=lifespan,
 )
@@ -40,6 +40,7 @@ from routes.orders import router as orders_router  # noqa: E402
 from routes.sales_os import router as sales_os_router  # noqa: E402
 from routes.knowledge import router as knowledge_router  # noqa: E402
 from routes.web_research import router as research_router  # noqa: E402
+from routes.campaigns import router as campaigns_router  # noqa: E402
 
 app.include_router(api_router)
 app.include_router(pipeline_router)
@@ -52,6 +53,7 @@ app.include_router(orders_router)
 app.include_router(sales_os_router)
 app.include_router(knowledge_router)
 app.include_router(research_router)
+app.include_router(campaigns_router)
 
 
 @app.get("/health")
