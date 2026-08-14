@@ -1,14 +1,14 @@
 """Create controlled campaign engine tables.
 
 Revision ID: b7c2d9e4f013
-Revises: 9b21d4a6c1f2
+Revises: a42c6b7d8e91
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision = "b7c2d9e4f013"
-down_revision = "9b21d4a6c1f2"
+down_revision = "a42c6b7d8e91"
 branch_labels = None
 depends_on = None
 
