@@ -1,14 +1,9 @@
-"""Core Oorja Sales OS CRM APIs.
-
-These endpoints extend the existing Salesoorja CRM with structured
-opportunities, tasks, notes, quotations, and AI feedback. Destructive or
-commercially consequential actions remain explicit and human-controlled.
-"""
+"""Core Oorja Sales OS CRM and quotation intelligence APIs."""
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -17,10 +12,18 @@ from models.company import Company
 from models.sales_os import (
     AIFeedback,
     Opportunity,
+    PriceHistory,
     Quotation,
     QuotationItem,
     SalesNote,
     SalesTask,
+)
+from services.quotation_intelligence import (
+    ensure_instrument,
+    normalize_instrument_name,
+    price_recommendation,
+    resolve_instrument,
+    similar_quote_items,
 )
 
 router = APIRouter(prefix="/api/sales-os", tags=["Sales OS"])
@@ -89,6 +92,22 @@ class QuotationCreate(BaseModel):
 
 class QuotationApproval(BaseModel):
     approved: bool
+
+
+class QuotationItemCreate(BaseModel):
+    instrument_name: str = Field(min_length=1, max_length=500)
+    make: Optional[str] = None
+    model: Optional[str] = None
+    range_value: Optional[str] = None
+    parameter: Optional[str] = None
+    quantity: Decimal = Decimal("1")
+    onsite: bool = False
+    unit_price: Decimal = Decimal("0")
+
+
+class InstrumentResolveRequest(BaseModel):
+    instrument_name: str = Field(min_length=1)
+    parameter: Optional[str] = None
 
 
 def company_exists(db: Session, company_id: int) -> None:
@@ -287,6 +306,131 @@ def list_quotations(company_id: Optional[int] = None, status: Optional[str] = No
             "company_id": x.company_id,
             "opportunity_id": x.opportunity_id,
         } for x in items], "total": len(items)}
+    finally:
+        db.close()
+
+
+@router.post("/quotations/{quotation_id}/items")
+def add_quotation_item(quotation_id: int, payload: QuotationItemCreate):
+    db = db_session()
+    try:
+        quotation = db.query(Quotation).filter(Quotation.id == quotation_id).first()
+        if not quotation:
+            raise HTTPException(404, "Quotation not found")
+        if quotation.human_approved:
+            raise HTTPException(409, "Approved quotations cannot be edited")
+
+        instrument, normalized, confidence = ensure_instrument(db, payload.instrument_name, payload.parameter)
+        total = payload.quantity * payload.unit_price
+        item = QuotationItem(
+            quotation_id=quotation_id,
+            instrument_id=instrument.id,
+            instrument_name=payload.instrument_name,
+            normalized_name=normalized,
+            make=payload.make,
+            model=payload.model,
+            range_value=payload.range_value,
+            parameter=payload.parameter,
+            quantity=payload.quantity,
+            onsite=int(payload.onsite),
+            unit_price=payload.unit_price,
+            total_price=total,
+            price_source="human_entry",
+            ai_confidence=confidence,
+        )
+        db.add(item)
+        db.flush()
+        quotation.subtotal = sum((x.total_price or 0) for x in quotation.items)
+        quotation.total = quotation.subtotal - (quotation.discount or 0) + (quotation.tax or 0)
+        db.commit()
+        db.refresh(item)
+        return {
+            "id": item.id,
+            "normalized_name": item.normalized_name,
+            "instrument_id": item.instrument_id,
+            "unit_price": float(item.unit_price or 0),
+            "total_price": float(item.total_price or 0),
+            "quotation_total": float(quotation.total or 0),
+        }
+    finally:
+        db.close()
+
+
+@router.get("/quotations/{quotation_id}/items")
+def list_quotation_items(quotation_id: int):
+    db = db_session()
+    try:
+        items = db.query(QuotationItem).filter(QuotationItem.quotation_id == quotation_id).order_by(QuotationItem.id).all()
+        return {"results": [{
+            "id": x.id,
+            "instrument_name": x.instrument_name,
+            "normalized_name": x.normalized_name,
+            "make": x.make,
+            "model": x.model,
+            "range_value": x.range_value,
+            "parameter": x.parameter,
+            "quantity": float(x.quantity or 0),
+            "onsite": bool(x.onsite),
+            "unit_price": float(x.unit_price or 0),
+            "total_price": float(x.total_price or 0),
+            "ai_confidence": float(x.ai_confidence or 0),
+        } for x in items], "total": len(items)}
+    finally:
+        db.close()
+
+
+@router.post("/instrument/resolve")
+def resolve_instrument_route(payload: InstrumentResolveRequest):
+    db = db_session()
+    try:
+        instrument, normalized, confidence = ensure_instrument(db, payload.instrument_name, payload.parameter)
+        db.commit()
+        return {
+            "instrument_id": instrument.id,
+            "input": payload.instrument_name,
+            "normalized_name": normalized,
+            "family": instrument.family,
+            "parameter": instrument.parameter,
+            "confidence": confidence,
+        }
+    finally:
+        db.close()
+
+
+@router.get("/instrument/normalize")
+def normalize_instrument_route(name: str = Query(min_length=1)):
+    return {"input": name, "normalized_name": normalize_instrument_name(name)}
+
+
+@router.get("/quotation-intelligence/similar")
+def similar_quotes_route(
+    instrument_name: str = Query(min_length=1),
+    make: Optional[str] = None,
+    parameter: Optional[str] = None,
+    calibration_type: Optional[str] = None,
+    location: Optional[str] = None,
+    limit: int = 20,
+):
+    db = db_session()
+    try:
+        matches = similar_quote_items(db, instrument_name, make, parameter, calibration_type, location, limit)
+        return {"results": matches, "total": len(matches)}
+    finally:
+        db.close()
+
+
+@router.get("/quotation-intelligence/price-recommendation")
+def price_recommendation_route(
+    instrument_name: str = Query(min_length=1),
+    make: Optional[str] = None,
+    parameter: Optional[str] = None,
+    calibration_type: Optional[str] = None,
+    location: Optional[str] = None,
+    limit: int = 20,
+):
+    db = db_session()
+    try:
+        return price_recommendation(db, instrument_name, make, parameter, calibration_type, location, limit)
     finally:
         db.close()
 
