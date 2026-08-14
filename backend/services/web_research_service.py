@@ -3,7 +3,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from models.web_research import WebResearch
+from models.web_research import WebResearchItem
 
 
 def search_research(
@@ -12,18 +12,22 @@ def search_research(
     company_id: Optional[int] = None,
     limit: int = 20,
 ):
-    q = db.query(WebResearch)
+    q = db.query(WebResearchItem)
     if company_id is not None:
-        q = q.filter(WebResearch.company_id == company_id)
+        q = q.filter(WebResearchItem.company_id == company_id)
     if query:
         pattern = f"%{query.strip()}%"
         q = q.filter(
-            (WebResearch.query.ilike(pattern))
-            | (WebResearch.title.ilike(pattern))
-            | (WebResearch.snippet.ilike(pattern))
-            | (WebResearch.content.ilike(pattern))
+            (WebResearchItem.query.ilike(pattern))
+            | (WebResearchItem.title.ilike(pattern))
+            | (WebResearchItem.snippet.ilike(pattern))
+            | (WebResearchItem.content.ilike(pattern))
         )
-    rows = q.order_by(WebResearch.retrieved_at.desc(), WebResearch.id.desc()).limit(min(max(limit, 1), 100)).all()
+    rows = (
+        q.order_by(WebResearchItem.retrieved_at.desc(), WebResearchItem.id.desc())
+        .limit(min(max(limit, 1), 100))
+        .all()
+    )
     return {
         "results": [serialize_research(row) for row in rows],
         "total": len(rows),
@@ -31,7 +35,7 @@ def search_research(
     }
 
 
-def serialize_research(row: WebResearch):
+def serialize_research(row: WebResearchItem):
     return {
         "id": row.id,
         "company_id": row.company_id,
@@ -39,10 +43,12 @@ def serialize_research(row: WebResearch):
         "title": row.title,
         "url": row.url,
         "source_domain": row.source_domain,
-        "published_at": row.published_at,
+        "published_date": row.published_date,
         "retrieved_at": row.retrieved_at,
         "signal_type": row.signal_type,
-        "evidence": row.evidence,
+        "snippet": row.snippet,
+        "content": row.content,
         "confidence": float(row.confidence or 0),
-        "classification": row.classification,
+        "evidence_type": row.evidence_type,
+        "metadata_json": row.metadata_json,
     }
