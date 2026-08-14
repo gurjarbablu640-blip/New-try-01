@@ -24,6 +24,11 @@ frontend/build/
 # Data files (generated at runtime)
 backend/data/*.json
 
+# Celery runtime state
+celerybeat-schedule
+celerybeat-schedule.*
+*.pid
+
 # IDE
 .vscode/
 .idea/
@@ -36,7 +41,6 @@ Thumbs.db
 
 # Logs
 *.log
-celery*.pid
 
 # Docker
 docker-compose.override.yml
