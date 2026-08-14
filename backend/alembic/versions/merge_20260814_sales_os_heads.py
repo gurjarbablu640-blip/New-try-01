@@ -8,10 +8,8 @@ import sqlalchemy as sa
 
 revision = "merge_20260814_heads"
 down_revision = (
-    "20260814_sales_os",
-    "9b21d4a6c1f2",
-    "c8d3e5f70124",
-    "d2e3f4a5b6c7",
+    "add_missing_salesos_idx",
+    "merge_competitor_20260814",
 )
 branch_labels = None
 depends_on = None
