@@ -26,6 +26,7 @@ from models.sales_os import (
 )
 from models.web_research import WebResearchItem
 from models.campaign import Campaign, CampaignStep, CampaignRecipient, CampaignEvent
+from models.competitor_intel import CompetitorProfile, CompetitorObservation
 
 __all__ = [
     "Company", "Person", "CompanyWebsiteIntel", "CompanyIntentSignal",
@@ -34,4 +35,5 @@ __all__ = [
     "SalesNote", "Quotation", "QuotationItem", "Instrument", "InstrumentAlias",
     "PriceHistory", "AIFeedback", "LearningRule", "WebResearchItem",
     "Campaign", "CampaignStep", "CampaignRecipient", "CampaignEvent",
+    "CompetitorProfile", "CompetitorObservation",
 ]
