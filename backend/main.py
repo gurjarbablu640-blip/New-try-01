@@ -44,6 +44,7 @@ from routes.campaigns import router as campaigns_router  # noqa: E402
 from routes.competitors import router as competitors_router  # noqa: E402
 from routes.learning_analytics import router as learning_analytics_router  # noqa: E402
 from routes.assistant import router as assistant_router  # noqa: E402
+from routes.company_360 import router as company_360_router  # noqa: E402
 
 app.include_router(api_router)
 app.include_router(pipeline_router)
@@ -60,6 +61,7 @@ app.include_router(campaigns_router)
 app.include_router(competitors_router)
 app.include_router(learning_analytics_router)
 app.include_router(assistant_router)
+app.include_router(company_360_router)
 
 
 @app.get("/health")
@@ -77,6 +79,6 @@ async def root():
         "core_modules": [
             "Lead Generation", "CRM", "AI Sales Intelligence", "Web Research",
             "Campaign Engine", "Quotation Intelligence", "Competitor Intelligence",
-            "Oorja Knowledge Base", "Learning Engine", "Sales Analytics",
+            "Oorja Knowledge Base", "Learning Engine", "Sales Analytics", "Company 360",
         ],
     }
