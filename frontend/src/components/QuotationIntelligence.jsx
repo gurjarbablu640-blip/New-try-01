@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import {
   findSimilarQuotes,
   getPriceRecommendation,
+  importHistoricalQuotations,
   normalizeInstrument,
   resolveInstrument,
 } from "../api";
@@ -16,6 +17,8 @@ export default function QuotationIntelligence() {
   const [recommendation, setRecommendation] = useState(null);
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
   const [error, setError] = useState("");
 
   const params = () => ({
@@ -61,15 +64,53 @@ export default function QuotationIntelligence() {
     }
   };
 
+  const importFile = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    setImportResult(null);
+    setError("");
+    try {
+      const response = await importHistoricalQuotations(file);
+      setImportResult(response.data);
+    } catch (err) {
+      setError(err?.response?.data?.detail || err.message || "Historical quotation import failed");
+    } finally {
+      setImporting(false);
+      event.target.value = "";
+    }
+  };
+
   return (
     <section className="bg-white border rounded-xl p-5 shadow-sm space-y-4">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h2 className="text-lg font-semibold text-gray-900">Quotation Intelligence</h2>
-          <p className="text-sm text-gray-500">Normalize an instrument, inspect historical quotes and get an explainable price recommendation.</p>
+          <p className="text-sm text-gray-500">Normalize instruments, import historical quotations, inspect comparable quotes and get an explainable price recommendation.</p>
         </div>
         {recommendation?.human_approval_required && (
           <span className="px-3 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">Human approval required</span>
+        )}
+      </div>
+
+      <div className="border rounded-lg p-4 bg-gray-50">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div>
+            <div className="font-medium text-gray-900">Historical quotation import</div>
+            <div className="text-xs text-gray-500 mt-1">CSV/XLSX rows are converted into quotations, quotation items, instruments and price history.</div>
+          </div>
+          <label className="inline-flex items-center gap-2 cursor-pointer bg-gray-900 text-white px-4 py-2 rounded-lg text-sm">
+            {importing ? "Importing..." : "Import CSV / XLSX"}
+            <input type="file" accept=".csv,.xlsx" className="hidden" onChange={importFile} disabled={importing} />
+          </label>
+        </div>
+        {importResult && (
+          <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+            <div className="bg-white rounded p-2">Rows imported: <b>{importResult.rows_imported}</b></div>
+            <div className="bg-white rounded p-2">Skipped: <b>{importResult.rows_skipped}</b></div>
+            <div className="bg-white rounded p-2">Quotes: <b>{importResult.quotations_created}</b></div>
+            <div className="bg-white rounded p-2">Items: <b>{importResult.items_created}</b></div>
+          </div>
         )}
       </div>
 
