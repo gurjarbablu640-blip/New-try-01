@@ -30,7 +30,7 @@ export default function OrdersPanel() {
     try {
 
       const response = await fetch(
-        `${API_BASE}/api/orders/`
+        `${API_BASE}/orders/`
       );
 
       const data =

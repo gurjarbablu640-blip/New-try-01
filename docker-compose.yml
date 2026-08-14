@@ -24,7 +24,6 @@ services:
 
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
 
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
@@ -85,7 +84,7 @@ services:
 
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-      APIFY_API_TOKEN: ${APIFY_API_TOKEN}
+      APIFY_API_TOKEN: ${APIFY_API_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY}
 
@@ -131,7 +130,7 @@ services:
       - "5173:5173"
 
     environment:
-      VITE_API_URL: http://localhost:8000/api
+      VITE_API_URL: /api
 
     volumes:
       - ./frontend:/app

@@ -60,7 +60,7 @@ export default function AddOrderModal({
 
       const response = await fetch(
 
-        `${API_BASE}/api/orders/add`,
+        `${API_BASE}/orders/add`,
 
         {
 

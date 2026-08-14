@@ -3,6 +3,8 @@ import React, {
   useState
 } from 'react';
 
+import { API_BASE } from '../config';
+
 export default function LeadDashboard() {
 
   const [leads, setLeads] = useState([]);
@@ -22,7 +24,7 @@ export default function LeadDashboard() {
     try {
 
       const response = await fetch(
-        'http://localhost:8000/api/leads'
+        `${API_BASE}/leads`
       );
 
       const data = await response.json();
@@ -331,7 +333,7 @@ export default function LeadDashboard() {
 
                 onClick={() =>
                   window.open(
-                    `http://localhost:8000/api/outreach/${lead.id}`,
+                    `${API_BASE}/outreach/${lead.id}`,
                     '_blank'
                   )
                 }

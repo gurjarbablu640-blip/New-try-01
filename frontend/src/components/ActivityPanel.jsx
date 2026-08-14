@@ -26,7 +26,7 @@ export default function ActivityPanel() {
 
     window.open(
 
-      `${API_BASE}/api/export/activities`,
+      `${API_BASE}/export/activities`,
 
       "_blank"
     );
@@ -41,7 +41,7 @@ export default function ActivityPanel() {
     try {
 
       const response = await fetch(
-        `${API_BASE}/api/activities/`
+        `${API_BASE}/activities/`
       );
 
       const data = await response.json();
