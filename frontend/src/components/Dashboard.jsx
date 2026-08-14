@@ -20,6 +20,7 @@ import LeadDashboard from './LeadDashboard';
 import SalesOSCommandCenter from './SalesOSCommandCenter';
 import QuotationIntelligence from './QuotationIntelligence';
 import AskOorjaAI from './AskOorjaAI';
+import CampaignEngine from './CampaignEngine';
 
 export default function Dashboard() {
   const [selectedCompany, setSelectedCompany] = useState(null);
@@ -52,6 +53,7 @@ export default function Dashboard() {
         <SmartSearch onCompanyClick={handleCompanyClick} />
         <LeadDashboard />
         <QuotationIntelligence />
+        <CampaignEngine />
         <BuyingWindowBoard onCompanyClick={handleCompanyClick} />
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
