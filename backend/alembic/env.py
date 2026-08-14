@@ -1,8 +1,4 @@
-"""Alembic environment configuration.
-
-Reads DATABASE_URL_SYNC from app settings and runs migrations
-against the sync engine (both online and offline modes).
-"""
+"""Alembic environment configuration."""
 import os
 import sys
 from logging.config import fileConfig
@@ -10,14 +6,10 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-# Ensure the backend package is importable
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from config import settings  # noqa: E402
 from database import Base  # noqa: E402
-
-# Import every current ORM model so Base.metadata is populated.
-# Keep this list synchronized with models/__init__.py.
 from models import (  # noqa: E402, F401
     Company,
     Person,
@@ -30,8 +22,6 @@ from models import (  # noqa: E402, F401
     ABTestResult,
     LeadRating,
     Order,
-)
-from models.sales_os import (  # noqa: E402, F401
     Opportunity,
     SalesTask,
     SalesNote,
@@ -42,11 +32,11 @@ from models.sales_os import (  # noqa: E402, F401
     PriceHistory,
     AIFeedback,
     LearningRule,
+    WebResearchItem,
 )
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL_SYNC)
-
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
@@ -54,20 +44,13 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in offline mode."""
     url = config.get_main_option("sqlalchemy.url")
-    context.configure(
-        url=url,
-        target_metadata=target_metadata,
-        literal_binds=True,
-        dialect_opts={"paramstyle": "named"},
-    )
+    context.configure(url=url, target_metadata=target_metadata, literal_binds=True, dialect_opts={"paramstyle": "named"})
     with context.begin_transaction():
         context.run_migrations()
 
 
 def run_migrations_online() -> None:
-    """Run migrations in online mode."""
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
