@@ -23,6 +23,7 @@ import AskOorjaAI from './AskOorjaAI';
 import CampaignEngine from './CampaignEngine';
 import CompetitorIntelligence from './CompetitorIntelligence';
 import LearningAnalytics from './LearningAnalytics';
+import Company360 from './Company360';
 
 export default function Dashboard() {
   const [selectedCompany, setSelectedCompany] = useState(null);
@@ -53,6 +54,7 @@ export default function Dashboard() {
         <AskOorjaAI />
         <SalesOSCommandCenter />
         <LearningAnalytics />
+        <Company360 />
         <SmartSearch onCompanyClick={handleCompanyClick} />
         <LeadDashboard />
         <QuotationIntelligence />
