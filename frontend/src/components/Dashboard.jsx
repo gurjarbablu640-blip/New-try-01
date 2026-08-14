@@ -1,7 +1,7 @@
 /**
  * Dashboard - Main App View
  * ==========================================
- * Full AI Sales Intelligence Dashboard
+ * Oorja Sales OS Dashboard
  */
 
 import React, { useState } from 'react';
@@ -18,6 +18,7 @@ import TodayFollowups from './TodayFollowups';
 import OrdersPanel from './OrdersPanel';
 import LeadDashboard from './LeadDashboard';
 import SalesOSCommandCenter from './SalesOSCommandCenter';
+import QuotationIntelligence from './QuotationIntelligence';
 
 export default function Dashboard() {
   const [selectedCompany, setSelectedCompany] = useState(null);
@@ -36,15 +37,9 @@ export default function Dashboard() {
             <p className="text-sm text-gray-500">AI Sales Intelligence Platform</p>
           </div>
           <div className="flex items-center gap-3">
-            <div className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-sm font-medium">
-              System Active
-            </div>
+            <div className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-sm font-medium">System Active</div>
             <span className="text-sm text-gray-600">
-              {new Date().toLocaleDateString('en-IN', {
-                weekday: 'long',
-                day: 'numeric',
-                month: 'short',
-              })}
+              {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' })}
             </span>
           </div>
         </div>
@@ -52,10 +47,9 @@ export default function Dashboard() {
 
       <main className="p-6 space-y-6 max-w-7xl mx-auto">
         <SalesOSCommandCenter />
-
         <SmartSearch onCompanyClick={handleCompanyClick} />
         <LeadDashboard />
-
+        <QuotationIntelligence />
         <BuyingWindowBoard onCompanyClick={handleCompanyClick} />
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
