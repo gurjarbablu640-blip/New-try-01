@@ -83,6 +83,13 @@ export const addQuotationItem = (quotationId, data) =>
   api.post(`/sales-os/quotations/${quotationId}/items`, data);
 export const approveQuotation = (quotationId, approved) =>
   api.post(`/sales-os/quotations/${quotationId}/approval`, { approved });
+export const importHistoricalQuotations = (file) => {
+  const form = new FormData();
+  form.append("file", file);
+  return api.post("/sales-os/quotations/import", form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+};
 
 // Instrument / pricing intelligence
 export const normalizeInstrument = (name) =>
