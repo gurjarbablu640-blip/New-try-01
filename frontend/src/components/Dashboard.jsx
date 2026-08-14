@@ -19,6 +19,7 @@ import OrdersPanel from './OrdersPanel';
 import LeadDashboard from './LeadDashboard';
 import SalesOSCommandCenter from './SalesOSCommandCenter';
 import QuotationIntelligence from './QuotationIntelligence';
+import AskOorjaAI from './AskOorjaAI';
 
 export default function Dashboard() {
   const [selectedCompany, setSelectedCompany] = useState(null);
@@ -46,6 +47,7 @@ export default function Dashboard() {
       </header>
 
       <main className="p-6 space-y-6 max-w-7xl mx-auto">
+        <AskOorjaAI />
         <SalesOSCommandCenter />
         <SmartSearch onCompanyClick={handleCompanyClick} />
         <LeadDashboard />
