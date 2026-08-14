@@ -1,2 +1,3 @@
-export const API_BASE =
-  "https://scaling-acorn-6vx977jqj9jf5956-8000.app.github.dev";
+const rawApiBase = import.meta.env.VITE_API_URL || "/api";
+
+export const API_BASE = rawApiBase.replace(/\/$/, "");

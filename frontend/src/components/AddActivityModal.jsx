@@ -61,7 +61,7 @@ export default function AddActivityModal({
       setLoading(true);
 
       const response = await fetch(
-        `${API_BASE}/api/activities/add`,
+        `${API_BASE}/activities/add`,
         {
 
           method: "POST",

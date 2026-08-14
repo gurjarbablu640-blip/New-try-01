@@ -22,7 +22,7 @@ export default function TodayFollowups() {
     try {
 
       const response = await fetch(
-        `${API_BASE}/api/activities/today`
+        `${API_BASE}/activities/today`
       );
 
       const data =
@@ -52,7 +52,7 @@ export default function TodayFollowups() {
 
       const response = await fetch(
 
-        `${API_BASE}/api/activities/complete/${id}`,
+        `${API_BASE}/activities/complete/${id}`,
 
         {
           method: "PUT",
