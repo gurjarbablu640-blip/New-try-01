@@ -24,6 +24,7 @@ from models.sales_os import (
     AIFeedback,
     LearningRule,
 )
+from models.web_research import WebResearchItem
 
 __all__ = [
     "Company",
@@ -47,4 +48,5 @@ __all__ = [
     "PriceHistory",
     "AIFeedback",
     "LearningRule",
+    "WebResearchItem",
 ]
