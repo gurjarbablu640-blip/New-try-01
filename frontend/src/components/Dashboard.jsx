@@ -22,6 +22,7 @@ import QuotationIntelligence from './QuotationIntelligence';
 import AskOorjaAI from './AskOorjaAI';
 import CampaignEngine from './CampaignEngine';
 import CompetitorIntelligence from './CompetitorIntelligence';
+import LearningAnalytics from './LearningAnalytics';
 
 export default function Dashboard() {
   const [selectedCompany, setSelectedCompany] = useState(null);
@@ -51,6 +52,7 @@ export default function Dashboard() {
       <main className="p-6 space-y-6 max-w-7xl mx-auto">
         <AskOorjaAI />
         <SalesOSCommandCenter />
+        <LearningAnalytics />
         <SmartSearch onCompanyClick={handleCompanyClick} />
         <LeadDashboard />
         <QuotationIntelligence />
