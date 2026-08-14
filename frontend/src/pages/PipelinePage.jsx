@@ -4,6 +4,8 @@ import { getPipelineBoard } from '../api';
 import PageHeader from '../components/ui/PageHeader';
 import StatCard from '../components/ui/StatCard';
 import CustomerDrawer from '../components/Pipeline/CustomerDrawer';
+import EmailComposer from '../components/Pipeline/EmailComposer';
+import WhatsAppComposer from '../components/Pipeline/WhatsAppComposer';
 
 export default function PipelinePage(){
   const [board, setBoard] = useState({});

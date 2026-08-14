@@ -36,14 +36,14 @@ export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
-    <aside className={`h-screen ${collapsed ? 'w-16' : 'w-64'} bg-white border-r border-slate-200 transition-all`}> 
+    <aside className={`h-screen ${collapsed ? 'w-16' : 'w-64'} bg-[var(--sidebar-bg)] text-slate-100 transition-all border-r border-slate-800`}>
       <div className="flex h-full flex-col">
         <div className="flex items-center gap-3 p-4">
-          <div className={`flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-violet-600 text-white font-bold ${collapsed ? 'mx-auto' : ''}`}>O</div>
+          <div className={`flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-[var(--accent)] to-violet-600 text-white font-bold ${collapsed ? 'mx-auto' : ''}`}>O</div>
           {!collapsed && (
             <div>
-              <div className="text-lg font-semibold">Oorja</div>
-              <div className="text-xs text-slate-500">Sales OS</div>
+              <div className="text-lg font-semibold text-white">Oorja</div>
+              <div className="text-xs text-slate-300">Sales OS</div>
             </div>
           )}
         </div>
