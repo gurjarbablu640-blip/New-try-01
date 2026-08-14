@@ -27,11 +27,8 @@ export const semanticSearch = (query, filters) =>
 
 // Lookalikes
 export const getLookalikes = () => api.get("/lookalikes");
-
 export const approveLookalikes = (companyIds) =>
-  api.post("/lookalikes/approve", {
-    company_ids: companyIds,
-  });
+  api.post("/lookalikes/approve", { company_ids: companyIds });
 
 // A/B Insights
 export const getABInsights = () => api.get("/ab-insights");
@@ -41,16 +38,11 @@ export const getICPInsights = () => api.get("/icp-insights");
 
 // Lead Rating
 export const rateLead = (companyId, rating, reason) =>
-  api.post(`/companies/${companyId}/rate`, {
-    rating,
-    reason,
-  });
+  api.post(`/companies/${companyId}/rate`, { rating, reason });
 
 // Outreach
 export const generateOutreach = (companyId) =>
-  api.post("/outreach/generate", {
-    company_id: companyId,
-  });
+  api.post("/outreach/generate", { company_id: companyId });
 
 // Next Action
 export const getNextAction = (companyId) =>
@@ -62,5 +54,44 @@ export const runTriggers = () => api.post("/triggers/run-now");
 // Scoring
 export const rescoreCompany = (companyId) =>
   api.post(`/companies/${companyId}/rescore`);
+
+// ============================================================
+// OORJA SALES OS
+// ============================================================
+export const getSalesOSSummary = () => api.get("/sales-os/summary");
+export const getSalesOSOpportunities = (params = {}) =>
+  api.get("/sales-os/opportunities", { params });
+export const createSalesOSOpportunity = (data) =>
+  api.post("/sales-os/opportunities", data);
+export const getSalesOSTasks = (params = {}) =>
+  api.get("/sales-os/tasks", { params });
+export const createSalesOSTask = (data) =>
+  api.post("/sales-os/tasks", data);
+export const createSalesOSNote = (data) =>
+  api.post("/sales-os/notes", data);
+export const recordAIFeedback = (data) =>
+  api.post("/sales-os/ai-feedback", data);
+
+// Quotations
+export const getSalesOSQuotations = (params = {}) =>
+  api.get("/sales-os/quotations", { params });
+export const createSalesOSQuotation = (data) =>
+  api.post("/sales-os/quotations", data);
+export const getQuotationItems = (quotationId) =>
+  api.get(`/sales-os/quotations/${quotationId}/items`);
+export const addQuotationItem = (quotationId, data) =>
+  api.post(`/sales-os/quotations/${quotationId}/items`, data);
+export const approveQuotation = (quotationId, approved) =>
+  api.post(`/sales-os/quotations/${quotationId}/approval`, { approved });
+
+// Instrument / pricing intelligence
+export const normalizeInstrument = (name) =>
+  api.get("/sales-os/instrument/normalize", { params: { name } });
+export const resolveInstrument = (data) =>
+  api.post("/sales-os/instrument/resolve", data);
+export const findSimilarQuotes = (params) =>
+  api.get("/sales-os/quotation-intelligence/similar", { params });
+export const getPriceRecommendation = (params) =>
+  api.get("/sales-os/quotation-intelligence/price-recommendation", { params });
 
 export default api;
