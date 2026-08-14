@@ -16,6 +16,7 @@ from services.sales_assistant import (
     search_contacts,
     search_quotations,
 )
+from services.web_research_service import search_research
 
 router = APIRouter(prefix="/api/assistant", tags=["Sales Assistant"])
 
@@ -23,6 +24,7 @@ router = APIRouter(prefix="/api/assistant", tags=["Sales Assistant"])
 class ToolRequest(BaseModel):
     tool: str = Field(min_length=1)
     query: Optional[str] = None
+    company_id: Optional[int] = None
     limit: int = Field(default=20, ge=1, le=100)
 
 
@@ -42,6 +44,7 @@ def list_tools():
             {"name": "search_companies", "read_only": True, "description": "Search CRM companies by name, city or industry."},
             {"name": "search_contacts", "read_only": True, "description": "Search CRM contacts by name, designation, department or email."},
             {"name": "search_quotations", "read_only": True, "description": "Search historical and active quotations."},
+            {"name": "search_web_evidence", "read_only": True, "description": "Search stored, source-traceable web research evidence."},
             {"name": "sales_summary", "read_only": True, "description": "Summarize active opportunities, tasks and quotations."},
             {"name": "record_feedback", "read_only": False, "approval_required": False, "description": "Record an AI-to-human correction for learning."},
         ]
@@ -61,6 +64,8 @@ def run_tool(payload: ToolRequest):
             return search_contacts(db, query, payload.limit)
         if payload.tool == "search_quotations":
             return search_quotations(db, query, payload.limit)
+        if payload.tool == "search_web_evidence":
+            return search_research(db, query, company_id=payload.company_id, limit=payload.limit)
         return {"error": f"Unknown tool: {payload.tool}"}
     finally:
         db.close()
