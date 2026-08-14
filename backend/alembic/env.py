@@ -11,28 +11,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from config import settings  # noqa: E402
 from database import Base  # noqa: E402
 from models import (  # noqa: E402, F401
-    Company,
-    Person,
-    CRMActivity,
-    CompanyWebsiteIntel,
-    CompanyIntentSignal,
-    OutreachDraft,
-    PipelineStage,
-    PipelineActivity,
-    ABTestResult,
-    LeadRating,
-    Order,
-    Opportunity,
-    SalesTask,
-    SalesNote,
-    Quotation,
-    QuotationItem,
-    Instrument,
-    InstrumentAlias,
-    PriceHistory,
-    AIFeedback,
-    LearningRule,
-    WebResearchItem,
+    Company, Person, CRMActivity, CompanyWebsiteIntel, CompanyIntentSignal,
+    OutreachDraft, PipelineStage, PipelineActivity, ABTestResult, LeadRating,
+    Order, Opportunity, SalesTask, SalesNote, Quotation, QuotationItem,
+    Instrument, InstrumentAlias, PriceHistory, AIFeedback, LearningRule,
+    WebResearchItem, Campaign, CampaignStep, CampaignRecipient, CampaignEvent,
 )
 
 config = context.config
