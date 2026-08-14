@@ -1,7 +1,5 @@
 """
-Salesoorja AI Sales Intelligence - FastAPI Application
-=======================================================
-Main application entry point with lifespan management.
+Oorja Sales OS - FastAPI application.
 """
 
 import logging
@@ -28,7 +26,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Oorja Sales OS",
-    version="2.1.0",
+    version="2.2.0",
     description="AI-powered sales operating system for Oorja Technical Services",
     lifespan=lifespan,
 )
@@ -51,6 +49,7 @@ from routes.activities import router as activities_router  # noqa: E402
 from routes.export import router as export_router  # noqa: E402
 from routes.orders import router as orders_router  # noqa: E402
 from routes.sales_os import router as sales_os_router  # noqa: E402
+from routes.assistant import router as assistant_router  # noqa: E402
 
 app.include_router(api_router)
 app.include_router(pipeline_router)
@@ -61,6 +60,7 @@ app.include_router(activities_router)
 app.include_router(export_router)
 app.include_router(orders_router)
 app.include_router(sales_os_router)
+app.include_router(assistant_router)
 
 
 @app.get("/health")
@@ -86,5 +86,6 @@ async def root():
             "Oorja Knowledge Base",
             "Learning Engine",
             "Sales Analytics",
+            "AI Sales Assistant",
         ],
     }
