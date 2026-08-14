@@ -16,6 +16,7 @@ from models import (  # noqa: E402, F401
     Order, Opportunity, SalesTask, SalesNote, Quotation, QuotationItem,
     Instrument, InstrumentAlias, PriceHistory, AIFeedback, LearningRule,
     WebResearchItem, Campaign, CampaignStep, CampaignRecipient, CampaignEvent,
+    CompetitorProfile, CompetitorObservation,
 )
 
 config = context.config
