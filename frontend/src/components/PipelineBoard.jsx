@@ -31,7 +31,7 @@ const TIER_BADGES = {
   'Low Potential': { bg: 'bg-gray-100', text: 'text-gray-500', label: 'LP' },
 };
 
-export default function PipelineBoard({ onCompanyClick }) {
+export default function PipelineBoard({ onCompanyClick, locationFilter, compact }) {
   const [board, setBoard] = useState({});
   const [stageCounts, setStageCounts] = useState({});
   const [loading, setLoading] = useState(true);
@@ -63,18 +63,42 @@ export default function PipelineBoard({ onCompanyClick }) {
     e.dataTransfer.dropEffect = 'move';
   };
 
+  const [toasts, setToasts] = useState([]);
+
+  const pushToast = (text, type='info') => {
+    const id = Date.now() + Math.random();
+    setToasts((t)=>[...t,{id,text,type}]);
+    setTimeout(()=> setToasts((t)=>t.filter(x=>x.id!==id)), 5000);
+  };
+
   const handleDrop = async (e, targetStage) => {
     e.preventDefault();
     if (!draggedCard || draggedCard.stage === targetStage) return;
 
+    // optimistic update
+    const prevBoard = JSON.parse(JSON.stringify(board));
     try {
+      // remove from old stage
+      const fromStage = draggedCard.stage;
+      setBoard((b) => {
+        const nb = {...b};
+        nb[fromStage] = (nb[fromStage] || []).filter(c => c.pipeline_id !== draggedCard.pipeline_id);
+        nb[targetStage] = [ {...draggedCard, stage: targetStage}, ...(nb[targetStage] || [])];
+        return nb;
+      });
+      setStageCounts((sc)=>{ const n = {...sc}; n[fromStage]= (n[fromStage]||1)-1; n[targetStage]=(n[targetStage]||0)+1; return n; });
+
+      // persist
       await movePipelineStage({
         company_id: draggedCard.company_id,
         stage: targetStage,
       });
-      loadBoard();
+
+      pushToast(`${draggedCard.company_name || 'Customer'} moved to ${targetStage}`, 'success');
     } catch (err) {
-      console.error('Failed to move:', err);
+      // rollback
+      setBoard(prevBoard);
+      pushToast(`Failed to move ${draggedCard.company_name || 'customer'}: ${err?.message || 'Server error'}`, 'error');
     }
     setDraggedCard(null);
   };
@@ -111,7 +135,13 @@ export default function PipelineBoard({ onCompanyClick }) {
             </div>
 
             <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
-              {(board[stage] || []).map((card) => (
+              {(board[stage] || []).filter(card => {
+                if (!locationFilter) return true;
+                const city = (card.city || '').toLowerCase();
+                const state = (card.state || '').toLowerCase();
+                const filter = (locationFilter || '').toLowerCase();
+                return city.includes(filter) || state.includes(filter);
+              }).map((card) => (
                 <PipelineCard
                   key={card.pipeline_id}
                   card={card}
@@ -131,6 +161,23 @@ function PipelineCard({ card, onClick, onDragStart }) {
   const tier = TIER_BADGES[card.tier] || TIER_BADGES['Low Potential'];
   const isOverdue = card.is_overdue;
 
+  // Safely read fields with fallback
+  const company = card.company_name || '--';
+  const opportunity = card.opportunity_name || card.deal_name || card.name || '--';
+  const value = card.estimated_value || card.value || card.deal_value || '--';
+  const stage = card.stage || card.current_stage || '--';
+  const contact = card.contact_name || card.primary_contact || '--';
+  const designation = card.contact_designation || card.contact_title || '--';
+  const email = card.contact_email || card.email || '--';
+  const phone = card.contact_phone || card.phone || '--';
+  const owner = card.owner_name || card.owner || '--';
+  const leadScore = card.icp_score || card.lead_score || '--';
+  const followup = card.next_action_date || card.follow_up || card.followup_date || '--';
+
+  const [ownerOpen, setOwnerOpen] = React.useState(false);
+  const [emailOpen, setEmailOpen] = React.useState(false);
+  const [waOpen, setWaOpen] = React.useState(false);
+
   return (
     <div
       draggable
@@ -139,24 +186,47 @@ function PipelineCard({ card, onClick, onDragStart }) {
       className={`cursor-grab rounded-2xl border bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${isOverdue ? 'border-red-200 bg-red-50/60' : 'border-slate-200'}`}
     >
       <div className="flex items-start justify-between gap-2">
-        <p className="flex-1 truncate text-sm font-semibold text-slate-800">{card.company_name}</p>
-        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">{card.icp_score}</span>
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <p className="flex-1 truncate text-sm font-semibold text-slate-800">{company}</p>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">{leadScore}</span>
+          </div>
+          <div className="mt-1 text-xs text-slate-500">{opportunity} · <span className="font-medium text-slate-700">{typeof value === 'number' ? `₹${Number(value).toLocaleString('en-IN')}` : value}</span></div>
+          <div className="mt-2 text-xs text-slate-500">{stage} · {contact} {designation ? `· ${designation}` : ''}</div>
+          <div className="mt-2 flex items-center justify-between">
+            <div className="text-xs text-slate-500">{email}</div>
+            <div className="text-xs text-slate-500">{phone}</div>
+          </div>
+        </div>
+
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            <button onClick={(e)=>{ e.stopPropagation(); const toObj = { email: card.contact_email || card.email, name: card.contact_name, phone: card.contact_phone, companyId: card.company_id }; window.dispatchEvent(new CustomEvent('openEmailComposer', { detail: toObj })); }} className="rounded-md p-2 hover:bg-slate-50" title="Email">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8m0 0v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/></svg>
+            </button>
+            <button onClick={(e)=>{ e.stopPropagation(); const toObj = { email: card.contact_email || card.email, name: card.contact_name, phone: card.contact_phone, companyId: card.company_id }; window.dispatchEvent(new CustomEvent('openWhatsAppComposer', { detail: toObj })); }} className="rounded-md p-2 hover:bg-slate-50" title="WhatsApp">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-600" viewBox="0 0 24 24" fill="currentColor"><path d="M16.7 13.3c-.3-.2-1.6-.8-1.9-.9-.5-.1-.9-.2-1.3.2-.4.3-1.5.9-2.1 1.1-.1 0-.6.1-1.1-.6-.4-.6-1.1-1.1-1.1-1.7 0-.6.4-.7.9-1.2.4-.5.5-.7.7-1 .2-.3 0-.5-.3-.8-.3-.3-1.3-1.2-1.8-1.6-.5-.4-.9-.3-1.3-.1-.4.2-1.6.6-2.4 2-.8 1.4-.3 3.2 0 3.9.3.7 2 3.3 4.8 4.7 3.2 1.6 4.2 1.1 4.9 1 .7-.1 2.1-.9 2.4-1.8.3-.9.3-1.6.2-1.8-.1-.2-.4-.3-.7-.5z"/></svg>
+            </button>
+            <div className="relative">
+              <button onClick={(e)=>{ e.stopPropagation(); /* placeholder for more menu */ }} className="rounded-md p-2 hover:bg-slate-50" title="More">⋯</button>
+            </div>
+          </div>
+
+          <div className="text-xs text-slate-500">Owner: <button onClick={(e)=>{ e.stopPropagation(); setOwnerOpen((o)=>!o); }} className="font-medium text-slate-700 hover:underline">{owner}</button></div>
+          <div className="text-xs text-slate-500">Follow-up: {followup || '--'}</div>
+        </div>
       </div>
 
-      <p className="mt-2 text-xs text-slate-500">{card.city}</p>
-
-      <div className="mt-3 flex items-center justify-between gap-2">
-        <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${tier.bg} ${tier.text}`}>
-          {tier.label}
-        </span>
-        <span className="text-[10px] font-medium text-slate-400">{card.days_in_stage}d</span>
-      </div>
-
-      {card.top_signal && (
-        <p className="mt-2 truncate text-[11px] font-medium text-amber-700">
-          {card.top_signal.replace(/_/g, ' ').toLowerCase()}
-        </p>
+      {ownerOpen && (
+        <div className="absolute z-10 mt-2 w-40 rounded-md border bg-white p-2 shadow-md">
+          <div className="text-sm font-semibold">{owner}</div>
+          <div className="text-xs text-slate-500">{card.owner_role || '--'}</div>
+          <div className="mt-2 text-xs">{card.owner_email || '--'}</div>
+          <div className="text-xs">{card.owner_phone || '--'}</div>
+        </div>
       )}
+
+      {/* Email and WhatsApp drawers rendered at top-level by parent via state; for simplicity we expose events */}
     </div>
   );
 }
