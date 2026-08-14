@@ -1,9 +1,11 @@
 """Core Oorja Sales OS CRM and quotation intelligence APIs."""
 from datetime import date, datetime
 from decimal import Decimal
+from io import BytesIO
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+import pandas as pd
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -22,8 +24,8 @@ from services.quotation_intelligence import (
     ensure_instrument,
     normalize_instrument_name,
     price_recommendation,
-    resolve_instrument,
     similar_quote_items,
+    record_price_history,
 )
 
 router = APIRouter(prefix="/api/sales-os", tags=["Sales OS"])
@@ -284,6 +286,164 @@ def create_quotation(payload: QuotationCreate):
         db.close()
 
 
+@router.post("/quotations/import")
+async def import_historical_quotations(file: UploadFile = File(...)):
+    """Import historical quotation line items from CSV/XLSX.
+
+    Supported columns use common aliases: quotation number, date, customer,
+    location, calibration type, instrument, make, model, range, parameter,
+    quantity, unit price, and outcome.
+    """
+    db = db_session()
+    try:
+        filename = (file.filename or "").lower()
+        payload = await file.read()
+        if filename.endswith(".csv"):
+            df = pd.read_csv(BytesIO(payload))
+        elif filename.endswith(".xlsx"):
+            df = pd.read_excel(BytesIO(payload))
+        else:
+            raise HTTPException(400, "Only CSV/XLSX historical quotation files are supported")
+
+        aliases = {
+            "quotation number": ["quotation number", "quote number", "quotation_no", "quote_no"],
+            "quotation date": ["quotation date", "quote date", "date"],
+            "customer": ["customer", "customer name", "company", "company name"],
+            "location": ["location", "city"],
+            "calibration type": ["calibration type", "service type", "type"],
+            "instrument": ["instrument", "instrument name", "equipment", "item", "description"],
+            "make": ["make", "manufacturer", "brand"],
+            "model": ["model"],
+            "range": ["range", "range value", "range_value"],
+            "parameter": ["parameter", "calibration parameter"],
+            "quantity": ["quantity", "qty"],
+            "unit price": ["unit price", "price", "unit rate", "rate"],
+            "outcome": ["outcome", "status", "quotation status"],
+        }
+
+        normalized_columns = {str(col).strip().lower(): col for col in df.columns}
+
+        def pick(key: str, row):
+            for alias in aliases[key]:
+                if alias in normalized_columns:
+                    value = row[normalized_columns[alias]]
+                    if pd.isna(value):
+                        return None
+                    return value
+            return None
+
+        imported_rows = 0
+        skipped_rows = 0
+        created_quotes = 0
+        created_items = 0
+
+        for _, row in df.iterrows():
+            instrument_name = pick("instrument", row)
+            customer_name = pick("customer", row)
+            if not instrument_name or not customer_name:
+                skipped_rows += 1
+                continue
+
+            quote_number = pick("quotation number", row)
+            quote_date_raw = pick("quotation date", row)
+            if quote_date_raw is None:
+                quote_date = date.today()
+            else:
+                try:
+                    quote_date = pd.to_datetime(quote_date_raw).date()
+                except Exception:
+                    quote_date = date.today()
+
+            existing_quote = None
+            if quote_number:
+                existing_quote = db.query(Quotation).filter(Quotation.quotation_number == str(quote_number)).first()
+
+            if not existing_quote:
+                existing_quote = Quotation(
+                    quotation_number=str(quote_number) if quote_number else None,
+                    quotation_date=quote_date,
+                    customer_name=str(customer_name),
+                    location=str(pick("location", row) or "") or None,
+                    calibration_type=str(pick("calibration type", row) or "") or None,
+                    status="Historical",
+                    source_file=file.filename,
+                )
+                db.add(existing_quote)
+                db.flush()
+                created_quotes += 1
+
+            raw_price = pick("unit price", row)
+            try:
+                unit_price = Decimal(str(raw_price).replace(",", "")) if raw_price is not None else Decimal("0")
+            except Exception:
+                unit_price = Decimal("0")
+
+            raw_qty = pick("quantity", row)
+            try:
+                quantity = Decimal(str(raw_qty)) if raw_qty is not None else Decimal("1")
+            except Exception:
+                quantity = Decimal("1")
+
+            parameter = pick("parameter", row)
+            instrument, normalized, confidence = ensure_instrument(db, str(instrument_name), str(parameter) if parameter else None)
+
+            item = QuotationItem(
+                quotation_id=existing_quote.id,
+                instrument_id=instrument.id,
+                instrument_name=str(instrument_name),
+                normalized_name=normalized,
+                make=str(pick("make", row) or "") or None,
+                model=str(pick("model", row) or "") or None,
+                range_value=str(pick("range", row) or "") or None,
+                parameter=str(parameter) if parameter else None,
+                quantity=quantity,
+                unit_price=unit_price,
+                total_price=quantity * unit_price,
+                price_source="historical_import",
+                ai_confidence=confidence,
+            )
+            db.add(item)
+            db.flush()
+
+            record_price_history(
+                db=db,
+                quotation_id=existing_quote.id,
+                customer_name=str(customer_name),
+                instrument_id=instrument.id,
+                calibration_type=existing_quote.calibration_type,
+                location=existing_quote.location,
+                unit_price=unit_price,
+                quotation_date=quote_date,
+                outcome=str(pick("outcome", row) or "") or None,
+                context={"source_file": file.filename, "imported": True},
+            )
+
+            existing_quote.subtotal = (existing_quote.subtotal or 0) + (quantity * unit_price)
+            existing_quote.total = (existing_quote.subtotal or 0) - (existing_quote.discount or 0) + (existing_quote.tax or 0)
+
+            imported_rows += 1
+            created_items += 1
+
+        db.commit()
+        return {
+            "success": True,
+            "source_file": file.filename,
+            "rows_received": int(len(df)),
+            "rows_imported": imported_rows,
+            "rows_skipped": skipped_rows,
+            "quotations_created": created_quotes,
+            "items_created": created_items,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(400, f"Historical quotation import failed: {exc}")
+    finally:
+        db.close()
+
+
 @router.get("/quotations")
 def list_quotations(company_id: Optional[int] = None, status: Optional[str] = None):
     db = db_session()
@@ -319,7 +479,6 @@ def add_quotation_item(quotation_id: int, payload: QuotationItemCreate):
             raise HTTPException(404, "Quotation not found")
         if quotation.human_approved:
             raise HTTPException(409, "Approved quotations cannot be edited")
-
         instrument, normalized, confidence = ensure_instrument(db, payload.instrument_name, payload.parameter)
         total = payload.quantity * payload.unit_price
         item = QuotationItem(
