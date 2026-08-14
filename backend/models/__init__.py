@@ -1,4 +1,4 @@
-"""SQLAlchemy models for Salesoorja."""
+"""SQLAlchemy models for Salesoorja / Oorja Sales OS."""
 from models.company import Company
 from models.person import Person
 from models.website_intel import CompanyWebsiteIntel
@@ -11,6 +11,18 @@ from models.pipeline import (
     PipelineActivity,
     ABTestResult,
     LeadRating,
+)
+from models.sales_os import (
+    Opportunity,
+    SalesTask,
+    SalesNote,
+    Quotation,
+    QuotationItem,
+    Instrument,
+    InstrumentAlias,
+    PriceHistory,
+    AIFeedback,
+    LearningRule,
 )
 
 __all__ = [
@@ -25,4 +37,14 @@ __all__ = [
     "LeadRating",
     "Order",
     "CRMActivity",
+    "Opportunity",
+    "SalesTask",
+    "SalesNote",
+    "Quotation",
+    "QuotationItem",
+    "Instrument",
+    "InstrumentAlias",
+    "PriceHistory",
+    "AIFeedback",
+    "LearningRule",
 ]
