@@ -58,8 +58,57 @@ def learning_patterns(status: str = "Candidate", limit: int = 50):
         db.close()
 
 
+@router.post("/generate-rules")
+def generate_candidate_rules():
+    """Analyze recent AI feedback and extract candidate learning rules for human approval."""
+    db = SessionLocal()
+    try:
+        feedback_items = db.query(AIFeedback).all()
+        created_rules = 0
+
+        # Group by action_type and reason pattern
+        grouped = {}
+        for fb in feedback_items:
+            key = f"{fb.entity_type}:{fb.action_type}"
+            grouped.setdefault(key, []).append(fb)
+
+        for key, items in grouped.items():
+            if len(items) >= 1:
+                # Check if a rule already exists for this key
+                existing = db.query(LearningRule).filter(LearningRule.rule_key == key).first()
+                if not existing:
+                    rule = LearningRule(
+                        rule_type="Heuristic Optimization",
+                        rule_key=key,
+                        pattern={
+                            "entity_type": items[0].entity_type,
+                            "action_type": items[0].action_type,
+                            "sample_reason": items[0].reason,
+                            "sample_human_value": items[0].human_value,
+                        },
+                        evidence_count=len(items),
+                        confidence=min(60.0 + len(items) * 10.0, 95.0),
+                        status="Candidate",
+                    )
+                    db.add(rule)
+                    created_rules += 1
+                else:
+                    existing.evidence_count = len(items)
+                    existing.confidence = min(60.0 + len(items) * 10.0, 95.0)
+
+        db.commit()
+        return {
+            "success": True,
+            "feedback_analyzed": len(feedback_items),
+            "new_candidate_rules": created_rules,
+        }
+    finally:
+        db.close()
+
+
 @router.post("/patterns/{rule_id}/approve")
 def approve_learning_rule(rule_id: int, approved: bool = True, approved_by: str = "user"):
+    """Approve or reject a candidate learning rule to activate it in scoring."""
     db = SessionLocal()
     try:
         row = db.query(LearningRule).filter(LearningRule.id == rule_id).first()

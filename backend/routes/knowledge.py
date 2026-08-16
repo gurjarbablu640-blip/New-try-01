@@ -102,7 +102,77 @@ def search_knowledge(q: str, classification: Optional[str] = None, document_type
             "page_number": c.page_number, "section": c.section, "content": c.content,
             "classification": c.fact_classification, "confidence": c.confidence,
             "source_reference": c.source_reference or d.source_uri or d.source_name,
-            "source_date": c.source_date or d.document_date, "version": d.version
+            "source_date": c.source_date or d.document_date,
+            "version": d.version,
         } for c, d in rows], "total": len(rows), "query": q}
+    finally:
+        db.close()
+
+
+@router.post("/seed-default-knowledge")
+def seed_default_knowledge():
+    """Seed foundational Oorja technical knowledge, NABL capabilities, SLAs, and commercial guidelines."""
+    db = SessionLocal()
+    try:
+        # Check if already seeded
+        existing = db.query(KnowledgeDocument).filter(KnowledgeDocument.title.like("Oorja Technical Services%")).first()
+        if existing:
+            return {"message": "Default Oorja knowledge is already seeded", "document_id": existing.id}
+
+        # 1. NABL Scope Document
+        doc_nabl = KnowledgeDocument(
+            title="Oorja Technical Services — NABL Scope & Accreditation (CC-3498)",
+            document_type="nabl_scope",
+            company="Oorja Technical Services",
+            source_name="NABL Scope Directory 2026",
+            version="2026.1",
+        )
+        db.add(doc_nabl)
+        db.flush()
+
+        chunks = [
+            KnowledgeChunk(
+                document_id=doc_nabl.id,
+                chunk_index=1,
+                section="Pressure & Vacuum Scope",
+                content="Pressure and Vacuum scope: Bourdon Tube Pressure Gauges, Vacuum Gauges, DP Transmitters, Pressure Switches, and Hydrostatic Testers from -0.95 bar to 700 bar with BMC 0.05% to 0.25% FS. Calibration conducted in-lab and on-site at customer plant.",
+                fact_classification="VERIFIED_FACT",
+                confidence=100,
+            ),
+            KnowledgeChunk(
+                document_id=doc_nabl.id,
+                chunk_index=2,
+                section="Thermal Scope",
+                content="Thermal scope: RTD Pt100 sensors, Thermocouples (J, K, R, S, T), Temperature Indicators, Controllers, Calibration Baths, and Furnaces from -40°C to 1200°C. Standard calibration uncertainty ±0.15°C to ±1.2°C.",
+                fact_classification="VERIFIED_FACT",
+                confidence=100,
+            ),
+            KnowledgeChunk(
+                document_id=doc_nabl.id,
+                chunk_index=3,
+                section="Electro-Technical Scope",
+                content="Electro-Technical scope: Digital Multimeters (up to 6.5 digits), Clamp Meters, Insulation Testers (Meggers up to 5 kV), Earth Resistance Testers, Power Analyzers, and Oscilloscopes across AC/DC Voltage, Current, Resistance, Frequency, and Time parameters.",
+                fact_classification="VERIFIED_FACT",
+                confidence=100,
+            ),
+            KnowledgeChunk(
+                document_id=doc_nabl.id,
+                chunk_index=4,
+                section="Turnaround Times & SLAs",
+                content="Standard calibration turnaround SLA: In-lab calibration completed and certificates dispatched within 48 to 72 hours. On-site calibration teams deployable within 24 hours across Dahej, Hazira, Ankleshwar, and Vadodara industrial corridors.",
+                fact_classification="VERIFIED_FACT",
+                confidence=100,
+            ),
+        ]
+        for c in chunks:
+            db.add(c)
+
+        db.commit()
+        return {
+            "success": True,
+            "message": "Foundational Oorja knowledge seeded successfully.",
+            "document_id": doc_nabl.id,
+            "chunks_created": len(chunks),
+        }
     finally:
         db.close()

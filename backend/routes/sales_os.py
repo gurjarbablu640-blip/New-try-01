@@ -1,8 +1,7 @@
-"""Core Oorja Sales OS CRM and quotation intelligence APIs."""
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
-from typing import Optional
+from typing import List, Optional
 
 import pandas as pd
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
@@ -32,7 +31,13 @@ router = APIRouter(prefix="/api/sales-os", tags=["Sales OS"])
 
 
 def db_session():
-    return SessionLocal()
+    if SessionLocal is not None:
+        return SessionLocal()
+    from database import sync_engine
+    if sync_engine is not None:
+        from sqlalchemy.orm import sessionmaker
+        return sessionmaker(bind=sync_engine)()
+    return None
 
 
 class OpportunityCreate(BaseModel):
@@ -594,6 +599,26 @@ def price_recommendation_route(
         db.close()
 
 
+class QuotationReviseRequest(BaseModel):
+    revision_notes: Optional[str] = None
+    discount: Optional[Decimal] = None
+    tax: Optional[Decimal] = None
+
+
+class QuotationStatusUpdate(BaseModel):
+    status: str
+    loss_reason: Optional[str] = None
+
+
+class QuotationGenerateFromAssetsRequest(BaseModel):
+    company_id: int
+    facility_id: Optional[int] = None
+    customer_asset_ids: Optional[List[int]] = None
+    calibration_type: Optional[str] = "NABL Calibration"
+    location: Optional[str] = None
+    notes: Optional[str] = None
+
+
 @router.post("/quotations/{quotation_id}/approval")
 def approve_quotation(quotation_id: int, payload: QuotationApproval):
     db = db_session()
@@ -616,5 +641,406 @@ def approve_quotation(quotation_id: int, payload: QuotationApproval):
             "human_approved": bool(item.human_approved),
             "approved_at": item.approved_at,
         }
+    finally:
+        db.close()
+
+
+def revise_quotation_core(quotation_id: int, payload: QuotationReviseRequest, db: Session):
+    """Core logic: Create a new immutable revision of an existing quotation."""
+    parent = db.query(Quotation).filter(Quotation.id == quotation_id).first()
+    if not parent:
+        raise HTTPException(404, "Parent quotation not found")
+
+    # Mark parent as previous version (immutable)
+    parent.is_latest = False
+    if parent.status not in ["Won", "Lost"]:
+        parent.status = "Revised"
+
+    # Generate new quotation number (e.g. Q-2026-001-R1)
+    root_number = parent.quotation_number.split("-R")[0] if parent.quotation_number else f"Q-{parent.id}"
+    next_ver = parent.version_number + 1
+    new_quote_num = f"{root_number}-R{next_ver - 1}"
+
+    # Ensure uniqueness
+    existing = db.query(Quotation.id).filter(Quotation.quotation_number == new_quote_num).first()
+    if existing:
+        new_quote_num = f"{root_number}-R{next_ver - 1}-{int(datetime.utcnow().timestamp())}"
+
+    new_quote = Quotation(
+        company_id=parent.company_id,
+        facility_id=parent.facility_id,
+        opportunity_id=parent.opportunity_id,
+        parent_quotation_id=parent.id,
+        version_number=next_ver,
+        is_latest=True,
+        revision_notes=payload.revision_notes,
+        quotation_number=new_quote_num,
+        quotation_date=date.today(),
+        valid_until=parent.valid_until or (date.today() + timedelta(days=30)),
+        customer_name=parent.customer_name,
+        location=parent.location,
+        calibration_type=parent.calibration_type,
+        subtotal=parent.subtotal,
+        discount=payload.discount if payload.discount is not None else parent.discount,
+        tax=payload.tax if payload.tax is not None else parent.tax,
+        status="Draft",
+        human_approved=0,
+        notes=parent.notes,
+    )
+    new_quote.total = (new_quote.subtotal or 0) - (new_quote.discount or 0) + (new_quote.tax or 0)
+    db.add(new_quote)
+    db.flush()
+
+    # Copy line items
+    for item in parent.items:
+        new_item = QuotationItem(
+            quotation_id=new_quote.id,
+            customer_asset_id=item.customer_asset_id,
+            instrument_id=item.instrument_id,
+            instrument_name=item.instrument_name,
+            normalized_name=item.normalized_name,
+            make=item.make,
+            model=item.model,
+            range_value=item.range_value,
+            parameter=item.parameter,
+            quantity=item.quantity,
+            onsite=item.onsite,
+            unit_price=item.unit_price,
+            total_price=item.total_price,
+            nabl_applicable=item.nabl_applicable,
+            nabl_validated=item.nabl_validated,
+            nabl_fit_status=item.nabl_fit_status,
+            price_source=f"copied_from_v{parent.version_number}",
+            ai_confidence=item.ai_confidence,
+        )
+        db.add(new_item)
+
+    db.commit()
+    db.refresh(new_quote)
+
+    return {
+        "id": new_quote.id,
+        "quotation_number": new_quote.quotation_number,
+        "version_number": new_quote.version_number,
+        "parent_quotation_id": new_quote.parent_quotation_id,
+        "status": new_quote.status,
+        "total": float(new_quote.total or 0),
+        "revision_notes": new_quote.revision_notes,
+        "message": f"Quotation revision v{new_quote.version_number} created successfully.",
+    }
+
+
+@router.post("/quotations/{quotation_id}/revise")
+def revise_quotation(quotation_id: int, payload: QuotationReviseRequest):
+    """Create a new immutable revision of an existing quotation."""
+    db = db_session()
+    try:
+        return revise_quotation_core(quotation_id, payload, db)
+    finally:
+        db.close()
+
+
+@router.get("/quotations/{quotation_id}/revisions")
+def get_quotation_revisions(quotation_id: int):
+    """Get the full revision history for a quotation family."""
+    db = db_session()
+    try:
+        quote = db.query(Quotation).filter(Quotation.id == quotation_id).first()
+        if not quote:
+            raise HTTPException(404, "Quotation not found")
+
+        # Find the root quote
+        root = quote
+        while root.parent_quotation_id is not None:
+            parent = db.query(Quotation).filter(Quotation.id == root.parent_quotation_id).first()
+            if not parent:
+                break
+            root = parent
+
+        # Collect all revisions in the family
+        all_family = (
+            db.query(Quotation)
+            .filter(
+                (Quotation.id == root.id) |
+                (Quotation.parent_quotation_id == root.id) |
+                (Quotation.quotation_number.like(f"{root.quotation_number.split('-R')[0]}%"))
+            )
+            .order_by(Quotation.version_number.asc())
+            .all()
+        )
+
+        return {
+            "root_id": root.id,
+            "root_number": root.quotation_number,
+            "total_versions": len(all_family),
+            "results": [
+                {
+                    "id": q.id,
+                    "quotation_number": q.quotation_number,
+                    "version_number": q.version_number,
+                    "is_latest": bool(q.is_latest),
+                    "parent_quotation_id": q.parent_quotation_id,
+                    "status": q.status,
+                    "total": float(q.total or 0),
+                    "human_approved": bool(q.human_approved),
+                    "quotation_date": q.quotation_date,
+                    "revision_notes": q.revision_notes,
+                    "created_at": q.created_at,
+                }
+                for q in all_family
+            ],
+        }
+    finally:
+        db.close()
+
+
+def compare_quotations_core(quotation_id: int, other_id: int, db: Session):
+    """Core logic: Compare two quotation versions side-by-side."""
+    q1 = db.query(Quotation).filter(Quotation.id == quotation_id).first()
+    q2 = db.query(Quotation).filter(Quotation.id == other_id).first()
+    if not q1 or not q2:
+        raise HTTPException(404, "One or both quotations not found")
+
+    items_q1 = {i.instrument_name: i for i in q1.items}
+    items_q2 = {i.instrument_name: i for i in q2.items}
+
+    all_instruments = set(items_q1.keys()).union(set(items_q2.keys()))
+    item_diffs = []
+
+    for inst in all_instruments:
+        i1 = items_q1.get(inst)
+        i2 = items_q2.get(inst)
+        item_diffs.append({
+            "instrument_name": inst,
+            "in_q1": bool(i1),
+            "in_q2": bool(i2),
+            "q1_qty": float(i1.quantity) if i1 else None,
+            "q2_qty": float(i2.quantity) if i2 else None,
+            "q1_unit_price": float(i1.unit_price) if i1 else None,
+            "q2_unit_price": float(i2.unit_price) if i2 else None,
+            "q1_total": float(i1.total_price) if i1 else None,
+            "q2_total": float(i2.total_price) if i2 else None,
+            "price_changed": (float(i1.unit_price) != float(i2.unit_price)) if (i1 and i2) else True,
+        })
+
+    return {
+        "quotation_1": {
+            "id": q1.id,
+            "number": q1.quotation_number,
+            "version": q1.version_number,
+            "subtotal": float(q1.subtotal or 0),
+            "discount": float(q1.discount or 0),
+            "tax": float(q1.tax or 0),
+            "total": float(q1.total or 0),
+            "status": q1.status,
+        },
+        "quotation_2": {
+            "id": q2.id,
+            "number": q2.quotation_number,
+            "version": q2.version_number,
+            "subtotal": float(q2.subtotal or 0),
+            "discount": float(q2.discount or 0),
+            "tax": float(q2.tax or 0),
+            "total": float(q2.total or 0),
+            "status": q2.status,
+        },
+        "total_diff": float((q2.total or 0) - (q1.total or 0)),
+        "line_item_diffs": item_diffs,
+    }
+
+
+@router.get("/quotations/{quotation_id}/compare/{other_id}")
+def compare_quotations(quotation_id: int, other_id: int):
+    """Compare two quotation versions side-by-side."""
+    db = db_session()
+    try:
+        return compare_quotations_core(quotation_id, other_id, db)
+    finally:
+        db.close()
+
+
+def generate_quotation_from_assets_core(payload: QuotationGenerateFromAssetsRequest, db: Session):
+    """Core logic: Generate an intelligent quotation draft directly from physical CustomerAsset records."""
+    from models.customer_asset import CustomerAsset
+    from models.facility import Facility
+    from services.calibration_intelligence import match_nabl_service_fit
+
+    company = db.query(Company).filter(Company.id == payload.company_id).first()
+    if not company:
+        raise HTTPException(404, "Company not found")
+
+    asset_query = db.query(CustomerAsset).filter(
+        CustomerAsset.company_id == payload.company_id,
+        CustomerAsset.status == "Active",
+    )
+    if payload.facility_id:
+        asset_query = asset_query.filter(CustomerAsset.facility_id == payload.facility_id)
+    if payload.customer_asset_ids:
+        asset_query = asset_query.filter(CustomerAsset.id.in_(payload.customer_asset_ids))
+
+    assets = asset_query.all()
+    if not assets:
+        raise HTTPException(400, "No matching active customer assets found for quotation generation")
+
+    facility = db.query(Facility).filter(Facility.id == payload.facility_id).first() if payload.facility_id else None
+    location_val = payload.location or (facility.city if facility else company.city)
+
+    quote_num = f"Q-AUTO-{company.id}-{int(datetime.utcnow().timestamp())}"
+    quote = Quotation(
+        company_id=company.id,
+        facility_id=payload.facility_id,
+        quotation_number=quote_num,
+        quotation_date=date.today(),
+        valid_until=date.today() + timedelta(days=30),
+        customer_name=company.name,
+        location=location_val,
+        calibration_type=payload.calibration_type or "NABL Calibration",
+        subtotal=Decimal("0"),
+        discount=Decimal("0"),
+        tax=Decimal("0"),
+        total=Decimal("0"),
+        status="Draft",
+        human_approved=0,
+        notes=payload.notes or f"Auto-generated draft quotation for {len(assets)} physical plant instruments.",
+    )
+    db.add(quote)
+    db.flush()
+
+    subtotal = Decimal("0")
+    items_created = 0
+
+    for a in assets:
+        instrument, normalized, confidence = ensure_instrument(db, a.instrument_name, a.parameter)
+        nabl_fit = match_nabl_service_fit(a.instrument_name, a.parameter, a.range_value)
+
+        # Get price recommendation
+        price_rec = price_recommendation(
+            db=db,
+            instrument_name=a.instrument_name,
+            make=a.make,
+            parameter=a.parameter,
+            calibration_type=quote.calibration_type,
+            location=location_val,
+        )
+        unit_price = Decimal(str(price_rec.get("recommended_unit_price") or "1200"))
+        qty = Decimal("1")
+        line_total = qty * unit_price
+
+        item = QuotationItem(
+            quotation_id=quote.id,
+            customer_asset_id=a.id,
+            instrument_id=instrument.id,
+            instrument_name=a.instrument_name,
+            normalized_name=normalized,
+            make=a.make,
+            model=a.model,
+            range_value=a.range_value,
+            parameter=a.parameter,
+            quantity=qty,
+            onsite=1 if payload.facility_id else 0,
+            unit_price=unit_price,
+            total_price=line_total,
+            nabl_applicable=1 if nabl_fit["nabl_accredited"] else 0,
+            nabl_validated=1,
+            nabl_fit_status=nabl_fit["fit_status"],
+            price_source=f"ai_recommendation_{price_rec.get('confidence_level', 'medium')}",
+            ai_confidence=Decimal(str(confidence)),
+        )
+        db.add(item)
+        subtotal += line_total
+        items_created += 1
+
+    quote.subtotal = subtotal
+    quote.tax = round(subtotal * Decimal("0.18"), 2)  # 18% standard GST for Calibration in India
+    quote.total = quote.subtotal - (quote.discount or Decimal("0")) + quote.tax
+
+    db.commit()
+    db.refresh(quote)
+
+    return {
+        "id": quote.id,
+        "quotation_number": quote.quotation_number,
+        "customer_name": quote.customer_name,
+        "facility_id": quote.facility_id,
+        "subtotal": float(quote.subtotal),
+        "tax": float(quote.tax),
+        "total": float(quote.total),
+        "items_count": items_created,
+        "status": quote.status,
+        "message": f"Quotation draft generated with {items_created} customer assets.",
+    }
+
+
+@router.post("/quotations/generate-from-assets")
+def generate_quotation_from_assets(payload: QuotationGenerateFromAssetsRequest):
+    """Generate an intelligent quotation draft directly from physical CustomerAsset records."""
+    db = db_session()
+    try:
+        return generate_quotation_from_assets_core(payload, db)
+    finally:
+        db.close()
+
+
+def update_quotation_status_core(quotation_id: int, payload: QuotationStatusUpdate, db: Session):
+    """Core logic: Update quotation status and propagate deal outcomes to Opportunities, Companies, and Orders."""
+    from models.order import Order
+    from models.activity import CRMActivity
+
+    quote = db.query(Quotation).filter(Quotation.id == quotation_id).first()
+    if not quote:
+        raise HTTPException(404, "Quotation not found")
+
+    quote.status = payload.status
+    now = datetime.utcnow()
+
+    if payload.status == "Won":
+        # Propagate to Opportunity if linked
+        if quote.opportunity_id:
+            opp = db.query(Opportunity).filter(Opportunity.id == quote.opportunity_id).first()
+            if opp:
+                opp.stage = "Won"
+                opp.probability = 100.0
+
+        # Update Company
+        if quote.company_id:
+            comp = db.query(Company).filter(Company.id == quote.company_id).first()
+            if comp:
+                comp.order_received = True
+                comp.order_date = now
+                comp.order_value = (comp.order_value or 0) + float(quote.total or 0)
+                comp.lead_status = "Customer"
+
+        # Create CRM Activity
+        act = CRMActivity(
+            company_id=quote.company_id,
+            activity_type="Quotation Won",
+            status="Completed",
+            remarks=f"Quotation {quote.quotation_number} marked as WON for amount INR {quote.total}",
+            created_at=now,
+        )
+        db.add(act)
+
+    elif payload.status == "Lost":
+        if quote.opportunity_id:
+            opp = db.query(Opportunity).filter(Opportunity.id == quote.opportunity_id).first()
+            if opp:
+                opp.stage = "Lost"
+                opp.loss_reason = payload.loss_reason or "Price / Competitor"
+
+    db.commit()
+    return {
+        "id": quote.id,
+        "status": quote.status,
+        "total": float(quote.total or 0),
+        "message": f"Quotation status updated to {quote.status}.",
+    }
+
+
+@router.put("/quotations/{quotation_id}/status")
+def update_quotation_status(quotation_id: int, payload: QuotationStatusUpdate):
+    """Update quotation status and propagate deal outcomes to Opportunities, Companies, and Orders."""
+    db = db_session()
+    try:
+        return update_quotation_status_core(quotation_id, payload, db)
     finally:
         db.close()

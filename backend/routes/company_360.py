@@ -71,8 +71,12 @@ def get_company_360(company_id: int):
         assets = db.query(CustomerAsset).filter(CustomerAsset.company_id == company_id).order_by(CustomerAsset.calibration_due_date.asc().nullslast()).all()
         calib_summary = calculate_company_asset_calibration_summary(company_id, db)
 
+        from services.nextBestAction import get_next_best_action
+        nba = get_next_best_action(company_id, db)
+
         return {
             "company": _company_summary(company),
+            "next_best_action": nba,
             "contacts": [
                 {"id": p.id, "name": p.full_name, "designation": p.designation, "department": p.department, "email": p.email, "phone": p.phone, "linkedin": p.linkedin_url}
                 for p in people
@@ -113,7 +117,18 @@ def get_company_360(company_id: int):
                 for t in tasks
             ],
             "quotations": [
-                {"id": q.id, "quotation_number": q.quotation_number, "quotation_date": q.quotation_date, "total": float(q.total or 0), "status": q.status, "human_approved": bool(q.human_approved)}
+                {
+                    "id": q.id,
+                    "quotation_number": q.quotation_number,
+                    "version_number": q.version_number,
+                    "is_latest": bool(q.is_latest),
+                    "parent_quotation_id": q.parent_quotation_id,
+                    "quotation_date": q.quotation_date,
+                    "total": float(q.total or 0),
+                    "status": q.status,
+                    "human_approved": bool(q.human_approved),
+                    "revision_notes": q.revision_notes,
+                }
                 for q in quotations
             ],
             "web_research": [

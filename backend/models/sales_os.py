@@ -5,7 +5,7 @@ legacy company/contact/pipeline models. They provide the foundation for
 opportunity management, quotation intelligence, instrument normalization,
 and auditable AI learning.
 """
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -70,7 +70,13 @@ class Quotation(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey("companies.id", ondelete="SET NULL"), nullable=True, index=True)
+    facility_id = Column(Integer, ForeignKey("facilities.id", ondelete="SET NULL"), nullable=True, index=True)
     opportunity_id = Column(Integer, ForeignKey("opportunities.id", ondelete="SET NULL"), nullable=True, index=True)
+    parent_quotation_id = Column(Integer, ForeignKey("quotations.id", ondelete="SET NULL"), nullable=True, index=True)
+    version_number = Column(Integer, default=1, nullable=False, index=True)
+    is_latest = Column(Boolean, default=True, nullable=False, index=True)
+    revision_notes = Column(Text, nullable=True)
+
     quotation_number = Column(String(100), unique=True, index=True)
     quotation_date = Column(Date, nullable=False)
     valid_until = Column(Date)
@@ -91,6 +97,8 @@ class Quotation(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     items = relationship("QuotationItem", back_populates="quotation", cascade="all, delete-orphan")
+    facility = relationship("Facility")
+    parent = relationship("Quotation", remote_side=[id], backref="revisions")
 
 
 class QuotationItem(Base):
@@ -98,6 +106,7 @@ class QuotationItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     quotation_id = Column(Integer, ForeignKey("quotations.id", ondelete="CASCADE"), nullable=False, index=True)
+    customer_asset_id = Column(Integer, ForeignKey("customer_assets.id", ondelete="SET NULL"), nullable=True, index=True)
     instrument_id = Column(Integer, ForeignKey("instruments.id", ondelete="SET NULL"), nullable=True, index=True)
     instrument_name = Column(String(500), nullable=False)
     normalized_name = Column(String(500), index=True)
@@ -111,11 +120,13 @@ class QuotationItem(Base):
     total_price = Column(Numeric(14, 2), default=0)
     nabl_applicable = Column(Integer)
     nabl_validated = Column(Integer, default=0)
+    nabl_fit_status = Column(String(50), nullable=True)
     price_source = Column(String(100))
     ai_confidence = Column(Numeric(5, 2))
     created_at = Column(DateTime, server_default=func.now())
 
     quotation = relationship("Quotation", back_populates="items")
+    customer_asset = relationship("CustomerAsset")
 
 
 class Instrument(Base):
