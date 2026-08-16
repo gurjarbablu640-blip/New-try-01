@@ -59,6 +59,72 @@ def create_competitor(payload: CompetitorCreate):
         db.close()
 
 
+@router.post("/seed-default-competitors")
+def seed_default_competitors():
+    """Seed key regional calibration competitors and battlecards in Gujarat/India."""
+    db = SessionLocal()
+    try:
+        seeds = [
+            {
+                "name": "TCR Engineering Services Pvt Ltd",
+                "website": "https://tcreng.com",
+                "country": "India",
+                "service_focus": "Materials Testing, Metallurgical & Calibration",
+                "positioning": "Large national multi-disciplinary testing laboratory with Pan-India presence.",
+                "pricing_notes": "Premium corporate pricing. Standard 7-10 day turnaround.",
+                "strengths": ["Strong brand recognition", "Extensive accredited test capabilities", "Large enterprise contracts"],
+                "weaknesses": ["Slow turnaround (7-10 days)", "Higher pricing on routine thermal/pressure instruments", "Less flexible on emergency on-site dispatch"],
+            },
+            {
+                "name": "Micro Calibration Systems",
+                "website": "https://microcalibration.in",
+                "country": "India",
+                "service_focus": "Dimensional & Mechanical Metrology",
+                "positioning": "Regional laboratory specializing in CNC tooling and precision dimensional gages.",
+                "pricing_notes": "Mid-tier pricing, volume discounts on standard micrometers and calipers.",
+                "strengths": ["Strong in Ahmedabad/Vadodara engineering corridors", "Good dimensional precision capabilities"],
+                "weaknesses": ["Limited high-pressure (>400 bar) and cryo-thermal scope", "Weak on-site chemical plant readiness"],
+            },
+            {
+                "name": "Aditi Metrology & Calibration",
+                "website": "https://aditimetrology.com",
+                "country": "India",
+                "service_focus": "Electro-technical & Thermal Calibration",
+                "positioning": "Low-cost local laboratory focusing on Surat and Ankleshwar industrial units.",
+                "pricing_notes": "Aggressive discounting (15-20% below standard rates).",
+                "strengths": ["Low price point", "Local proximity to South Gujarat chemical plants"],
+                "weaknesses": ["Longer certificate turnaround times", "Limited master equipment redundancy", "Subcontracts advanced flow and DP scopes"],
+            },
+        ]
+
+        created = 0
+        for s in seeds:
+            exists = db.query(CompetitorProfile).filter(CompetitorProfile.name == s["name"]).first()
+            if not exists:
+                comp = CompetitorProfile(
+                    name=s["name"],
+                    website=s["website"],
+                    country=s["country"],
+                    service_focus=s["service_focus"],
+                    positioning=s["positioning"],
+                    pricing_notes=s["pricing_notes"],
+                    strengths=s["strengths"],
+                    weaknesses=s["weaknesses"],
+                    active=True,
+                )
+                db.add(comp)
+                created += 1
+
+        db.commit()
+        return {
+            "success": True,
+            "message": f"Seeded {created} default competitors.",
+            "total_competitors_added": created,
+        }
+    finally:
+        db.close()
+
+
 @router.get("")
 def list_competitors(active: bool = True, limit: int = 100):
     db = SessionLocal()

@@ -57,6 +57,8 @@ def list_tools():
             {"name": "get_calibration_due", "read_only": True, "description": "Get instruments due for calibration within N days across customers."},
             {"name": "get_priority_leads", "read_only": True, "description": "Identify high-priority companies to contact today based on buying windows and urgency."},
             {"name": "match_nabl_fit", "read_only": True, "description": "Test instrument calibration parameters against Oorja NABL accredited scope."},
+            {"name": "get_territory_clusters", "read_only": True, "description": "Group companies and plant facilities into geographical industrial corridors."},
+            {"name": "get_visit_recommendations", "read_only": True, "description": "Generate high-density on-site sales/audit route itineraries."},
             {"name": "draft_followup_message", "read_only": True, "description": "Draft context-aware outreach/follow-up email based on plant assets."},
             {"name": "search_web_evidence", "read_only": True, "description": "Search stored, source-traceable web research evidence."},
             {"name": "sales_summary", "read_only": True, "description": "Summarize active opportunities, tasks, quotations, and due calibrations."},
@@ -94,6 +96,12 @@ def run_tool(payload: ToolRequest):
             return get_priority_leads_tool(db, limit=payload.limit)
         if payload.tool == "match_nabl_fit":
             return match_nabl_fit_tool(query)
+        if payload.tool == "get_territory_clusters":
+            from services.territory_intelligence import get_industrial_clusters
+            return get_industrial_clusters(db)
+        if payload.tool == "get_visit_recommendations":
+            from services.territory_intelligence import get_visit_recommendations
+            return get_visit_recommendations(db, max_stops=payload.limit or 4)
         if payload.tool == "draft_followup_message" and payload.company_id:
             return draft_followup_message_tool(db, payload.company_id)
         if payload.tool == "search_web_evidence":

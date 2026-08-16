@@ -47,6 +47,7 @@ from routes.assistant import router as assistant_router  # noqa: E402
 from routes.company_360 import router as company_360_router  # noqa: E402
 from routes.facilities import router as facilities_router  # noqa: E402
 from routes.customer_assets import router as customer_assets_router  # noqa: E402
+from routes.territory import router as territory_router  # noqa: E402
 
 app.include_router(api_router)
 app.include_router(pipeline_router)
@@ -66,6 +67,7 @@ app.include_router(assistant_router)
 app.include_router(company_360_router)
 app.include_router(facilities_router)
 app.include_router(customer_assets_router)
+app.include_router(territory_router)
 
 
 @app.get("/health")

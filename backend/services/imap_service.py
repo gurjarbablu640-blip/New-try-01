@@ -225,6 +225,27 @@ def process_incoming_email(db: Session, email_data: Dict[str, Any]) -> Dict[str,
             )
             db.add(crm_act)
 
+            # Auto-create or link Opportunity for interested replies
+            if category in ["INTERESTED", "REQUESTING_QUOTE", "MEETING_REQUESTED"] and recipient.company_id:
+                from models.sales_os import Opportunity
+                existing_opp = db.query(Opportunity).filter(
+                    Opportunity.company_id == recipient.company_id,
+                    Opportunity.stage.notin_(["Won", "Lost"]),
+                ).first()
+
+                if not existing_opp:
+                    new_opp = Opportunity(
+                        company_id=recipient.company_id,
+                        person_id=recipient.person_id,
+                        name=f"Inbound Calibration Interest — {company.name if company else from_email}",
+                        stage="Qualified" if category == "INTERESTED" else "Proposal",
+                        probability=50.0 if category == "INTERESTED" else 75.0,
+                        estimated_value=25000.0,
+                        source="Outbound Campaign",
+                        ai_summary=classification.get("summary") or f"Auto-created from {category} reply to campaign #{campaign_id}",
+                    )
+                    db.add(new_opp)
+
         db.commit()
 
     return {

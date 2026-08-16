@@ -338,6 +338,9 @@ def record_feedback(
 
 
 # Bounded Tool Registry Map
+from services.territory_intelligence import get_industrial_clusters, get_visit_recommendations
+from models.competitor_intel import CompetitorProfile
+
 TOOLS = {
     "search_companies": search_companies,
     "search_contacts": search_contacts,
@@ -345,6 +348,8 @@ TOOLS = {
     "get_priority_leads": get_priority_leads_tool,
     "match_nabl_fit": match_nabl_fit_tool,
     "get_quotation_history": get_quotation_history_tool,
+    "get_territory_clusters": get_industrial_clusters,
+    "get_visit_recommendations": get_visit_recommendations,
     "draft_followup_message": draft_followup_message_tool,
     "sales_summary": sales_summary,
     "record_feedback": record_feedback,
@@ -420,9 +425,64 @@ def ask_oorja(query: str, db: Session) -> dict[str, Any]:
             "tool_used": "match_nabl_fit",
         }
 
-    # 4. Intent: Next best action
+    # 4. Intent: Territory & Visit Itineraries
+    if any(k in q for k in ["territory", "cluster", "visit", "itinerary", "corridor", "trip"]):
+        routes_data = get_visit_recommendations(db, max_stops=3)
+        if routes_data["routes"]:
+            top_route = routes_data["routes"][0]
+            stops_str = "\n".join([f"  {s['stop_number']}. {s['time_slot']}: {s['company_name']} ({s['objective']})" for s in top_route["itinerary"]])
+            answer = (
+                f"Recommended Visit Route for {top_route['cluster_name']} ({top_route['region']}):\n\n"
+                f"• Estimated Calibration Opportunity: INR {top_route['est_calibration_opportunity']:,.2f}\n"
+                f"• Planned Stops ({top_route['total_stops']}):\n{stops_str}"
+            )
+            return {
+                "query": query,
+                "intent": "territory_visit_plan",
+                "verified_facts": routes_data["routes"],
+                "answer": answer,
+                "tool_used": "get_visit_recommendations",
+            }
+        else:
+            clusters_data = get_industrial_clusters(db)
+            top_clusters = clusters_data["clusters"][:3]
+            cluster_strs = [f"• {c['cluster_name']}: {c['companies_count']} plants, {c['total_assets']} assets ({c['overdue_assets']} overdue)" for c in top_clusters]
+            answer = (
+                f"Industrial Corridors Overview ({clusters_data['total_clusters']} regions analyzed):\n\n"
+                + "\n".join(cluster_strs)
+                + "\n\nTip: Add specific assets or calibration dates to generate dedicated on-site audit itineraries."
+            )
+            return {
+                "query": query,
+                "intent": "territory_visit_plan",
+                "verified_facts": clusters_data["clusters"],
+                "answer": answer,
+                "tool_used": "get_industrial_clusters",
+            }
+
+    # 5. Intent: Competitor Intelligence & Battlecards
+    if any(k in q for k in ["competitor", "tcr", "micro calibration", "aditi", "rival"]):
+        comps = db.query(CompetitorProfile).filter(CompetitorProfile.active == True).all()
+        if comps:
+            comp_facts = [
+                f"• {c.name}: {c.positioning}\n  - Weakness/Angle: {', '.join(c.weaknesses or ['Standard pricing'])}"
+                for c in comps[:3]
+            ]
+            answer = (
+                f"Regional Calibration Competitor Intelligence:\n\n"
+                + "\n".join(comp_facts)
+                + "\n\nOorja Differentiator: 48-hour certificate turnaround, direct NABL accreditation, and emergency on-site dispatch."
+            )
+            return {
+                "query": query,
+                "intent": "competitor_intel",
+                "verified_facts": [{"name": c.name, "focus": c.service_focus} for c in comps],
+                "answer": answer,
+                "tool_used": "search_competitors",
+            }
+
+    # 6. Intent: Next best action
     if any(k in q for k in ["next action", "what should i do", "next step", "what to do next"]):
-        # Extract company if possible or summarize top
         leads = get_priority_leads_tool(db, limit=1)
         if leads["results"]:
             top_company = leads["results"][0]
@@ -442,7 +502,7 @@ def ask_oorja(query: str, db: Session) -> dict[str, Any]:
                 "tool_used": "get_next_best_action",
             }
 
-    # 5. Intent: Draft follow-up message
+    # 7. Intent: Draft follow-up message
     if any(k in q for k in ["draft", "email", "follow-up", "follow up", "message"]):
         leads = get_priority_leads_tool(db, limit=1)
         if leads["results"]:
@@ -461,7 +521,7 @@ def ask_oorja(query: str, db: Session) -> dict[str, Any]:
                 "tool_used": "draft_followup_message",
             }
 
-    # 6. Default Fallback: Sales Summary + Search
+    # 8. Default Fallback: Sales Summary + Search
     comp_search = search_companies(db, query, limit=5)
     summary = sales_summary(db)
     answer = (
