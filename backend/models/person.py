@@ -12,10 +12,16 @@ class Person(Base):
     full_name = Column(String(300))
     designation = Column(String(300))
     email = Column(String(300))
+    normalized_email = Column(String(300), index=True)
     phone = Column(String(100))
+    normalized_phone = Column(String(50), index=True)
     linkedin_url = Column(String(500))
     seniority_level = Column(String(100))
     department = Column(String(200))
+    apollo_id = Column(String(100), index=True)
+    email_verification_status = Column(String(50), default="unverified", index=True)
+    email_verification_reason = Column(String(200))
+    email_verified_at = Column(DateTime)
     is_decision_maker = Column(Integer, default=0)  # 0=unknown, 1=yes, 2=no
 
     created_at = Column(DateTime, server_default=func.now())

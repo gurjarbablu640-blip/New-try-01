@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = ""
     GOOGLE_MAPS_API_KEY: str = ""
 
+    # Apollo API
+    APOLLO_API_KEY: str = ""
+    APOLLO_API_BASE_URL: str = "https://api.apollo.io/v1"
+    DISPOSABLE_DOMAINS_FILE: str = "data/disposable_email_domains.json"
+
     # App settings
     SECRET_KEY: str = "change-me-in-production"
     DEBUG: bool = True

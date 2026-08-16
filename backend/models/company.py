@@ -42,6 +42,16 @@ class Company(Base):
         index=True
     )
 
+    normalized_name = Column(
+        String(500),
+        index=True
+    )
+
+    domain = Column(
+        String(255),
+        index=True
+    )
+
     city = Column(String(200))
 
     state = Column(String(200))
@@ -55,9 +65,34 @@ class Company(Base):
 
     search_keyword = Column(String(300))
 
+    source = Column(
+        String(100),
+        default="manual",
+        index=True
+    )
+
+    apollo_id = Column(
+        String(100),
+        index=True
+    )
+
     website = Column(String(500))
 
     address = Column(Text)
+
+    # ============================================================
+    # QUALIFICATION STATUS
+    # ============================================================
+
+    qualification_status = Column(
+        String(50),
+        default="RAW",
+        index=True
+    )
+
+    qualification_reason = Column(Text)
+
+    qualified_at = Column(DateTime)
 
     # ============================================================
     # CONTACT INFO
