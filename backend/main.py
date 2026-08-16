@@ -42,7 +42,7 @@ from routes.knowledge import router as knowledge_router  # noqa: E402
 from routes.web_research import router as research_router  # noqa: E402
 from routes.campaigns import router as campaigns_router  # noqa: E402
 from routes.competitors import router as competitors_router  # noqa: E402
-from routes.learning_analytics import router as learning_analytics_router  # noqa: E402
+from routes.learning_analytics import router as learning_analytics_router, analytics_router  # noqa: E402
 from routes.assistant import router as assistant_router  # noqa: E402
 from routes.company_360 import router as company_360_router  # noqa: E402
 from routes.facilities import router as facilities_router  # noqa: E402
@@ -63,6 +63,7 @@ app.include_router(research_router)
 app.include_router(campaigns_router)
 app.include_router(competitors_router)
 app.include_router(learning_analytics_router)
+app.include_router(analytics_router)
 app.include_router(assistant_router)
 app.include_router(company_360_router)
 app.include_router(facilities_router)
