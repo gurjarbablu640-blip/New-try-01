@@ -213,7 +213,7 @@ def record_event(campaign_id: int, payload: EventCreate):
             raise HTTPException(404, "Campaign recipient not found")
         event = CampaignEvent(campaign_id=campaign_id, **payload.model_dump())
         session.add(event)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         event_type = payload.event_type.lower()
         if event_type == "sent":
             recipient.last_sent_at = now
@@ -230,5 +230,162 @@ def record_event(campaign_id: int, payload: EventCreate):
             recipient.status = "Unsubscribed"
         session.commit()
         return {"event_id": event.id, "recipient_status": recipient.status}
+    finally:
+        session.close()
+
+
+# ============================================================
+# STEP 2 OUTBOUND & IMAP ENDPOINTS
+# ============================================================
+
+class DispatchBatchRequest(BaseModel):
+    max_count: int = Field(default=50, ge=1, le=500)
+
+
+class TestSendRequest(BaseModel):
+    recipient_email: Optional[str] = None
+    step_number: int = Field(default=1, ge=1)
+    subject_override: Optional[str] = None
+    body_override: Optional[str] = None
+
+
+class SimulateReplyRequest(BaseModel):
+    from_email: str
+    subject: str
+    body: str
+    in_reply_to: Optional[str] = None
+    recipient_id: Optional[int] = None
+
+
+@router.post("/{campaign_id}/dispatch-batch")
+def dispatch_batch_endpoint(campaign_id: int, payload: DispatchBatchRequest):
+    """Dispatch approved recipients for a campaign via SMTP delivery engine."""
+    from services.smtp_service import dispatch_campaign_batch
+    session = db()
+    try:
+        res = dispatch_campaign_batch(session, campaign_id, max_count=payload.max_count)
+        if "error" in res:
+            raise HTTPException(400, res["error"])
+        return res
+    finally:
+        session.close()
+
+
+@router.post("/{campaign_id}/test-send")
+def test_send_endpoint(campaign_id: int, payload: TestSendRequest):
+    """Send a single test email for a campaign step to test mailbox or target."""
+    from services.smtp_service import send_email_message, render_template
+    session = db()
+    try:
+        campaign = session.query(Campaign).filter(Campaign.id == campaign_id).first()
+        if not campaign:
+            raise HTTPException(404, "Campaign not found")
+        step = session.query(CampaignStep).filter(
+            CampaignStep.campaign_id == campaign_id,
+            CampaignStep.step_number == payload.step_number,
+        ).first()
+
+        subject = payload.subject_override or (step.subject if step else f"Test Send: {campaign.name}")
+        body = payload.body_override or (step.body_template if step else "This is a test outbound email from Oorja Sales OS.")
+
+        context = {
+            "company_name": "Acme Industrial Test Plant",
+            "contact_name": "Test Contact",
+            "first_name": "Test",
+            "city": "Dahej",
+            "state": "Gujarat",
+            "industry": "Manufacturing",
+            "division": "Testing Division",
+        }
+        subject = render_template(subject, context)
+        body = render_template(body, context)
+
+        target_email = payload.recipient_email or "test@oorja.local"
+        res = send_email_message(
+            to_email=target_email,
+            subject=subject,
+            body=body,
+            campaign_id=campaign_id,
+        )
+        return res
+    finally:
+        session.close()
+
+
+@router.post("/imap/poll")
+def poll_imap_endpoint():
+    """Poll IMAP inbox for incoming prospect replies and delivery bounces."""
+    from services.imap_service import poll_imap_inbox
+    session = db()
+    try:
+        return poll_imap_inbox(session)
+    finally:
+        session.close()
+
+
+@router.post("/imap/simulate-reply")
+def simulate_reply_endpoint(payload: SimulateReplyRequest):
+    """Simulate an incoming email reply or bounce to trigger CRM activities and classifications."""
+    from services.imap_service import process_incoming_email
+    session = db()
+    try:
+        headers_dict = {}
+        if payload.in_reply_to:
+            headers_dict["in-reply-to"] = payload.in_reply_to
+        if payload.recipient_id:
+            headers_dict["x-oorja-recipient-id"] = str(payload.recipient_id)
+
+        parsed_email = {
+            "from": payload.from_email,
+            "subject": payload.subject,
+            "body": payload.body,
+            "headers": headers_dict,
+        }
+        return process_incoming_email(session, parsed_email)
+    finally:
+        session.close()
+
+
+@router.get("/{campaign_id}/analytics")
+def get_campaign_analytics(campaign_id: int):
+    """Get delivery, reply, and bounce analytics for a campaign."""
+    session = db()
+    try:
+        campaign = session.query(Campaign).filter(Campaign.id == campaign_id).first()
+        if not campaign:
+            raise HTTPException(404, "Campaign not found")
+
+        total_recipients = session.query(CampaignRecipient).filter(CampaignRecipient.campaign_id == campaign_id).count()
+        sent_count = session.query(CampaignRecipient).filter(
+            CampaignRecipient.campaign_id == campaign_id,
+            CampaignRecipient.email_status == "Sent",
+        ).count()
+        replied_count = session.query(CampaignRecipient).filter(
+            CampaignRecipient.campaign_id == campaign_id,
+            CampaignRecipient.status == "Replied",
+        ).count()
+        bounced_count = session.query(CampaignRecipient).filter(
+            CampaignRecipient.campaign_id == campaign_id,
+            CampaignRecipient.status == "Bounced",
+        ).count()
+
+        events_count = session.query(CampaignEvent).filter(CampaignEvent.campaign_id == campaign_id).count()
+
+        return {
+            "campaign_id": campaign.id,
+            "name": campaign.name,
+            "status": campaign.status,
+            "approved": campaign.approved,
+            "daily_limit": campaign.daily_limit,
+            "metrics": {
+                "total_recipients": total_recipients,
+                "sent": sent_count,
+                "replied": replied_count,
+                "bounced": bounced_count,
+                "total_events": events_count,
+                "reply_rate": round((replied_count / sent_count * 100), 1) if sent_count > 0 else 0.0,
+                "bounce_rate": round((bounced_count / sent_count * 100), 1) if sent_count > 0 else 0.0,
+            },
+        }
     finally:
         session.close()
