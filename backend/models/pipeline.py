@@ -191,6 +191,11 @@ class PipelineActivity(Base):
     )
 
 
+# Compatibility alias
+Activity = PipelineActivity
+
+
+
 # ============================================================
 # A/B TEST RESULTS
 # ============================================================

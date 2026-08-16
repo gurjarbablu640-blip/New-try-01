@@ -21,7 +21,7 @@ from config import settings
 from database import SessionLocal
 from models.company import Company
 from models.person import Person
-from models.pipeline import PipelineStage, Activity
+from models.pipeline import PipelineStage, PipelineActivity as Activity
 from models.intent_signal import CompanyIntentSignal
 
 logger = logging.getLogger(__name__)
