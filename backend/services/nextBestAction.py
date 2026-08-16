@@ -13,7 +13,6 @@ import logging
 from datetime import datetime, timedelta, date
 from typing import Dict, Optional, Any
 
-import anthropic
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
@@ -139,6 +138,10 @@ def get_next_best_action(company_id: int, db: Session = None) -> Dict[str, Any]:
         elif pipeline and pipeline.last_touched:
             days_since_touch = (datetime.utcnow() - pipeline.last_touched).days
 
+        # Get asset calibration summary
+        from services.calibration_intelligence import calculate_company_asset_calibration_summary
+        asset_summary = calculate_company_asset_calibration_summary(company_id, db)
+
         # Build context for Claude
         context = {
             "company_name": company.name,
@@ -152,7 +155,12 @@ def get_next_best_action(company_id: int, db: Session = None) -> Dict[str, Any]:
             "person_name": person.full_name if person else None,
             "person_designation": person.designation if person else None,
             "person_phone": person.phone if person else None,
-            "buying_window": company.buying_window or "unknown",
+            "buying_window": company.buying_window or asset_summary.get("buying_window", "unknown"),
+            "asset_summary": asset_summary,
+            "overdue_assets": asset_summary["due_metrics"]["overdue"],
+            "due_30_assets": asset_summary["due_metrics"]["due_next_30_days"],
+            "due_60_assets": asset_summary["due_metrics"]["due_next_60_days"],
+            "full_scope_ratio": asset_summary["nabl_fit_summary"]["full_scope_ratio"],
         }
 
         # Try Claude first, fall back to rules
@@ -184,6 +192,7 @@ def get_next_best_action(company_id: int, db: Session = None) -> Dict[str, Any]:
 def _claude_next_action(context: Dict) -> Optional[Dict]:
     """Use Claude to determine next best action."""
     try:
+        import anthropic
         client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
         signal_text = "\n".join([
@@ -267,8 +276,23 @@ def _rule_based_next_action(context: Dict) -> Dict:
     timing = "today"
     reason = ""
 
+    # Calibration due date urgency overrides standard sequence
+    overdue_assets = context.get("overdue_assets", 0)
+    due_30 = context.get("due_30_assets", 0)
+    due_60 = context.get("due_60_assets", 0)
+
+    if overdue_assets > 0 or due_30 > 0:
+        action = "MAKE_CALL" if has_phone else "SEND_WHATSAPP"
+        timing = "today"
+        reason = f"{overdue_assets + due_30} customer instruments due/overdue for calibration — immediate high-priority NABL outreach"
+
+    elif due_60 > 0:
+        action = "SEND_WHATSAPP" if has_phone else "SEND_EMAIL"
+        timing = "today"
+        reason = f"{due_60} customer instruments due for calibration in next 60 days (Active Buying Window)"
+
     # High urgency signals override everything
-    if "NABL_RENEWAL_DUE" in signal_types:
+    elif "NABL_RENEWAL_DUE" in signal_types:
         action = "MAKE_CALL" if has_phone else "SEND_WHATSAPP"
         timing = "today"
         reason = "NABL renewal approaching — highest priority, must contact immediately"

@@ -60,8 +60,25 @@ def calculate_buying_windows() -> Dict:
 
 
 def _determine_buying_window(company: Company, db: Session) -> str:
-    """Determine the buying window for a single company."""
-    # Get active signals
+    """Determine the buying window for a single company based on physical assets and intent signals."""
+    from services.calibration_intelligence import calculate_company_asset_calibration_summary
+
+    # 1. Primary Priority: Physical Customer Asset Calibration Due Dates
+    asset_summary = calculate_company_asset_calibration_summary(company.id, db)
+    due_metrics = asset_summary.get("due_metrics", {})
+    if due_metrics.get("overdue", 0) > 0 or due_metrics.get("due_next_30_days", 0) > 0:
+        company.urgency_reason = asset_summary.get("urgency_summary")
+        return "next_30_days"
+
+    if due_metrics.get("due_next_60_days", 0) > 0:
+        company.urgency_reason = asset_summary.get("urgency_summary")
+        return "next_60_days"
+
+    if due_metrics.get("upcoming_90_to_120_days", 0) > 0:
+        company.urgency_reason = asset_summary.get("urgency_summary")
+        return "next_90_days"
+
+    # 2. Secondary Priority: Active External Intent Signals
     signals = db.query(CompanyIntentSignal).filter(
         CompanyIntentSignal.company_id == company.id,
         CompanyIntentSignal.is_active == 1,
@@ -69,7 +86,6 @@ def _determine_buying_window(company: Company, db: Session) -> str:
 
     signal_types = [s.signal_type for s in signals]
 
-    # Priority-based window assignment
     if "NABL_RENEWAL_DUE" in signal_types:
         return "next_30_days"
 

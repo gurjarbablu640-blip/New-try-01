@@ -10,6 +10,14 @@ from models.web_research import WebResearchItem
 from models.competitor_intel import CompetitorObservation
 from models.campaign import CampaignRecipient, CampaignEvent
 
+from models.facility import Facility
+from models.customer_asset import CustomerAsset
+from services.calibration_intelligence import (
+    calculate_company_asset_calibration_summary,
+    calculate_asset_due_status,
+    match_nabl_service_fit,
+)
+
 router = APIRouter(prefix="/api/company-360", tags=["Company 360"])
 
 
@@ -58,12 +66,40 @@ def get_company_360(company_id: int):
         if recipient_ids:
             campaign_events = db.query(CampaignEvent).filter(CampaignEvent.recipient_id.in_(recipient_ids)).order_by(CampaignEvent.occurred_at.desc()).limit(100).all()
 
+        # Step 3: Facilities, Customer Assets & Calibration Intelligence
+        facilities = db.query(Facility).filter(Facility.company_id == company_id).order_by(Facility.name.asc()).all()
+        assets = db.query(CustomerAsset).filter(CustomerAsset.company_id == company_id).order_by(CustomerAsset.calibration_due_date.asc().nullslast()).all()
+        calib_summary = calculate_company_asset_calibration_summary(company_id, db)
+
         return {
             "company": _company_summary(company),
             "contacts": [
-                {"id": p.id, "name": p.name, "designation": p.designation, "department": p.department, "email": p.email, "phone": p.phone, "linkedin": p.linkedin}
+                {"id": p.id, "name": p.full_name, "designation": p.designation, "department": p.department, "email": p.email, "phone": p.phone, "linkedin": p.linkedin_url}
                 for p in people
             ],
+            "facilities": [
+                {"id": f.id, "name": f.name, "plant_code": f.plant_code, "industrial_estate": f.industrial_estate, "city": f.city, "state": f.state, "address": f.address}
+                for f in facilities
+            ],
+            "customer_assets": [
+                {
+                    "id": a.id,
+                    "facility_id": a.facility_id,
+                    "asset_tag": a.asset_tag,
+                    "serial_number": a.serial_number,
+                    "instrument_name": a.instrument_name,
+                    "make": a.make,
+                    "model": a.model,
+                    "parameter": a.parameter,
+                    "range_value": a.range_value,
+                    "location_in_plant": a.location_in_plant,
+                    "calibration_due_date": a.calibration_due_date.isoformat() if a.calibration_due_date else None,
+                    "due_status": calculate_asset_due_status(a.calibration_due_date)["due_status"],
+                    "nabl_fit": match_nabl_service_fit(a.instrument_name, a.parameter, a.range_value),
+                }
+                for a in assets
+            ],
+            "calibration_intelligence": calib_summary,
             "intent_signals": [
                 {"id": s.id, "signal_type": s.signal_type, "signal_strength": s.signal_strength, "source": s.source, "detected_at": s.detected_at, "details": s.details}
                 for s in signals

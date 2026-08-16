@@ -340,3 +340,19 @@ class Company(Base):
         back_populates="company",
         cascade="all, delete-orphan"
     )
+
+    # ============================================================
+    # STEP 3: FACILITIES & CUSTOMER ASSETS
+    # ============================================================
+
+    facilities = relationship(
+        "Facility",
+        back_populates="company",
+        cascade="all, delete-orphan"
+    )
+
+    customer_assets = relationship(
+        "CustomerAsset",
+        back_populates="company",
+        cascade="all, delete-orphan"
+    )

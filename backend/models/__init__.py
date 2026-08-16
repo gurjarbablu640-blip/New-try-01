@@ -12,6 +12,8 @@ from models.web_research import WebResearchItem
 from models.campaign import Campaign, CampaignStep, CampaignRecipient, CampaignEvent
 from models.competitor_intel import CompetitorProfile, CompetitorObservation
 from models.knowledge import KnowledgeDocument, KnowledgeChunk
+from models.facility import Facility
+from models.customer_asset import CustomerAsset
 
 __all__ = [
     "Company", "Person", "CompanyWebsiteIntel", "CompanyIntentSignal", "OutreachDraft",
@@ -19,5 +21,5 @@ __all__ = [
     "Opportunity", "SalesTask", "SalesNote", "Quotation", "QuotationItem", "Instrument",
     "InstrumentAlias", "PriceHistory", "AIFeedback", "LearningRule", "WebResearchItem",
     "Campaign", "CampaignStep", "CampaignRecipient", "CampaignEvent", "CompetitorProfile",
-    "CompetitorObservation", "KnowledgeDocument", "KnowledgeChunk",
+    "CompetitorObservation", "KnowledgeDocument", "KnowledgeChunk", "Facility", "CustomerAsset",
 ]
