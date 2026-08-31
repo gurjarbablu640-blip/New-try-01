@@ -9,6 +9,7 @@ from models.sales_os import Opportunity, SalesTask, Quotation
 from models.web_research import WebResearchItem
 from models.competitor_intel import CompetitorObservation
 from models.campaign import CampaignRecipient, CampaignEvent
+from models.decision_maker_candidate import DecisionMakerCandidate
 
 from models.facility import Facility
 from models.customer_asset import CustomerAsset
@@ -66,10 +67,22 @@ def get_company_360(company_id: int):
         if recipient_ids:
             campaign_events = db.query(CampaignEvent).filter(CampaignEvent.recipient_id.in_(recipient_ids)).order_by(CampaignEvent.occurred_at.desc()).limit(100).all()
 
-        # Step 3: Facilities, Customer Assets & Calibration Intelligence
+        # Facilities, Customer Assets & Calibration Intelligence
         facilities = db.query(Facility).filter(Facility.company_id == company_id).order_by(Facility.name.asc()).all()
         assets = db.query(CustomerAsset).filter(CustomerAsset.company_id == company_id).order_by(CustomerAsset.calibration_due_date.asc().nullslast()).all()
         calib_summary = calculate_company_asset_calibration_summary(company_id, db)
+
+        # Decision-Maker Discovery
+        dm_candidates = (
+            db.query(DecisionMakerCandidate)
+            .filter(DecisionMakerCandidate.company_id == company_id)
+            .order_by(
+                DecisionMakerCandidate.score_composite.desc().nullslast(),
+                DecisionMakerCandidate.created_at.desc(),
+            )
+            .limit(30)
+            .all()
+        )
 
         from services.nextBestAction import get_next_best_action
         nba = get_next_best_action(company_id, db)
@@ -78,9 +91,56 @@ def get_company_360(company_id: int):
             "company": _company_summary(company),
             "next_best_action": nba,
             "contacts": [
-                {"id": p.id, "name": p.full_name, "designation": p.designation, "department": p.department, "email": p.email, "phone": p.phone, "linkedin": p.linkedin_url}
+                {"id": p.id, "name": p.full_name, "designation": p.designation, "department": p.department, "email": p.email, "phone": p.phone, "linkedin": p.linkedin_url, "discovery_status": getattr(p, 'discovery_status', 'UNKNOWN')}
                 for p in people
             ],
+            "decision_maker_discovery": {
+                "total_candidates": len(dm_candidates),
+                "summary": {
+                    "persona_inferred": sum(1 for c in dm_candidates if c.verification_status == "PERSONA_INFERRED"),
+                    "person_candidate": sum(1 for c in dm_candidates if c.verification_status == "PERSON_CANDIDATE"),
+                    "publicly_verified": sum(1 for c in dm_candidates if c.verification_status == "PERSON_PUBLICLY_VERIFIED"),
+                    "apollo_enriched": sum(1 for c in dm_candidates if c.verification_status == "APOLLO_ENRICHED"),
+                    "email_verified": sum(1 for c in dm_candidates if c.verification_status == "EMAIL_VERIFIED"),
+                    "rejected": sum(1 for c in dm_candidates if c.verification_status == "PERSON_REJECTED"),
+                },
+                "candidates": [
+                    {
+                        "id": c.id,
+                        "target_persona": c.target_persona,
+                        "stakeholder_role": c.stakeholder_role,
+                        "contact_priority": c.contact_priority,
+                        "priority_reason": c.priority_reason,
+                        "candidate_name": c.candidate_name,
+                        "candidate_title": c.candidate_title,
+                        "candidate_facility": c.candidate_facility,
+                        "candidate_location": c.candidate_location,
+                        "verification_status": c.verification_status,
+                        "verification_confidence": round(c.verification_confidence or 0, 3),
+                        "score_composite": round(c.score_composite or 0, 3),
+                        "score_breakdown": {
+                            "company_match": round(c.score_company_match or 0, 3),
+                            "role_relevance": round(c.score_role_relevance or 0, 3),
+                            "facility_match": round(c.score_facility_match or 0, 3),
+                            "recency": round(c.score_recency or 0, 3),
+                            "evidence_quality": round(c.score_evidence_quality or 0, 3),
+                        },
+                        "evidence_sources": c.evidence_sources or [],
+                        "public_profile_url": c.public_profile_url,
+                        "apollo_enrichment_status": c.apollo_enrichment_status,
+                        "apollo_email": c.apollo_email,
+                        "apollo_email_confidence": c.apollo_email_confidence,
+                        "email_status": c.email_status,
+                        "rejection_reason": c.rejection_reason,
+                        "rejection_details": c.rejection_details,
+                        "pending_research_tasks": c.pending_research_tasks or [],
+                        "created_at": c.created_at.isoformat() if c.created_at else None,
+                        "verified_at": c.verified_at.isoformat() if c.verified_at else None,
+                        "enriched_at": c.enriched_at.isoformat() if c.enriched_at else None,
+                    }
+                    for c in dm_candidates
+                ],
+            },
             "facilities": [
                 {"id": f.id, "name": f.name, "plant_code": f.plant_code, "industrial_estate": f.industrial_estate, "city": f.city, "state": f.state, "address": f.address}
                 for f in facilities

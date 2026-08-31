@@ -16,6 +16,7 @@ import TerritoryPage from "./pages/TerritoryPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import AssistantPage from "./pages/AssistantPage";
 import SettingsPage from "./pages/SettingsPage";
+import IntelligencePage from "./pages/IntelligencePage";
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/" element={<AppLayout />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="intelligence" element={<IntelligencePage />} />
           <Route path="leads" element={<LeadFactoryPage />} />
           <Route path="companies" element={<CompaniesPage />} />
           <Route path="pipeline" element={<PipelinePage />} />

@@ -104,14 +104,76 @@ export const getABInsights = () => api.get("/ab-insights");
 export const getICPInsights = () => api.get("/icp-insights");
 
 // Ask Oorja AI Orchestrator
-export const askOorjaAI = (question) => api.post("/assistant/ask", { question });
+export const askOorjaAI = (question, session_id = null) => api.post("/assistant/ask", { question, session_id });
 export const getAssistantTools = () => api.get("/assistant/tools");
 export const runAssistantTool = (data) => api.post("/assistant/tool", data);
 export const recordAssistantFeedback = (data) => api.post("/assistant/feedback", data);
+export const getAssistantSession = (sessionId) => api.get(`/assistant/sessions/${sessionId}`);
 
 // Activities & Follow-ups
 export const getActivities = (params = {}) => api.get("/activities", { params });
 export const getTodayFollowups = () => api.get("/activities/followups");
 export const createActivity = (data) => api.post("/activities", data);
+
+// Salesoorja Decision Intelligence
+export const getCompanyBrain = (companyId) => api.get(`/intelligence/company-brain/${companyId}`);
+export const addCompanyFact = (companyId, data) => api.post(`/intelligence/company-brain/${companyId}/facts`, data);
+export const addTimelineEvent = (companyId, data) => api.post(`/intelligence/company-brain/${companyId}/timeline`, data);
+export const getCalibrationInference = (companyId) => api.get(`/intelligence/calibration-inference/${companyId}`);
+export const getLeadScorecard = (companyId) => api.get(`/intelligence/lead-score/${companyId}`);
+export const getRegulatoryRadar = () => api.get("/intelligence/regulatory-radar");
+export const getResearchBrief = (companyId) => api.get(`/intelligence/research-brief/${companyId}`);
+export const generateRolePitch = (data) => api.post("/intelligence/role-pitch", data);
+export const getNextBestAction = (companyId) => api.get(`/intelligence/next-best-action/${companyId}`);
+export const getWhitespaceMap = (companyId) => api.get(`/intelligence/whitespace-map/${companyId}`);
+export const getCallBrief = (companyId, personId = null) => api.get(`/intelligence/call-brief/${companyId}`, { params: { person_id: personId } });
+export const analyzeCall = (data) => api.post("/intelligence/analyze-call", data);
+export const getMLDataset = () => api.get("/intelligence/ml-dataset");
+export const discoverSignal = (data) => api.post("/intelligence/signals/discover", data);
+export const discoverAutonomousCalibrationOpportunities = (data = {}) => api.post("/intelligence/signals/autonomous-discovery", data);
+export const reasonSignalCausality = (data) => api.post("/intelligence/signals/reason", data);
+export const evaluateCadenceNonResponse = (data) => api.post("/intelligence/cadence/evaluate-non-response", data);
+export const composeHtmlEmail = (data) => api.post("/intelligence/email/compose-html", data);
+export const executeApolloPilot = (data) => api.post("/intelligence/apollo/pilot-validation", data);
+export const getCompanyBeliefState = (companyId) => api.get(`/intelligence/reasoning/belief-state/${companyId}`);
+export const updateCompanyBelief = (data) => api.post("/intelligence/reasoning/update-belief", data);
+export const getDecisionPolicy = (companyId) => api.get(`/intelligence/reasoning/decision-policy/${companyId}`);
+export const getCBRSimilarCases = (companyId) => api.get(`/intelligence/reasoning/cbr-similar-cases/${companyId}`);
+export const getCausalTemplates = () => api.get("/intelligence/reasoning/causal-templates");
+
+// Settings & Integrations
+export const getSettingsStatus = () => api.get("/settings/status");
+export const updateSettings = (data) => api.post("/settings/update", data);
+export const testAIProvider = (provider) => api.post("/settings/test-ai", { provider });
+export const testApolloConnection = () => api.post("/settings/test-apollo");
+export const testSMTPConnection = () => api.post("/settings/test-smtp");
+export const testIMAPConnection = () => api.post("/settings/test-imap");
+
+// Manual Customer / Prospect Onboarding
+export const onboardManualProspect = (data) => api.post("/companies/manual-onboarding", data);
+
+// NABL Lab Scope Intelligence
+export const getLabScopes = (params = {}) => api.get("/lab-scopes", { params });
+export const getLabScopeDetails = (id) => api.get(`/lab-scopes/${id}`);
+export const importLabScope = (data) => api.post("/lab-scopes/import", data);
+export const uploadScopeDocument = (formData, params = {}) => api.post("/lab-scopes/upload-document", formData, {
+  params,
+  headers: { "Content-Type": "multipart/form-data" },
+});
+export const searchLabParameters = (params) => api.get("/lab-scopes/search/parameters", { params });
+export const compareLabScopes = (params) => api.get("/lab-scopes/analytics/compare", { params });
+
+// Historical Quotation Ingestion & Pricing Learning
+export const importHistoricalQuotations = (data) => api.post("/sales-os/quotations/import-historical", data);
+export const uploadHistoricalQuoteDocument = (formData) => api.post("/sales-os/quotations/upload-historical-file", formData, {
+  headers: { "Content-Type": "multipart/form-data" },
+});
+
+// Decision-Maker Discovery & Person Verification Pipeline
+export const discoverDecisionMakers = (companyId, data = {}) => api.post(`/intelligence/decision-makers/discover/${companyId}`, data);
+export const getDecisionMakers = (companyId) => api.get(`/intelligence/decision-makers/${companyId}`);
+export const verifyDecisionMaker = (candidateId, data) => api.post(`/intelligence/decision-makers/verify/${candidateId}`, data);
+export const enrichDecisionMaker = (candidateId) => api.post(`/intelligence/decision-makers/enrich/${candidateId}`);
+export const getDecisionMakerResearchBrief = (companyId) => api.get(`/intelligence/decision-makers/research-brief/${companyId}`);
 
 export default api;

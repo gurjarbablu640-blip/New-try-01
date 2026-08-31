@@ -16,6 +16,9 @@ import {
   Plus,
   ArrowRight,
   ExternalLink,
+  Zap,
+  Globe,
+  TrendingUp,
 } from "lucide-react";
 import {
   searchApolloLeads,
@@ -23,48 +26,104 @@ import {
   validateEmail,
   qualifyLead,
   setQualificationStatus,
+  discoverAutonomousCalibrationOpportunities,
+  executeApolloPilot,
 } from "../api";
+
+const PAN_INDIA_REGIONS = [
+  "PAN INDIA",
+  "Maharashtra",
+  "Tamil Nadu",
+  "Karnataka",
+  "Telangana",
+  "Gujarat",
+  "Delhi NCR",
+  "Rajasthan",
+  "Uttar Pradesh",
+  "Madhya Pradesh",
+  "West Bengal",
+];
 
 export default function LeadFactoryPage() {
   const { onOpenCompany } = useOutletContext();
 
-  const [source, setSource] = useState("apollo");
-  const [searchQuery, setSearchQuery] = useState("Chemical");
-  const [leads, setLeads] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState("autonomous"); // autonomous, apollo, database
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedRegion, setSelectedRegion] = useState("PAN INDIA");
   const [industryFilter, setIndustryFilter] = useState("all");
-  const [locationFilter, setLocationFilter] = useState("all");
-  const [qualFilter, setQualFilter] = useState("all");
+  const [discoveredLeads, setDiscoveredLeads] = useState([]);
+  const [apolloLeads, setApolloLeads] = useState([]);
+  const [dbLeads, setDbLeads] = useState([]);
+  const [loading, setLoading] = useState(false);
   const [validatingEmail, setValidatingEmail] = useState(null);
   const [qualifyingId, setQualifyingId] = useState(null);
+  const [enrichingId, setEnrichingId] = useState(null);
   const [notification, setNotification] = useState("");
 
-  const loadLeads = async () => {
+  const handleRunAutonomousDiscovery = async () => {
     setLoading(true);
     setNotification("");
     try {
-      if (source === "apollo") {
+      const res = await discoverAutonomousCalibrationOpportunities({
+        geography: selectedRegion,
+        industry_filter: industryFilter === "all" ? undefined : industryFilter,
+        limit: 15,
+      });
+      setDiscoveredLeads(res.data?.candidates || []);
+      setNotification(`Discovered ${res.data?.total_discovered || 0} candidate calibration opportunities across ${selectedRegion}!`);
+    } catch (err) {
+      console.error("Discovery error:", err);
+      setNotification("Failed to run autonomous discovery.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadManualLeads = async () => {
+    setLoading(true);
+    try {
+      if (activeTab === "apollo") {
         const res = await searchApolloLeads({
-          query: searchQuery,
+          query: searchQuery || "Manufacturing",
           page: 1,
-          per_page: 20,
+          per_page: 10,
         });
-        setLeads(res.data?.results || []);
-      } else {
-        const res = await getCompanies({ q: searchQuery, limit: 20 });
-        setLeads(res.data?.results || res.data || []);
+        setApolloLeads(res.data?.results || []);
+      } else if (activeTab === "database") {
+        const res = await getCompanies({ q: searchQuery, limit: 30 });
+        setDbLeads(res.data?.results || res.data || []);
       }
     } catch (err) {
-      console.error("Lead fetch error:", err);
-      setNotification("Failed to fetch leads from " + source);
+      console.error("Fetch error:", err);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadLeads();
-  }, [source]);
+    if (activeTab === "autonomous") {
+      handleRunAutonomousDiscovery();
+    } else {
+      loadManualLeads();
+    }
+  }, [activeTab, selectedRegion]);
+
+  const handleEnrichApolloContact = async (companyId, companyName) => {
+    setEnrichingId(companyId);
+    try {
+      const res = await executeApolloPilot({
+        company_id: companyId,
+        company_name: companyName,
+        target_role: "Quality Assurance",
+        limit: 2,
+      });
+      setNotification(`Apollo Enrichment: ${res.data?.status} (${res.data?.contacts_extracted} contacts found within safety limit).`);
+    } catch (err) {
+      setNotification("Apollo enrichment failed.");
+    } finally {
+      setEnrichingId(null);
+    }
+  };
 
   const handleValidateEmail = async (email, index) => {
     if (!email) return;
@@ -85,7 +144,8 @@ export default function LeadFactoryPage() {
     try {
       const res = await qualifyLead(companyId);
       setNotification(`Lead #${companyId} Qualified: ${res.data?.qualification_status}`);
-      loadLeads();
+      if (activeTab === "autonomous") handleRunAutonomousDiscovery();
+      else loadManualLeads();
     } catch (err) {
       setNotification("Qualification failed");
     } finally {
@@ -93,37 +153,37 @@ export default function LeadFactoryPage() {
     }
   };
 
-  const filteredLeads = leads.filter((item) => {
-    if (industryFilter !== "all" && item.industry && !item.industry.toLowerCase().includes(industryFilter.toLowerCase())) {
-      return false;
-    }
-    if (locationFilter !== "all" && item.city && !item.city.toLowerCase().includes(locationFilter.toLowerCase())) {
-      return false;
-    }
-    if (qualFilter !== "all" && item.qualification_status && item.qualification_status !== qualFilter) {
-      return false;
-    }
-    return true;
-  });
-
   return (
     <div className="space-y-6">
-      {/* Page Header */}
+      {/* Header */}
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Lead Factory & Enrichment</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold tracking-tight text-white">Lead Factory & Demand Discovery</h1>
+            <span className="rounded bg-brand-primary/20 border border-brand-primary/40 px-2 py-0.5 text-[10px] font-mono text-brand-cyan">
+              PAN-INDIA OPERATING MODEL
+            </span>
+          </div>
           <p className="text-sm text-dark-muted">
-            Deterministic discovery, RFC 5322 validation, ICP scoring, and outbound qualification gates.
+            Autonomous calibration trigger detection, second-order causal reasoning, role-specific persona identification, and Apollo enrichment.
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={loadLeads}
+            onClick={() => activeTab === "autonomous" ? handleRunAutonomousDiscovery() : loadManualLeads()}
             disabled={loading}
             className="flex items-center gap-1.5 rounded-lg border border-dark-border bg-dark-panel px-3 py-1.5 text-xs text-white transition hover:bg-dark-hover disabled:opacity-50"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            <span>Refresh Feed</span>
+            <span>Refresh</span>
+          </button>
+          <button
+            onClick={handleRunAutonomousDiscovery}
+            disabled={loading}
+            className="flex items-center gap-1.5 rounded-lg bg-brand-primary px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-brand-primaryHover shadow transition"
+          >
+            <Zap className="h-3.5 w-3.5" />
+            <span>Discover Calibration Demand</span>
           </button>
         </div>
       </div>
@@ -139,244 +199,220 @@ export default function LeadFactoryPage() {
         </div>
       )}
 
-      {/* Source Selector Pills & Filter Bar */}
-      <div className="dark-card p-4 space-y-4">
-        {/* Source Pills */}
+      {/* Filter & Subnav Bar */}
+      <div className="dark-card p-4 space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase text-dark-muted mr-1">Lead Source:</span>
-            {[
-              { id: "apollo", label: "Apollo Industrial API", badge: "Live + Mock" },
-              { id: "database", label: "CRM Lead Repository", badge: "Local DB" },
-              { id: "maps", label: "Industrial Estate Belts", badge: "GIDC" },
-            ].map((s) => (
-              <button
-                key={s.id}
-                onClick={() => setSource(s.id)}
-                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-                  source === s.id
-                    ? "bg-brand-primary text-white shadow-md shadow-brand-primary/20"
-                    : "bg-dark-bg text-dark-muted hover:text-white border border-dark-border"
-                }`}
-              >
-                <span>{s.label}</span>
-                <span className="text-[10px] opacity-75 font-mono">({s.badge})</span>
-              </button>
-            ))}
-          </div>
-
-          {/* Search Input */}
-          <div className="flex items-center gap-2">
-            <div className="relative w-64">
-              <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-dark-muted" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && loadLeads()}
-                placeholder="Search industry or company..."
-                className="w-full rounded-lg border border-dark-border bg-dark-bg py-1.5 pl-8 pr-3 text-xs text-white placeholder-dark-muted focus:border-brand-primary focus:outline-none"
-              />
-            </div>
             <button
-              onClick={loadLeads}
-              className="rounded-lg bg-brand-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-primaryHover"
+              onClick={() => setActiveTab("autonomous")}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                activeTab === "autonomous"
+                  ? "bg-brand-primary text-white shadow-md shadow-brand-primary/20"
+                  : "bg-dark-bg text-dark-muted hover:text-white border border-dark-border"
+              }`}
             >
-              Search
+              <Sparkles className="h-3.5 w-3.5 text-brand-cyan" />
+              <span>Autonomous Trigger Discovery ({discoveredLeads.length})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab("apollo")}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                activeTab === "apollo"
+                  ? "bg-brand-primary text-white shadow-md shadow-brand-primary/20"
+                  : "bg-dark-bg text-dark-muted hover:text-white border border-dark-border"
+              }`}
+            >
+              <span>Apollo Direct Search</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab("database")}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                activeTab === "database"
+                  ? "bg-brand-primary text-white shadow-md shadow-brand-primary/20"
+                  : "bg-dark-bg text-dark-muted hover:text-white border border-dark-border"
+              }`}
+            >
+              <span>Indexed CRM Accounts</span>
             </button>
           </div>
-        </div>
 
-        {/* Filter Bar */}
-        <div className="flex items-center gap-3 pt-3 border-t border-dark-border flex-wrap text-xs">
-          <div className="flex items-center gap-1 text-dark-muted">
-            <Filter className="h-3.5 w-3.5" />
-            <span>Filters:</span>
-          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 text-xs text-dark-muted">
+              <Globe className="h-3.5 w-3.5 text-brand-cyan" />
+              <span>Region:</span>
+              <select
+                value={selectedRegion}
+                onChange={(e) => setSelectedRegion(e.target.value)}
+                className="rounded-lg border border-dark-border bg-dark-bg px-2.5 py-1 text-white font-medium"
+              >
+                {PAN_INDIA_REGIONS.map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+            </div>
 
-          <select
-            value={industryFilter}
-            onChange={(e) => setIndustryFilter(e.target.value)}
-            className="rounded-lg border border-dark-border bg-dark-bg px-2.5 py-1 text-xs text-white focus:outline-none"
-          >
-            <option value="all">All Industries</option>
-            <option value="chemical">Chemical & Petrochemical</option>
-            <option value="pharma">Pharma & API</option>
-            <option value="engineering">Heavy Engineering</option>
-            <option value="automotive">Automotive</option>
-          </select>
-
-          <select
-            value={locationFilter}
-            onChange={(e) => setLocationFilter(e.target.value)}
-            className="rounded-lg border border-dark-border bg-dark-bg px-2.5 py-1 text-xs text-white focus:outline-none"
-          >
-            <option value="all">All Locations (Gujarat)</option>
-            <option value="dahej">Dahej</option>
-            <option value="hazira">Hazira</option>
-            <option value="ankleshwar">Ankleshwar</option>
-            <option value="vadodara">Vadodara</option>
-            <option value="vapi">Vapi</option>
-            <option value="ahmedabad">Ahmedabad</option>
-          </select>
-
-          <select
-            value={qualFilter}
-            onChange={(e) => setQualFilter(e.target.value)}
-            className="rounded-lg border border-dark-border bg-dark-bg px-2.5 py-1 text-xs text-white focus:outline-none"
-          >
-            <option value="all">All Qualification Statuses</option>
-            <option value="READY_FOR_OUTREACH">Ready for Outreach</option>
-            <option value="QUALIFIED">Qualified</option>
-            <option value="NEEDS_ENRICHMENT">Needs Enrichment</option>
-          </select>
-
-          <div className="ml-auto text-dark-muted font-mono text-[11px]">
-            Showing {filteredLeads.length} accounts
+            <select
+              value={industryFilter}
+              onChange={(e) => setIndustryFilter(e.target.value)}
+              className="rounded-lg border border-dark-border bg-dark-bg px-2.5 py-1 text-xs text-white"
+            >
+              <option value="all">All Industries</option>
+              <option value="automotive">Automotive</option>
+              <option value="aerospace">Aerospace & Defence</option>
+              <option value="chemical">Specialty Chemicals</option>
+              <option value="electronics">Electronics</option>
+            </select>
           </div>
         </div>
       </div>
 
-      {/* DENSE DATA TABLE */}
-      <div className="dark-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr>
-                <th className="dark-table-header">Company & Location</th>
-                <th className="dark-table-header">Key Decision Maker</th>
-                <th className="dark-table-header">Contact & Email</th>
-                <th className="dark-table-header">ICP Score</th>
-                <th className="dark-table-header">Qualification</th>
-                <th className="dark-table-header text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={6} className="p-8 text-center text-xs text-dark-muted">
-                    <div className="flex items-center justify-center gap-2">
-                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-primary border-t-transparent"></div>
-                      <span>Querying lead intelligence engine...</span>
+      {/* TAB 1: AUTONOMOUS TRIGGER DISCOVERY */}
+      {activeTab === "autonomous" && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-4">
+            {discoveredLeads.length === 0 ? (
+              <div className="dark-card p-12 text-center text-xs text-dark-muted">
+                No active trigger signals found for {selectedRegion}. Click "Discover Calibration Demand" to scan configured sources.
+              </div>
+            ) : (
+              discoveredLeads.map((cand) => (
+                <div
+                  key={cand.company_id}
+                  className="dark-card p-5 space-y-4 hover:border-brand-primary/40 transition border border-dark-border"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-dark-border pb-3">
+                    <div>
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-base font-bold text-white hover:text-brand-cyan cursor-pointer" onClick={() => onOpenCompany(cand.company_id)}>
+                          {cand.company_name}
+                        </span>
+                        <span className="rounded bg-brand-primary/15 px-2 py-0.5 text-[10px] font-mono text-brand-cyan border border-brand-cyan/30">
+                          {cand.city}, {cand.state}
+                        </span>
+                        <span className="rounded bg-dark-bg px-2 py-0.5 text-[10px] text-dark-muted border border-dark-border">
+                          {cand.industry}
+                        </span>
+                      </div>
+                      <div className="text-xs text-brand-amber font-medium mt-1 flex items-center gap-1.5">
+                        <Zap className="h-3.5 w-3.5" />
+                        <span>{cand.event_title}</span>
+                      </div>
                     </div>
-                  </td>
-                </tr>
-              ) : filteredLeads.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="p-8 text-center text-xs text-dark-muted">
-                    No leads found matching current search and filter parameters.
-                  </td>
-                </tr>
-              ) : (
-                filteredLeads.map((item, idx) => {
-                  const compName = item.company_name || item.name;
-                  const contact = item.contacts?.[0] || {};
-                  const email = contact.email || item.email;
-                  const score = Math.round(item.icp_score || (item.headcount ? 85 : 70));
-                  const qualStatus = item.qualification_status || (score >= 75 ? "READY_FOR_OUTREACH" : "QUALIFIED");
 
-                  return (
-                    <tr key={idx} className="dark-table-row">
-                      {/* Company */}
-                      <td className="dark-table-cell">
-                        <div
-                          onClick={() => item.id && onOpenCompany(item.id)}
-                          className="font-semibold text-white text-sm hover:text-brand-cyan cursor-pointer transition flex items-center gap-1.5"
-                        >
-                          <Building className="h-3.5 w-3.5 text-brand-primary flex-shrink-0" />
-                          <span>{compName}</span>
-                        </div>
-                        <div className="text-xs text-dark-muted mt-0.5">
-                          {item.city || "Gujarat"}{item.state ? `, ${item.state}` : ""} • {item.industry || "Chemical Manufacturing"}
-                        </div>
-                      </td>
+                    <div className="flex items-center gap-3">
+                      <div className="text-right">
+                        <div className="font-mono text-lg font-bold text-brand-emerald">{cand.icp_score}</div>
+                        <div className="text-[10px] text-dark-muted uppercase font-mono">ICP Score</div>
+                      </div>
+                      <button
+                        onClick={() => handleEnrichApolloContact(cand.company_id, cand.company_name)}
+                        disabled={enrichingId === cand.company_id}
+                        className="flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-xs font-semibold text-white hover:bg-brand-primaryHover shadow disabled:opacity-50"
+                      >
+                        <Users className="h-3.5 w-3.5" />
+                        <span>{enrichingId === cand.company_id ? "Enriching..." : "Enrich Decision Maker"}</span>
+                      </button>
+                      <button
+                        onClick={() => handleQualifyLead(cand.company_id)}
+                        disabled={qualifyingId === cand.company_id}
+                        className="flex items-center gap-1.5 rounded-lg border border-brand-emerald/40 bg-brand-emerald/10 px-3 py-2 text-xs font-semibold text-brand-emerald hover:bg-brand-emerald/20 transition"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        <span>Qualify</span>
+                      </button>
+                    </div>
+                  </div>
 
-                      {/* Contact */}
-                      <td className="dark-table-cell">
-                        <div className="font-medium text-white text-xs">
-                          {contact.name || item.contact_person || "Quality & NABL Lead"}
-                        </div>
-                        <div className="text-[11px] text-dark-muted">
-                          {contact.title || "Plant Head"}
-                        </div>
-                      </td>
+                  {/* Second-Order Causal Reasoning Chain */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-dark-panel p-3.5 rounded-xl border border-dark-border text-xs">
+                    <div>
+                      <span className="text-dark-muted font-medium block mb-0.5">1. Business & Plant Change</span>
+                      <span className="text-white/90">{cand.causality_chain?.business_change}</span>
+                    </div>
 
-                      {/* Email & Deliverability */}
-                      <td className="dark-table-cell">
-                        {email ? (
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-xs text-brand-cyan truncate max-w-[180px]">{email}</span>
-                            <button
-                              onClick={() => handleValidateEmail(email, idx)}
-                              disabled={validatingEmail === idx}
-                              className="rounded border border-dark-border p-1 text-dark-muted hover:text-brand-emerald hover:border-brand-emerald/40 transition"
-                              title="Validate deliverability via RFC 5322 & DNS MX"
-                            >
-                              <ShieldCheck className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-dark-muted italic">Unenriched email</span>
-                        )}
-                      </td>
+                    <div>
+                      <span className="text-dark-muted font-medium block mb-0.5">2. Calibration Requirement</span>
+                      <span className="text-white/90">{cand.causality_chain?.calibration_impact}</span>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {cand.causality_chain?.likely_parameters?.map((p, idx) => (
+                          <span key={idx} className="rounded bg-brand-cyan/15 px-1.5 py-0.5 text-[10px] font-mono text-brand-cyan border border-brand-cyan/30">
+                            {p}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
 
-                      {/* ICP Score */}
-                      <td className="dark-table-cell font-mono">
-                        <span
-                          className={`rounded px-2 py-0.5 text-xs font-bold ${
-                            score >= 80
-                              ? "bg-brand-emerald/15 text-brand-emerald border border-brand-emerald/30"
-                              : score >= 60
-                              ? "bg-brand-amber/15 text-brand-amber border border-brand-amber/30"
-                              : "bg-dark-panel text-dark-muted"
-                          }`}
-                        >
-                          {score}
-                        </span>
-                      </td>
-
-                      {/* Qualification Status */}
-                      <td className="dark-table-cell">
-                        <span
-                          className={`rounded px-2 py-0.5 text-[10px] font-semibold tracking-wider uppercase ${
-                            qualStatus === "READY_FOR_OUTREACH"
-                              ? "badge-emerald"
-                              : qualStatus === "QUALIFIED"
-                              ? "badge-primary"
-                              : "badge-amber"
-                          }`}
-                        >
-                          {qualStatus.replaceAll("_", " ")}
-                        </span>
-                      </td>
-
-                      {/* Actions */}
-                      <td className="dark-table-cell text-right space-x-1.5">
-                        {item.id ? (
-                          <button
-                            onClick={() => onOpenCompany(item.id)}
-                            className="rounded-lg border border-dark-border bg-dark-bg px-2.5 py-1 text-xs text-white hover:bg-dark-hover transition"
-                          >
-                            Inspect 360
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => handleQualifyLead(idx + 1)}
-                            disabled={qualifyingId === idx + 1}
-                            className="rounded-lg bg-brand-primary px-2.5 py-1 text-xs font-semibold text-white hover:bg-brand-primaryHover transition"
-                          >
-                            Import & Qualify
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                    <div>
+                      <span className="text-dark-muted font-medium block mb-0.5">3. Recommended Action & Persona</span>
+                      <span className="text-white/90 font-medium text-brand-amber">{cand.causality_chain?.recommended_role}</span>
+                      <p className="text-[11px] text-dark-muted mt-0.5">{cand.causality_chain?.action_strategy}</p>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* TAB 2: APOLLO DIRECT SEARCH */}
+      {activeTab === "apollo" && (
+        <div className="dark-card p-4 space-y-3">
+          <div className="flex items-center justify-between pb-3 border-b border-dark-border">
+            <span className="text-xs font-semibold text-white">Apollo Enriched Contacts (Safety Limit Enforced: Max 6 per run)</span>
+            <span className="text-[10px] font-mono text-brand-amber border border-brand-amber/30 rounded px-2 py-0.5">
+              SAFETY GUARD ACTIVE
+            </span>
+          </div>
+
+          <div className="divide-y divide-dark-border border border-dark-border rounded-xl overflow-hidden">
+            {apolloLeads.length === 0 ? (
+              <div className="p-8 text-center text-xs text-dark-muted">No Apollo records returned.</div>
+            ) : (
+              apolloLeads.map((l, idx) => (
+                <div key={idx} className="p-3.5 bg-dark-panel flex items-center justify-between text-xs">
+                  <div>
+                    <div className="font-semibold text-white">{l.name || l.first_name}</div>
+                    <div className="text-dark-muted text-[11px]">{l.title} • {l.company_name}</div>
+                    <div className="text-brand-cyan font-mono text-[11px] mt-0.5">{l.email}</div>
+                  </div>
+                  <button
+                    onClick={() => handleValidateEmail(l.email, idx)}
+                    disabled={validatingEmail === idx}
+                    className="rounded border border-dark-border bg-dark-card px-2.5 py-1 text-xs text-dark-muted hover:text-white"
+                  >
+                    {validatingEmail === idx ? "Checking..." : "Validate RFC 5322"}
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: INDEXED CRM ACCOUNTS */}
+      {activeTab === "database" && (
+        <div className="dark-card p-4 space-y-3">
+          <div className="divide-y divide-dark-border border border-dark-border rounded-xl overflow-hidden">
+            {dbLeads.map((c) => (
+              <div key={c.id} className="p-3.5 bg-dark-panel flex items-center justify-between text-xs">
+                <div>
+                  <div className="font-semibold text-white cursor-pointer hover:underline" onClick={() => onOpenCompany(c.id)}>
+                    {c.name}
+                  </div>
+                  <div className="text-dark-muted text-[11px]">{c.city}, {c.state} • {c.industry}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-brand-emerald font-bold">{c.icp_score || 70}</span>
+                  <span className="rounded bg-brand-primary/20 text-brand-cyan text-[10px] px-2 py-0.5 font-mono">{c.lead_status}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

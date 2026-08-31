@@ -48,6 +48,9 @@ from routes.company_360 import router as company_360_router  # noqa: E402
 from routes.facilities import router as facilities_router  # noqa: E402
 from routes.customer_assets import router as customer_assets_router  # noqa: E402
 from routes.territory import router as territory_router  # noqa: E402
+from routes.intelligence import router as intelligence_router  # noqa: E402
+from routes.settings import router as settings_router  # noqa: E402
+from routes.lab_scopes import router as lab_scopes_router  # noqa: E402
 
 app.include_router(api_router)
 app.include_router(pipeline_router)
@@ -69,6 +72,9 @@ app.include_router(company_360_router)
 app.include_router(facilities_router)
 app.include_router(customer_assets_router)
 app.include_router(territory_router)
+app.include_router(intelligence_router)
+app.include_router(settings_router)
+app.include_router(lab_scopes_router)
 
 
 @app.get("/health")

@@ -1,5 +1,6 @@
 """Person / Contact model."""
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, func
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -23,6 +24,15 @@ class Person(Base):
     email_verification_reason = Column(String(200))
     email_verified_at = Column(DateTime)
     is_decision_maker = Column(Integer, default=0)  # 0=unknown, 1=yes, 2=no
+
+    # ── Decision-Maker Discovery Fields ─────────────────────────────────
+    discovery_status = Column(String(50), default="UNKNOWN", index=True)
+    # UNKNOWN, PERSONA_INFERRED, PERSON_CANDIDATE, PERSON_PUBLICLY_VERIFIED,
+    # APOLLO_ENRICHED, EMAIL_VERIFIED
+    discovery_source = Column(String(100))
+    # e.g. "web_research", "apollo", "company_website", "manual"
+    evidence_json = Column(JSONB)
+    # Structured evidence trail: [{source, url, snippet, retrieved_at, confidence}]
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

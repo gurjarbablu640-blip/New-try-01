@@ -36,6 +36,7 @@ class ToolRequest(BaseModel):
 
 class AskOorjaRequest(BaseModel):
     question: str = Field(min_length=1)
+    session_id: Optional[str] = None
 
 
 class FeedbackRequest(BaseModel):
@@ -72,7 +73,42 @@ def ask_assistant(payload: AskOorjaRequest):
     """Conversational endpoint for Ask Oorja."""
     db = SessionLocal()
     try:
-        return ask_oorja(payload.question, db)
+        return ask_oorja(payload.question, db, session_id=payload.session_id)
+    finally:
+        db.close()
+
+
+@router.get("/sessions/{session_id}")
+def get_conversation_session(session_id: str):
+    """Retrieve full turn history and metadata for a conversation session."""
+    from models.conversation import ConversationSession, ConversationTurn
+    db = SessionLocal()
+    try:
+        sess = db.query(ConversationSession).filter(ConversationSession.id == session_id).first()
+        if not sess:
+            from fastapi import HTTPException
+            raise HTTPException(404, "Conversation session not found")
+        turns = db.query(ConversationTurn).filter(ConversationTurn.session_id == session_id).order_by(ConversationTurn.turn_number.asc()).all()
+        return {
+            "session_id": sess.id,
+            "started_at": sess.started_at,
+            "turn_count": sess.turn_count,
+            "summary": sess.summary,
+            "status": sess.status,
+            "turns": [
+                {
+                    "turn_number": t.turn_number,
+                    "role": t.role,
+                    "agent_name": t.agent_name,
+                    "content": t.content,
+                    "tool_calls": t.tool_calls,
+                    "iteration_count": t.iteration_count,
+                    "tokens_used": t.tokens_used,
+                    "created_at": t.created_at,
+                }
+                for t in turns
+            ],
+        }
     finally:
         db.close()
 

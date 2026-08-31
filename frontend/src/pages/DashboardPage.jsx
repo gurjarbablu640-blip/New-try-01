@@ -86,16 +86,26 @@ export default function DashboardPage() {
     }
   };
 
-  const totalPipelineVal = summary?.open_pipeline_value || 125000;
+  const totalPipelineVal = summary?.open_pipeline_value || opportunities.reduce((acc, o) => acc + Number(o.estimated_value || 0), 0);
+  const leadsCount = summary?.leads_count ?? 0;
+  const qualLeadsCount = summary?.qualified_leads ?? 0;
+  const repliesCount = recentReplies.length;
+  const oppsCount = summary?.open_opportunities ?? opportunities.length;
+  const quotesCount = summary?.open_quotations ?? quotations.length;
 
   return (
     <div className="space-y-6">
       {/* Top Header */}
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Command Center</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold tracking-tight text-white">Command Center</h1>
+            <span className="rounded bg-brand-primary/20 border border-brand-primary/40 px-2 py-0.5 text-[10px] font-mono text-brand-cyan">
+              REAL DATABASE DATA
+            </span>
+          </div>
           <p className="text-sm text-dark-muted">
-            Real-time executive cockpit for calibration sales & industrial outreach.
+            Pan-India executive cockpit for calibration sales & industrial outreach.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -104,7 +114,7 @@ export default function DashboardPage() {
             className="flex items-center gap-1.5 rounded-lg border border-brand-primary/40 bg-brand-primary/10 px-3 py-1.5 text-xs font-semibold text-brand-primary transition hover:bg-brand-primary/20"
           >
             <Bot className="h-3.5 w-3.5 text-brand-cyan" />
-            <span>AI Workspace</span>
+            <span>Ask Oorja AI</span>
           </button>
           <button
             onClick={() => navigate("/pipeline")}
@@ -124,10 +134,10 @@ export default function DashboardPage() {
             <Users className="h-4 w-4 text-brand-cyan" />
           </div>
           <div className="mt-2 font-mono text-2xl font-bold text-white">
-            {summary?.leads_count || 12}
+            {leadsCount}
           </div>
-          <div className="mt-1 text-[11px] text-brand-emerald flex items-center gap-0.5">
-            <span>+4 this week</span>
+          <div className="mt-1 text-[11px] text-dark-muted flex items-center gap-0.5">
+            <span>{leadsCount > 0 ? "Indexed accounts" : "No leads yet"}</span>
           </div>
         </div>
 
@@ -137,10 +147,10 @@ export default function DashboardPage() {
             <Flame className="h-4 w-4 text-brand-amber" />
           </div>
           <div className="mt-2 font-mono text-2xl font-bold text-white">
-            {summary?.qualified_leads || 8}
+            {qualLeadsCount}
           </div>
           <div className="mt-1 text-[11px] text-brand-amber flex items-center gap-0.5">
-            <span>Ready for outreach</span>
+            <span>{qualLeadsCount > 0 ? "Ready for outreach" : "None qualified"}</span>
           </div>
         </div>
 
@@ -150,10 +160,10 @@ export default function DashboardPage() {
             <Send className="h-4 w-4 text-brand-secondary" />
           </div>
           <div className="mt-2 font-mono text-2xl font-bold text-white">
-            {recentReplies.length || 3}
+            {repliesCount}
           </div>
           <div className="mt-1 text-[11px] text-brand-emerald">
-            100% Inbound Match
+            {repliesCount > 0 ? "Inbound signals" : "No replies yet"}
           </div>
         </div>
 
@@ -163,10 +173,10 @@ export default function DashboardPage() {
             <GitPullRequest className="h-4 w-4 text-brand-primary" />
           </div>
           <div className="mt-2 font-mono text-2xl font-bold text-white">
-            {summary?.open_opportunities || opportunities.length || 4}
+            {oppsCount}
           </div>
           <div className="mt-1 text-[11px] text-dark-muted">
-            In active negotiation
+            {oppsCount > 0 ? "In active pipeline" : "No open deals"}
           </div>
         </div>
 
@@ -176,10 +186,10 @@ export default function DashboardPage() {
             <FileText className="h-4 w-4 text-brand-cyan" />
           </div>
           <div className="mt-2 font-mono text-2xl font-bold text-white">
-            {summary?.open_quotations || quotations.length || 3}
+            {quotesCount}
           </div>
           <div className="mt-1 text-[11px] text-brand-cyan">
-            With version control
+            {quotesCount > 0 ? "Commercial drafts" : "No quotes yet"}
           </div>
         </div>
 
@@ -192,7 +202,7 @@ export default function DashboardPage() {
             ₹{Number(totalPipelineVal).toLocaleString("en-IN")}
           </div>
           <div className="mt-1 text-[11px] text-brand-emerald">
-            Active pipeline
+            {totalPipelineVal > 0 ? "Calculated pipeline" : "₹0.00"}
           </div>
         </div>
       </div>
@@ -260,8 +270,12 @@ export default function DashboardPage() {
                     <Users className="h-4 w-4" />
                   </div>
                   <div>
-                    <div className="font-medium text-white text-sm">8 Qualified Leads Ready for Campaign Dispatch</div>
-                    <div className="text-xs text-dark-muted">Verified decision-makers in Dahej & Hazira chemical corridors</div>
+                    <div className="font-medium text-white text-sm">
+                      {qualLeadsCount > 0 ? `${qualLeadsCount} Qualified Leads Ready for Outreach` : "Lead Factory Pipeline Ready"}
+                    </div>
+                    <div className="text-xs text-dark-muted">
+                      {qualLeadsCount > 0 ? "Verified decision-makers across industrial corridors" : "Discover new high-priority manufacturing accounts"}
+                    </div>
                   </div>
                 </div>
                 <ChevronRight className="h-4 w-4 text-dark-muted" />
@@ -276,8 +290,12 @@ export default function DashboardPage() {
                     <Send className="h-4 w-4" />
                   </div>
                   <div>
-                    <div className="font-medium text-white text-sm">3 Inbound Replies Awaiting Quotation Drafting</div>
-                    <div className="text-xs text-dark-muted">Prospects classified as REQUESTING_QUOTE from Aarti & Deepak Nitrite</div>
+                    <div className="font-medium text-white text-sm">
+                      {repliesCount > 0 ? `${repliesCount} Inbound Replies in Inbox` : "Sales Inbox & IMAP Monitor"}
+                    </div>
+                    <div className="text-xs text-dark-muted">
+                      {repliesCount > 0 ? "Incoming communications classified by Reply Intelligence" : "Monitoring inbound emails for RFQs and buying signals"}
+                    </div>
                   </div>
                 </div>
                 <ChevronRight className="h-4 w-4 text-dark-muted" />
@@ -292,8 +310,12 @@ export default function DashboardPage() {
                     <Gauge className="h-4 w-4" />
                   </div>
                   <div>
-                    <div className="font-medium text-white text-sm">5 Customer Assets Due for Calibration within 30 Days</div>
-                    <div className="text-xs text-dark-muted">High-pressure transmitters and thermal probes in active buying window</div>
+                    <div className="font-medium text-white text-sm">
+                      {calibrationsDue.length > 0 ? `${calibrationsDue.length} Customer Assets Due for Calibration` : "Asset Calibration Intelligence"}
+                    </div>
+                    <div className="text-xs text-dark-muted">
+                      {calibrationsDue.length > 0 ? "Instruments in active 30-60 day buying window" : "Track customer instruments and renewal dates"}
+                    </div>
                   </div>
                 </div>
                 <ChevronRight className="h-4 w-4 text-dark-muted" />
@@ -308,8 +330,12 @@ export default function DashboardPage() {
                     <FileText className="h-4 w-4" />
                   </div>
                   <div>
-                    <div className="font-medium text-white text-sm">2 Quotations Pending Version Approval & Send</div>
-                    <div className="text-xs text-dark-muted">Auto-generated draft quotations ready for commercial signoff</div>
+                    <div className="font-medium text-white text-sm">
+                      {quotesCount > 0 ? `${quotesCount} Quotations on Record` : "Quotation Intelligence & History"}
+                    </div>
+                    <div className="text-xs text-dark-muted">
+                      {quotesCount > 0 ? "Draft and finalized line-item calibration proposals" : "Import historical quotations or draft new proposals"}
+                    </div>
                   </div>
                 </div>
                 <ChevronRight className="h-4 w-4 text-dark-muted" />

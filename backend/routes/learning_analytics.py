@@ -5,6 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter
 from sqlalchemy import func
+from sqlalchemy.orm import Session
 
 from database import SessionLocal
 from models.company import Company
@@ -58,50 +59,132 @@ def learning_patterns(status: str = "Candidate", limit: int = 50):
         db.close()
 
 
+import re
+
+def _extract_feedback_group_key(fb: AIFeedback) -> tuple[str, str, dict]:
+    """
+    Extracts (group_key, rule_type, pattern_metadata) from an AIFeedback row.
+    For orchestrator_answer feedback, detects sub-patterns (e.g. instrument_category, intent)
+    so specific rules like CMM or Pressure Gauge margin are isolated rather than lumped into a generic bucket.
+    If no sub-pattern is detected (e.g. territory questions), safely falls back to entity_type:action_type.
+    """
+    ai_val = fb.ai_value if isinstance(fb.ai_value, dict) else {}
+    human_val = fb.human_value if isinstance(fb.human_value, dict) else {}
+
+    if fb.entity_type == "orchestrator_answer":
+        inst = (
+            human_val.get("instrument_category")
+            or ai_val.get("instrument_category")
+            or human_val.get("instrument")
+            or ai_val.get("instrument")
+        )
+        sub_intent = human_val.get("sub_intent") or ai_val.get("intent") or ai_val.get("sub_intent")
+
+        if inst:
+            norm_inst = str(inst).strip()
+            inst_slug = re.sub(r"[^a-zA-Z0-9]+", "_", norm_inst.lower()).strip("_")
+            rule_key = f"{fb.entity_type}:{fb.action_type}:{inst_slug}"
+            is_pricing = (
+                "pricing" in fb.action_type.lower()
+                or "price" in fb.action_type.lower()
+                or "margin" in (fb.reason or "").lower()
+                or "margin_adjustment" in human_val
+                or "corrected_price" in human_val
+                or "adjustment_percent" in human_val
+            )
+            rule_type = "Pricing Pattern" if is_pricing else "Instrument Domain Pattern"
+            pattern = {
+                "entity_type": fb.entity_type,
+                "action_type": fb.action_type,
+                "instrument_category": norm_inst,
+                "adjustment_percent": (
+                    human_val.get("adjustment_percent")
+                    or human_val.get("adjustment")
+                    or human_val.get("margin_adjustment")
+                ),
+                "sample_reason": fb.reason or human_val.get("reason"),
+                "sample_ai_value": fb.ai_value,
+                "sample_human_value": fb.human_value,
+            }
+            return rule_key, rule_type, pattern
+
+        if sub_intent:
+            intent_slug = re.sub(r"[^a-zA-Z0-9]+", "_", str(sub_intent).strip().lower()).strip("_")
+            rule_key = f"{fb.entity_type}:{fb.action_type}:{intent_slug}"
+            rule_type = "Intent Override"
+            pattern = {
+                "entity_type": fb.entity_type,
+                "action_type": fb.action_type,
+                "sub_intent": sub_intent,
+                "sample_reason": fb.reason,
+                "sample_ai_value": fb.ai_value,
+                "sample_human_value": fb.human_value,
+            }
+            return rule_key, rule_type, pattern
+
+    # Standard fallback grouping for all existing / other entity_types (or orchestrator without sub-fields)
+    rule_key = f"{fb.entity_type}:{fb.action_type}"
+    rule_type = "Heuristic Optimization"
+    pattern = {
+        "entity_type": fb.entity_type,
+        "action_type": fb.action_type,
+        "sample_reason": fb.reason,
+        "sample_human_value": fb.human_value,
+    }
+    return rule_key, rule_type, pattern
+
+
+def generate_candidate_rules_core(db: Session) -> dict:
+    """Core logic to analyze recent AI feedback and extract candidate learning rules."""
+    feedback_items = db.query(AIFeedback).all()
+    created_rules = 0
+
+    # Group by extracted sub-pattern key
+    grouped: dict[str, tuple[str, dict, list[AIFeedback]]] = {}
+    for fb in feedback_items:
+        key, r_type, pat = _extract_feedback_group_key(fb)
+        if key not in grouped:
+            grouped[key] = (r_type, pat, [])
+        grouped[key][2].append(fb)
+
+    for key, (r_type, pat, items) in grouped.items():
+        # Threshold: >=3 for orchestrator_answer, >=1 for all other entity types
+        entity_type = items[0].entity_type
+        min_threshold = 3 if entity_type == "orchestrator_answer" else 1
+
+        if len(items) >= min_threshold:
+            existing = db.query(LearningRule).filter(LearningRule.rule_key == key).first()
+            confidence = min(60.0 + len(items) * 10.0, 95.0)
+            if not existing:
+                rule = LearningRule(
+                    rule_type=r_type,
+                    rule_key=key,
+                    pattern=pat,
+                    evidence_count=len(items),
+                    confidence=confidence,
+                    status="Candidate",
+                )
+                db.add(rule)
+                created_rules += 1
+            else:
+                existing.evidence_count = len(items)
+                existing.confidence = confidence
+                existing.pattern = pat
+
+    db.commit()
+    return {
+        "success": True,
+        "feedback_analyzed": len(feedback_items),
+        "new_candidate_rules": created_rules,
+    }
+
+
 @router.post("/generate-rules")
 def generate_candidate_rules():
     """Analyze recent AI feedback and extract candidate learning rules for human approval."""
     db = SessionLocal()
     try:
-        feedback_items = db.query(AIFeedback).all()
-        created_rules = 0
-
-        # Group by action_type and reason pattern
-        grouped = {}
-        for fb in feedback_items:
-            key = f"{fb.entity_type}:{fb.action_type}"
-            grouped.setdefault(key, []).append(fb)
-
-        for key, items in grouped.items():
-            if len(items) >= 1:
-                # Check if a rule already exists for this key
-                existing = db.query(LearningRule).filter(LearningRule.rule_key == key).first()
-                if not existing:
-                    rule = LearningRule(
-                        rule_type="Heuristic Optimization",
-                        rule_key=key,
-                        pattern={
-                            "entity_type": items[0].entity_type,
-                            "action_type": items[0].action_type,
-                            "sample_reason": items[0].reason,
-                            "sample_human_value": items[0].human_value,
-                        },
-                        evidence_count=len(items),
-                        confidence=min(60.0 + len(items) * 10.0, 95.0),
-                        status="Candidate",
-                    )
-                    db.add(rule)
-                    created_rules += 1
-                else:
-                    existing.evidence_count = len(items)
-                    existing.confidence = min(60.0 + len(items) * 10.0, 95.0)
-
-        db.commit()
-        return {
-            "success": True,
-            "feedback_analyzed": len(feedback_items),
-            "new_candidate_rules": created_rules,
-        }
+        return generate_candidate_rules_core(db)
     finally:
         db.close()
 

@@ -12,6 +12,8 @@ import {
   Zap,
   CheckCircle2,
   FileText,
+  BrainCircuit,
+  Compass,
 } from "lucide-react";
 import { askOorjaAI, getAssistantTools } from "../api";
 
@@ -24,7 +26,7 @@ export default function AssistantPage() {
       id: "intro",
       role: "assistant",
       content:
-        "Welcome to **Ask Oorja AI Studio**. I am your private Sales OS copilot with direct access to our NABL metrology catalog, customer plant assets, calibration due windows, quotation engine, and Gujarat industrial corridors.\n\nHow can I accelerate your sales pipeline today?",
+        "### 1. ANSWER\nWelcome to **Ask Oorja Deep Reasoning Studio**. I am your sales intelligence copilot operating across Pan-India industrial corridors with direct access to NABL 300-lab scope schedules, customer plant assets, calibration due windows, quotation price history, and second-order trigger discovery.\n\n### 2. WHY\nMetrology sales decisions require strict factual grounding, explicit uncertainty estimation, and zero hallucination.\n\n### 8. RECOMMENDED ACTION\nSelect an inquiry below or type a query regarding Pan-India target accounts, asset calibration schedules, or competitive scope overlaps.",
       intent: "general_greeting",
     },
   ]);
@@ -72,7 +74,7 @@ export default function AssistantPage() {
       const errMsg = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: "Error communicating with Oorja Assistant API. Please ensure the backend container is running.",
+        content: "### 1. ANSWER\nError communicating with Oorja Assistant API. Please ensure the backend container is running.\n\n### 6. WHAT WE DON'T KNOW\nBackend service connection status is currently offline.",
       };
       setMessages((prev) => [...prev, errMsg]);
     } finally {
@@ -81,149 +83,154 @@ export default function AssistantPage() {
   };
 
   const promptChips = [
-    "Who should I contact today in Gujarat chemical estates?",
+    "Who should I contact today across Pan-India industrial corridors?",
     "Which customer assets are due for calibration within 30 days?",
-    "Plan a 1-day sales trip itinerary for Dahej PCPIR",
-    "What is our winning pitch against TCR Engineering?",
-    "Is Bourdon pressure gauge 0-100 bar within Oorja's NABL scope?",
+    "Can we calibrate 0-100 bar pressure gauges and what is our CMC?",
+    "What is our verified scope advantage against regional testing labs?",
+    "Recommend optimal pricing for CMM 3D inspection based on price history",
   ];
 
   return (
     <div className="space-y-6">
-      {/* Page Header */}
+      {/* Header */}
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Ask Oorja AI Studio</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold tracking-tight text-white">Ask Oorja AI Studio</h1>
+            <span className="rounded bg-brand-primary/20 border border-brand-primary/40 px-2 py-0.5 text-[10px] font-mono text-brand-cyan">
+              8-PART DEEP REASONING
+            </span>
+          </div>
           <p className="text-sm text-dark-muted">
-            Deterministic AI orchestrator with 12 typed metrology sales tools and real-time CRM bindings.
+            Structured 8-part evidence-backed answers with strict factual separation of verified data vs hypotheses.
           </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <span className="flex items-center gap-1.5 rounded-full border border-brand-cyan/30 bg-brand-cyan/10 px-3 py-1 text-xs font-medium text-brand-cyan">
-            <Zap className="h-3 w-3" />
-            <span>12 Typed Tools Connected</span>
-          </span>
         </div>
       </div>
 
-      {/* Dual Pane AI Studio Layout */}
+      {/* Main Chat Container */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 h-[calc(100vh-220px)]">
-        {/* MAIN CHAT AREA (8 cols) */}
-        <div className="dark-card flex flex-col lg:col-span-8 h-full overflow-hidden">
+        {/* Chat Feed (8 cols) */}
+        <div className="dark-card p-4 lg:col-span-8 flex flex-col justify-between h-full">
+          {/* Scrollable Message History */}
+          <div className="space-y-4 overflow-y-auto pr-2 flex-1">
+            {messages.map((m) => (
+              <div
+                key={m.id}
+                className={`flex gap-3 text-xs leading-relaxed ${
+                  m.role === "user" ? "justify-end" : "justify-start"
+                }`}
+              >
+                {m.role === "assistant" && (
+                  <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-brand-primary/20 text-brand-cyan border border-brand-primary/30">
+                    <Bot className="h-4 w-4" />
+                  </div>
+                )}
+
+                <div
+                  className={`max-w-[88%] rounded-2xl p-4 shadow-sm space-y-2 ${
+                    m.role === "user"
+                      ? "bg-brand-primary text-white font-medium"
+                      : "bg-dark-panel text-white border border-dark-border"
+                  }`}
+                >
+                  <div className="whitespace-pre-wrap font-sans text-xs leading-relaxed">
+                    {m.content}
+                  </div>
+
+                  {m.toolUsed && (
+                    <div className="mt-2 pt-2 border-t border-dark-border flex items-center justify-between text-[10px] text-dark-muted font-mono">
+                      <span>Tool Invoked: <span className="text-brand-cyan">{m.toolUsed}</span></span>
+                      {m.intent && <span>Intent: {m.intent}</span>}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {loading && (
+              <div className="flex gap-3 text-xs items-center text-dark-muted animate-pulse">
+                <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-brand-primary/20 text-brand-cyan">
+                  <BrainCircuit className="h-4 w-4 animate-spin" />
+                </div>
+                <span>Synthesizing 8-part reasoning chain from database & NABL schedules...</span>
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+
           {/* Quick Prompt Chips */}
-          <div className="flex gap-2 overflow-x-auto p-3 border-b border-dark-border bg-dark-panel">
+          <div className="pt-3 pb-2 flex gap-1.5 overflow-x-auto no-scrollbar">
             {promptChips.map((chip, idx) => (
               <button
                 key={idx}
                 onClick={() => handleSendMessage(chip)}
-                className="flex-shrink-0 rounded-lg border border-dark-border bg-dark-bg px-3 py-1 text-[11px] text-dark-muted hover:border-brand-primary hover:text-white transition"
+                disabled={loading}
+                className="flex-shrink-0 rounded-full border border-dark-border bg-dark-bg px-3 py-1 text-[11px] text-dark-muted hover:text-white hover:border-brand-primary transition"
               >
                 {chip}
               </button>
             ))}
           </div>
 
-          {/* Chat Messages Stream */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.map((m) => {
-              const isBot = m.role === "assistant";
-
-              return (
-                <div key={m.id} className={`flex gap-3 ${isBot ? "items-start" : "items-start justify-end"}`}>
-                  {isBot && (
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-tr from-brand-primary to-brand-cyan text-white shadow flex-shrink-0">
-                      <Bot className="h-4 w-4" />
-                    </div>
-                  )}
-
-                  <div
-                    className={`max-w-2xl rounded-2xl p-4 text-xs leading-relaxed ${
-                      isBot
-                        ? "border border-dark-border bg-dark-card text-white shadow-sm"
-                        : "bg-brand-primary text-white font-medium shadow-md"
-                    }`}
-                  >
-                    {isBot && m.intent && (
-                      <div className="mb-2 flex items-center gap-2">
-                        <span className="rounded bg-brand-cyan/15 px-2 py-0.5 text-[10px] font-mono font-semibold text-brand-cyan border border-brand-cyan/30">
-                          Intent: {m.intent}
-                        </span>
-                      </div>
-                    )}
-
-                    <div className="whitespace-pre-line font-sans">{m.content}</div>
-                  </div>
-                </div>
-              );
-            })}
-
-            {loading && (
-              <div className="flex items-center gap-3 text-xs text-dark-muted">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-primary/20 text-brand-cyan">
-                  <Bot className="h-4 w-4 animate-pulse" />
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="h-3 w-3 animate-spin rounded-full border-2 border-brand-primary border-t-transparent"></div>
-                  <span>Executing deterministic metrology sales tool...</span>
-                </div>
-              </div>
-            )}
-            <div ref={chatEndRef} />
-          </div>
-
-          {/* Prompt Input Form */}
-          <div className="p-4 border-t border-dark-border bg-dark-panel">
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleSendMessage();
-              }}
-              className="flex items-center gap-3"
+          {/* Chat Input Bar */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSendMessage();
+            }}
+            className="flex gap-2 pt-2 border-t border-dark-border"
+          >
+            <input
+              type="text"
+              value={inputPrompt}
+              onChange={(e) => setInputPrompt(e.target.value)}
+              placeholder="Ask anything (e.g. Which plant assets are overdue for calibration?)..."
+              disabled={loading}
+              className="flex-1 rounded-xl border border-dark-border bg-dark-bg px-4 py-2.5 text-xs text-white placeholder-dark-muted focus:border-brand-primary focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={loading || !inputPrompt.trim()}
+              className="rounded-xl bg-brand-primary px-4 py-2.5 text-white hover:bg-brand-primaryHover shadow disabled:opacity-50 transition flex items-center justify-center"
             >
-              <input
-                type="text"
-                value={inputPrompt}
-                onChange={(e) => setInputPrompt(e.target.value)}
-                placeholder="Ask Oorja: 'Which plants in Dahej need calibration follow-up?'..."
-                disabled={loading}
-                className="flex-1 rounded-xl border border-dark-border bg-dark-bg px-4 py-2.5 text-xs text-white placeholder-dark-muted focus:border-brand-primary focus:outline-none"
-              />
-              <button
-                type="submit"
-                disabled={loading || !inputPrompt.trim()}
-                className="flex items-center gap-1.5 rounded-xl bg-brand-primary px-4 py-2.5 text-xs font-bold text-white shadow hover:bg-brand-primaryHover transition disabled:opacity-50"
-              >
-                <Send className="h-3.5 w-3.5" />
-                <span>Send</span>
-              </button>
-            </form>
-          </div>
+              <Send className="h-4 w-4" />
+            </button>
+          </form>
         </div>
 
-        {/* RIGHT CONTEXT PANEL: Available Tools & Knowledge (4 cols) */}
-        <div className="dark-card p-4 lg:col-span-4 h-full flex flex-col space-y-4 overflow-y-auto">
+        {/* Right Sidebar: Active Tools & Capabilities (4 cols) */}
+        <div className="dark-card p-4 lg:col-span-4 flex flex-col space-y-4 overflow-y-auto">
           <div>
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-dark-muted mb-2">
-              Connected Deterministic Tools ({tools.length || 12})
-            </h2>
-            <div className="space-y-1.5">
-              {[
-                { name: "get_priority_outreach", desc: "Accounts ready for campaign outreach" },
-                { name: "get_calibration_due", desc: "Customer instruments due in 30/60 days" },
-                { name: "check_nabl_fit", desc: "Parameter scope & calibration feasibility" },
-                { name: "get_territory_clusters", desc: "Industrial corridor density & urgency" },
-                { name: "get_visit_recommendations", desc: "Optimized multi-stop plant visit itineraries" },
-                { name: "get_competitor_intel", desc: "Regional Gujarat battlecards & counter-pitches" },
-                { name: "get_company_facts", desc: "Account 360 overview & buying signals" },
-                { name: "draft_outreach_message", desc: "Contextual email sequence copy generation" },
-              ].map((t, idx) => (
-                <div key={idx} className="rounded-lg border border-dark-border bg-dark-bg p-2.5 text-xs">
-                  <div className="font-mono font-semibold text-brand-cyan">{t.name}</div>
-                  <div className="text-[11px] text-dark-muted mt-0.5">{t.desc}</div>
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <Compass className="h-4 w-4 text-brand-cyan" />
+              <span>Standard 8-Part Reasoning Protocol</span>
+            </h3>
+            <p className="text-xs text-dark-muted mt-1">
+              Every answer is deterministically verified and segmented:
+            </p>
+          </div>
+
+          <div className="space-y-2 text-[11px]">
+            {[
+              { num: "1", title: "ANSWER", desc: "Direct, unambiguous response" },
+              { num: "2", title: "WHY", desc: "Underlying business causality" },
+              { num: "3", title: "EVIDENCE", desc: "Database & certificate references" },
+              { num: "4", title: "WHAT WE KNOW", desc: "Verified local database facts" },
+              { num: "5", title: "WHAT WE INFER", desc: "Second-order hypotheses with probability" },
+              { num: "6", title: "WHAT WE DON'T KNOW", desc: "Gaps & research required" },
+              { num: "7", title: "CONFIDENCE", desc: "Calibrated percentage & rationale" },
+              { num: "8", title: "RECOMMENDED ACTION", desc: "Concrete next sales step" },
+            ].map((s) => (
+              <div key={s.num} className="p-2 rounded-lg bg-dark-panel border border-dark-border flex items-start gap-2">
+                <span className="font-mono font-bold text-brand-cyan text-[10px] bg-brand-primary/20 rounded px-1.5 py-0.5">
+                  {s.num}
+                </span>
+                <div>
+                  <span className="font-semibold text-white">{s.title}</span>
+                  <p className="text-dark-muted text-[10px]">{s.desc}</p>
                 </div>
-              ))}
-            </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>

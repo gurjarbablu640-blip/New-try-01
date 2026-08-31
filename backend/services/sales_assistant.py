@@ -356,11 +356,8 @@ TOOLS = {
 }
 
 
-def ask_oorja(query: str, db: Session) -> dict[str, Any]:
-    """
-    Intelligent Ask Oorja conversational coordinator.
-    Deterministically routes questions to typed tools and provides structured, verifiable answers.
-    """
+def _legacy_keyword_routing(query: str, db: Session) -> dict[str, Any]:
+    """Legacy deterministic keyword router for Ask Oorja."""
     q = (query or "").strip().lower()
 
     # 1. Intent: Priority contacts / Whom to contact today
@@ -539,3 +536,20 @@ def ask_oorja(query: str, db: Session) -> dict[str, Any]:
         "answer": answer,
         "tool_used": "sales_summary",
     }
+
+
+def ask_oorja(query: str, db: Session, session_id: Optional[str] = None) -> dict[str, Any]:
+    """
+    Intelligent Ask Oorja AI Orchestrator coordinator.
+    Dispatches to multi-step reasoning orchestrator when configured, or falls back to
+    deterministic keyword routing.
+    """
+    try:
+        from services.orchestrator import AskOorjaOrchestrator
+        orchestrator = AskOorjaOrchestrator()
+        if orchestrator.is_available():
+            return orchestrator.run(query, db, session_id=session_id)
+    except Exception as e:
+        logger.warning(f"Orchestrator execution error: {e}. Falling back to legacy routing.")
+
+    return _legacy_keyword_routing(query, db)

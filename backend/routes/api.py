@@ -74,6 +74,70 @@ def get_buying_window(db: Session = Depends(get_db)):
     return result
 
 
+@router.get("/companies")
+def get_companies_route(
+    q: Optional[str] = None,
+    city: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """List companies for CRM and Decision Intelligence workspaces."""
+    query = db.query(Company)
+    if q:
+        query = query.filter(Company.name.ilike(f"%{q}%"))
+    if city:
+        query = query.filter(Company.city.ilike(f"%{city}%"))
+
+    total = query.count()
+    companies = query.order_by(Company.created_at.desc(), Company.id.desc()).offset(offset).limit(limit).all()
+    return {
+        "success": True,
+        "total": total,
+        "results": [
+            {
+                "id": c.id,
+                "name": c.name,
+                "city": c.city,
+                "state": c.state,
+                "industry": c.industry,
+                "icp_score": c.icp_score,
+                "buying_window": c.buying_window,
+                "qualification_status": getattr(c, "qualification_status", "QUALIFIED"),
+                "lead_status": getattr(c, "lead_status", "New"),
+                "phone": getattr(c, "phone", None),
+                "email": getattr(c, "email", None),
+                "website": getattr(c, "website", None),
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+            }
+            for c in companies
+        ],
+    }
+
+
+@router.get("/companies/{company_id}")
+def get_company_detail_route(company_id: int, db: Session = Depends(get_db)):
+    """Get single company details."""
+    c = db.query(Company).filter(Company.id == company_id).first()
+    if not c:
+        raise HTTPException(404, "Company not found")
+    return {
+        "id": c.id,
+        "name": c.name,
+        "city": c.city,
+        "state": c.state,
+        "industry": c.industry,
+        "icp_score": c.icp_score,
+        "buying_window": c.buying_window,
+        "qualification_status": getattr(c, "qualification_status", "QUALIFIED"),
+        "lead_status": getattr(c, "lead_status", "New"),
+        "phone": getattr(c, "phone", None),
+        "email": getattr(c, "email", None),
+        "website": getattr(c, "website", None),
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+    }
+
+
 @router.get("/tasks/today")
 def get_today_tasks(db: Session = Depends(get_db)):
     """Get today's action queue sorted by urgency + ICP."""

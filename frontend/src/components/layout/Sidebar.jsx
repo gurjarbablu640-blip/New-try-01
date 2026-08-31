@@ -25,6 +25,7 @@ export default function Sidebar({ collapsed, setCollapsed }) {
 
   const navItems = [
     { to: "/dashboard", label: "Command Center", icon: LayoutDashboard },
+    { to: "/intelligence", label: "Decision Intel", icon: Zap, badge: "Core", highlight: true },
     { to: "/leads", label: "Lead Factory", icon: Users, badge: "AI" },
     { to: "/companies", label: "Companies 360", icon: Building2 },
     { to: "/pipeline", label: "Pipeline CRM", icon: GitPullRequest },
@@ -35,7 +36,7 @@ export default function Sidebar({ collapsed, setCollapsed }) {
     { to: "/competitors", label: "Competitors", icon: ShieldAlert },
     { to: "/territory", label: "Territory / Trips", icon: MapPin },
     { to: "/analytics", label: "Sales Analytics", icon: BarChart3 },
-    { to: "/assistant", label: "Ask Oorja AI", icon: Bot, highlight: true },
+    { to: "/assistant", label: "Ask Oorja AI", icon: Bot },
     { to: "/settings", label: "Settings", icon: Settings },
   ];
 

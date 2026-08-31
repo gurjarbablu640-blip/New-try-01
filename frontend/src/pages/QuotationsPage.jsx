@@ -168,18 +168,93 @@ export default function QuotationsPage() {
     }
   };
 
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importCustName, setImportCustName] = useState("");
+  const [importFile, setImportFile] = useState(null);
+  const [importPreview, setImportPreview] = useState(null);
+  const [importLoading, setImportLoading] = useState(false);
+
+  const handleParseImport = async (e) => {
+    e.preventDefault();
+    setImportLoading(true);
+    try {
+      if (importFile) {
+        const formData = new FormData();
+        formData.append("file", importFile);
+        const res = await uploadHistoricalQuoteDocument(formData);
+        setImportPreview(res.data?.preview);
+      } else if (importText.trim()) {
+        const res = await importHistoricalQuotations({
+          customer_name: importCustName || "Historical Customer",
+          raw_quote_text: importText,
+        });
+        setNotification(`Imported quotation ${res.data?.quotation_number} with ${res.data?.line_items_indexed} line items.`);
+        setShowImportModal(false);
+        setImportText("");
+        setImportPreview(null);
+        loadQuotations();
+      }
+    } catch (err) {
+      setNotification("Failed to parse historical quotation.");
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const handleConfirmImport = async () => {
+    if (!importPreview) return;
+    setImportLoading(true);
+    try {
+      const res = await importHistoricalQuotations({
+        quotation_number: importPreview.quotation_number,
+        quotation_date: importPreview.quotation_date,
+        customer_name: importPreview.customer_name,
+        location: importPreview.location,
+        subtotal: importPreview.subtotal,
+        discount: importPreview.discount,
+        tax: importPreview.tax,
+        total: importPreview.total,
+        outcome: importPreview.outcome,
+        source_file: importPreview.source_file,
+        items: importPreview.items,
+      });
+      setNotification(`Successfully ingested ${res.data?.quotation_number} with ${res.data?.line_items_indexed} line items into price dataset!`);
+      setShowImportModal(false);
+      setImportPreview(null);
+      setImportFile(null);
+      loadQuotations();
+    } catch (err) {
+      setNotification("Failed to save historical quotation.");
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Header */}
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Quotation Intelligence & Revisions</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold tracking-tight text-white">Quotation Intelligence & History</h1>
+            <span className="rounded bg-brand-primary/20 border border-brand-primary/40 px-2 py-0.5 text-[10px] font-mono text-brand-cyan">
+              REAL DATASET
+            </span>
+          </div>
           <p className="text-sm text-dark-muted">
-            Asset-based line item pricing, automatic NABL scope tagging, revision versioning, and side-by-side diffs.
+            Historical quotation dataset ingestion, statistical pricing benchmarks, revision versioning, and NABL scope tagging.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="flex items-center gap-1.5 rounded-lg border border-brand-cyan/40 bg-brand-cyan/10 px-3 py-1.5 text-xs font-semibold text-brand-cyan hover:bg-brand-cyan/20 transition"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            <span>Import Historical Quotations</span>
+          </button>
           <button
             onClick={loadQuotations}
             className="flex items-center gap-1.5 rounded-lg border border-dark-border bg-dark-panel px-3 py-1.5 text-xs text-white hover:bg-dark-hover"
@@ -604,6 +679,133 @@ export default function QuotationsPage() {
               <span className="font-bold">Net Difference: </span>
               ₹{Number(compareData.price_difference || 0).toLocaleString("en-IN")} ({compareData.percent_change || 0}% change)
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* IMPORT HISTORICAL QUOTATIONS MODAL */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-dark-border bg-dark-panel p-6 shadow-2xl animate-in zoom-in-95 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-dark-border pb-3">
+              <div>
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Sparkles className="h-5 w-5 text-brand-cyan" />
+                  <span>Import Historical Quotations</span>
+                </h2>
+                <p className="text-xs text-dark-muted">
+                  Upload existing PDF/CSV/Excel quotation or paste raw text to seed genuine pricing intelligence.
+                </p>
+              </div>
+              <button onClick={() => { setShowImportModal(false); setImportPreview(null); }} className="text-dark-muted hover:text-white">✕</button>
+            </div>
+
+            {!importPreview ? (
+              <form onSubmit={handleParseImport} className="space-y-4 text-xs">
+                <div>
+                  <label className="block text-dark-muted mb-1 font-medium">Customer / Plant Name</label>
+                  <input
+                    type="text"
+                    value={importCustName}
+                    onChange={(e) => setImportCustName(e.target.value)}
+                    placeholder="e.g. Bharat Forge Ltd or Larsen & Toubro"
+                    className="w-full rounded-lg border border-dark-border bg-dark-bg px-3 py-2 text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-dark-muted mb-1 font-medium">Upload Quotation Document (PDF / CSV / TXT)</label>
+                  <input
+                    type="file"
+                    onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                    className="w-full rounded-lg border border-dark-border bg-dark-bg px-3 py-2 text-dark-muted file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:bg-brand-primary file:text-white hover:file:bg-brand-primaryHover"
+                  />
+                </div>
+
+                <div className="relative flex py-2 items-center">
+                  <div className="flex-grow border-t border-dark-border"></div>
+                  <span className="flex-shrink mx-3 text-dark-muted text-[10px] uppercase">Or Paste Quotation Text</span>
+                  <div className="flex-grow border-t border-dark-border"></div>
+                </div>
+
+                <div>
+                  <label className="block text-dark-muted mb-1 font-medium">Raw Quotation Text / Schedule</label>
+                  <textarea
+                    value={importText}
+                    onChange={(e) => setImportText(e.target.value)}
+                    rows={5}
+                    placeholder={`Quote No: Q-2025-089\nDate: 15/04/2025\nCustomer: Mahindra Heavy Engines\n1. Vernier Caliper 0-300mm Qty: 4 Rate: ₹850\n2. Digital Micrometer 0-25mm Qty: 6 Rate: ₹650\n3. Fluke 87V Multimeter Qty: 2 Rate: ₹1800`}
+                    className="w-full rounded-lg border border-dark-border bg-dark-bg px-3 py-2 text-white font-mono text-[11px]"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-3 border-t border-dark-border">
+                  <button
+                    type="button"
+                    onClick={() => setShowImportModal(false)}
+                    className="rounded-lg border border-dark-border bg-dark-bg px-3 py-2 text-dark-muted hover:text-white"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={importLoading || (!importFile && !importText.trim())}
+                    className="rounded-lg bg-brand-primary px-4 py-2 font-semibold text-white hover:bg-brand-primaryHover shadow disabled:opacity-50"
+                  >
+                    {importLoading ? "Extracting..." : "Parse & Review"}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-4 text-xs">
+                <div className="rounded-xl border border-brand-emerald/30 bg-brand-emerald/10 p-3 text-brand-emerald">
+                  <div className="font-bold text-sm">Extracted Quotation: {importPreview.quotation_number}</div>
+                  <div className="text-xs text-white/90 mt-1">Customer: <span className="font-semibold">{importPreview.customer_name}</span> | Date: {importPreview.quotation_date}</div>
+                </div>
+
+                <div className="border border-dark-border rounded-xl overflow-hidden">
+                  <div className="bg-dark-card px-3 py-2 font-semibold text-white border-b border-dark-border">
+                    Extracted Line Items ({importPreview.items?.length || 0})
+                  </div>
+                  <div className="max-h-48 overflow-y-auto divide-y divide-dark-border">
+                    {importPreview.items?.map((it, idx) => (
+                      <div key={idx} className="p-3 flex items-center justify-between">
+                        <div>
+                          <div className="font-medium text-white">{it.instrument_name}</div>
+                          <div className="text-[11px] text-dark-muted">{it.parameter} • Qty: {it.quantity}</div>
+                        </div>
+                        <div className="text-right font-mono font-bold text-brand-emerald">
+                          ₹{Number(it.unit_price).toLocaleString("en-IN")} / unit
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-center bg-dark-card p-3 rounded-xl border border-dark-border">
+                  <span className="text-dark-muted">Total Quotation Value:</span>
+                  <span className="text-lg font-bold font-mono text-white">₹{Number(importPreview.total).toLocaleString("en-IN")}</span>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-3 border-t border-dark-border">
+                  <button
+                    type="button"
+                    onClick={() => setImportPreview(null)}
+                    className="rounded-lg border border-dark-border bg-dark-bg px-3 py-2 text-dark-muted hover:text-white"
+                  >
+                    Back to Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmImport}
+                    disabled={importLoading}
+                    className="rounded-lg bg-brand-emerald px-4 py-2 font-semibold text-dark-bg hover:opacity-90 shadow"
+                  >
+                    {importLoading ? "Ingesting..." : "Confirm & Ingest to Price Dataset"}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

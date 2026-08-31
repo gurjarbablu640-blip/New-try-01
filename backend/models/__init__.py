@@ -14,6 +14,12 @@ from models.competitor_intel import CompetitorProfile, CompetitorObservation
 from models.knowledge import KnowledgeDocument, KnowledgeChunk
 from models.facility import Facility
 from models.customer_asset import CustomerAsset
+from models.conversation import ConversationSession, ConversationTurn
+from models.company_brain import CompanyIntelligenceFact, CompanyTimelineEvent, StakeholderIntelligence, RegulatoryIntelligence
+from models.call_record import CallRecord
+from models.reasoning_engine import CompanyBeliefState, SignalEvidenceNode
+from models.lab_scope import NABLLabScope, NABLScopeParameter
+from models.decision_maker_candidate import DecisionMakerCandidate
 
 __all__ = [
     "Company", "Person", "CompanyWebsiteIntel", "CompanyIntentSignal", "OutreachDraft",
@@ -22,4 +28,9 @@ __all__ = [
     "InstrumentAlias", "PriceHistory", "AIFeedback", "LearningRule", "WebResearchItem",
     "Campaign", "CampaignStep", "CampaignRecipient", "CampaignEvent", "CompetitorProfile",
     "CompetitorObservation", "KnowledgeDocument", "KnowledgeChunk", "Facility", "CustomerAsset",
+    "ConversationSession", "ConversationTurn",
+    "CompanyIntelligenceFact", "CompanyTimelineEvent", "StakeholderIntelligence", "RegulatoryIntelligence",
+    "CallRecord", "CompanyBeliefState", "SignalEvidenceNode",
+    "NABLLabScope", "NABLScopeParameter",
+    "DecisionMakerCandidate",
 ]

@@ -14,12 +14,25 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
 
-    # Claude / Anthropic
-    ANTHROPIC_API_KEY: str = ""
-
     # Google / Gemini
     GOOGLE_API_KEY: str = ""
     GOOGLE_MAPS_API_KEY: str = ""
+    GOOGLE_SEARCH_CX: str = ""  # Google Custom Search Engine ID
+
+    # Serper.dev Search API
+    SERPER_API_KEY: str = ""
+
+    # OpenAI / ChatGPT
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4o"
+
+    # Orchestrator LLM Settings
+    ORCHESTRATOR_PRIMARY_PROVIDER: str = "gemini"
+    ORCHESTRATOR_FALLBACK_PROVIDER: str = "openai"
+    ORCHESTRATOR_GEMINI_MODEL: str = "gemini-2.0-flash"
+    ORCHESTRATOR_OPENAI_MODEL: str = "gpt-4o"
+    ORCHESTRATOR_MAX_ITERATIONS: int = 6
+    ORCHESTRATOR_TOKEN_BUDGET: int = 20000
 
     # Apollo API
     APOLLO_API_KEY: str = ""
