@@ -1,6 +1,5 @@
 """Campaign engine models for controlled outbound sequences."""
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, JSON, func
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -15,7 +14,7 @@ class Campaign(Base):
     status = Column(String(50), default="Draft", nullable=False, index=True)
     approved = Column(Boolean, default=False, nullable=False)
     approved_at = Column(DateTime)
-    segment_filters = Column(JSONB)
+    segment_filters = Column(JSON)
     daily_limit = Column(Integer, default=50)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -53,7 +52,7 @@ class CampaignRecipient(Base):
     next_send_at = Column(DateTime)
     replied_at = Column(DateTime)
     bounced_at = Column(DateTime)
-    metadata_json = Column(JSONB)
+    metadata_json = Column(JSON)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -69,5 +68,5 @@ class CampaignEvent(Base):
     event_type = Column(String(50), nullable=False, index=True)
     channel = Column(String(50))
     provider_message_id = Column(String(500))
-    payload = Column(JSONB)
+    payload = Column(JSON)
     occurred_at = Column(DateTime, server_default=func.now(), index=True)

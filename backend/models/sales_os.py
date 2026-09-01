@@ -5,8 +5,7 @@ legacy company/contact/pipeline models. They provide the foundation for
 opportunity management, quotation intelligence, instrument normalization,
 and auditable AI learning.
 """
-from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, JSON, func
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -89,7 +88,8 @@ class Quotation(Base):
     total = Column(Numeric(14, 2), default=0)
     status = Column(String(50), default="Draft", index=True)
     source_file = Column(String(1000))
-    ai_recommendation = Column(JSONB)
+    data_provenance = Column(String(50), default="PILOT_TEST_DATA", nullable=False, index=True)  # PILOT_TEST_DATA, USER_UPLOADED_REAL
+    ai_recommendation = Column(JSON)
     human_approved = Column(Integer, default=0)
     approved_at = Column(DateTime)
     notes = Column(Text)
@@ -141,7 +141,7 @@ class Instrument(Base):
     unit = Column(String(100))
     calibration_requirement = Column(Text)
     nabl_applicable = Column(Integer)
-    metadata_json = Column(JSONB)
+    metadata_json = Column(JSON)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -169,7 +169,7 @@ class PriceHistory(Base):
     unit_price = Column(Numeric(14, 2), nullable=False)
     quotation_date = Column(Date)
     outcome = Column(String(50))
-    context = Column(JSONB)
+    context = Column(JSON)
     created_at = Column(DateTime, server_default=func.now())
 
 
@@ -180,8 +180,8 @@ class AIFeedback(Base):
     entity_type = Column(String(100), nullable=False, index=True)
     entity_id = Column(Integer, nullable=True, index=True)
     action_type = Column(String(100), nullable=False)
-    ai_value = Column(JSONB)
-    human_value = Column(JSONB)
+    ai_value = Column(JSON)
+    human_value = Column(JSON)
     reason = Column(Text)
     outcome = Column(String(100))
     confidence = Column(Numeric(5, 2))
@@ -194,7 +194,7 @@ class LearningRule(Base):
     id = Column(Integer, primary_key=True, index=True)
     rule_type = Column(String(100), nullable=False, index=True)
     rule_key = Column(String(300), nullable=False, index=True)
-    pattern = Column(JSONB, nullable=False)
+    pattern = Column(JSON, nullable=False)
     evidence_count = Column(Integer, default=0)
     confidence = Column(Numeric(5, 2), default=0)
     status = Column(String(50), default="Candidate", index=True)

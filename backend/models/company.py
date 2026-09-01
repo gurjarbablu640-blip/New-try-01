@@ -8,7 +8,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Text,
-    ARRAY,
+    JSON,
     Numeric,
     func,
 )
@@ -188,7 +188,7 @@ class Company(Base):
     user_rating = Column(Integer)
 
     negative_icp_flags = Column(
-        ARRAY(Text),
+        JSON,
         default=[]
     )
 

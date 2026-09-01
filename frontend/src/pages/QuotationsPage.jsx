@@ -183,20 +183,29 @@ export default function QuotationsPage() {
         const formData = new FormData();
         formData.append("file", importFile);
         const res = await uploadHistoricalQuoteDocument(formData);
-        setImportPreview(res.data?.preview);
+        const preview = res.data?.preview;
+        if (importCustName && preview) {
+          preview.customer_name = importCustName;
+        }
+        setImportPreview(preview);
+        setNotification(`Extracted ${res.data?.total_line_items_detected || 0} line items. Review and confirm ingestion.`);
       } else if (importText.trim()) {
-        const res = await importHistoricalQuotations({
-          customer_name: importCustName || "Historical Customer",
-          raw_quote_text: importText,
-        });
-        setNotification(`Imported quotation ${res.data?.quotation_number} with ${res.data?.line_items_indexed} line items.`);
-        setShowImportModal(false);
-        setImportText("");
-        setImportPreview(null);
-        loadQuotations();
+        // Upload pasted text as TXT blob
+        const textBlob = new Blob([importText], { type: "text/plain" });
+        const formData = new FormData();
+        formData.append("file", textBlob, "pasted_quotation.txt");
+        const res = await uploadHistoricalQuoteDocument(formData);
+        const preview = res.data?.preview;
+        if (importCustName && preview) {
+          preview.customer_name = importCustName;
+        }
+        setImportPreview(preview);
+        setNotification(`Extracted ${res.data?.total_line_items_detected || 0} line items. Review and confirm ingestion.`);
       }
     } catch (err) {
-      setNotification("Failed to parse historical quotation.");
+      console.error("Quotation parse error:", err);
+      const msg = err?.response?.data?.detail || err?.message || "Failed to parse historical quotation";
+      setNotification(`Parse Error: ${msg}`);
     } finally {
       setImportLoading(false);
     }
@@ -217,15 +226,21 @@ export default function QuotationsPage() {
         total: importPreview.total,
         outcome: importPreview.outcome,
         source_file: importPreview.source_file,
+        data_provenance: "USER_PROVIDED_REAL_DATA",
         items: importPreview.items,
       });
-      setNotification(`Successfully ingested ${res.data?.quotation_number} with ${res.data?.line_items_indexed} line items into price dataset!`);
+      const qNum = res.data?.quotation_number || importPreview.quotation_number;
+      const count = res.data?.line_items_indexed || importPreview.items?.length || 0;
+      setNotification(`INGESTED SUCCESSFULLY: Quotation ${qNum} with ${count} line items persisted to PostgreSQL with USER_PROVIDED_REAL_DATA provenance!`);
       setShowImportModal(false);
       setImportPreview(null);
       setImportFile(null);
+      setImportText("");
       loadQuotations();
     } catch (err) {
-      setNotification("Failed to save historical quotation.");
+      console.error("Quotation import error:", err);
+      const msg = err?.response?.data?.detail || err?.message || "Failed to save historical quotation";
+      setNotification(`Import Error: ${msg}`);
     } finally {
       setImportLoading(false);
     }

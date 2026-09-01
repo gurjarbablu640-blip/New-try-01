@@ -159,8 +159,15 @@ export default function CompetitorsPage() {
         state: uploadState,
       });
       setUploadPreview(res.data?.preview);
+      if (res.data?.preview?.warning) {
+        setNotification(`Scope extracted with advisory: ${res.data.preview.warning}`);
+      } else {
+        setNotification(`Extracted ${res.data?.total_parameters_detected || 0} scope parameters. Review and confirm ingestion.`);
+      }
     } catch (err) {
-      setNotification("Failed to parse scope document.");
+      console.error("NABL parse error:", err);
+      const msg = err?.response?.data?.detail || err?.message || "Failed to parse scope document";
+      setNotification(`Parse Error: ${msg}`);
     } finally {
       setUploadLoading(false);
     }
@@ -179,15 +186,20 @@ export default function CompetitorsPage() {
         city: uploadPreview.city,
         source_file: uploadPreview.source_file,
         source_reference: uploadPreview.source_reference,
+        data_provenance: "USER_PROVIDED_REAL_DATA",
         parameters: uploadPreview.parameters,
       });
-      setNotification(`Imported NABL Lab Scope: ${res.data?.lab_name} with ${res.data?.parameters_indexed} parameters!`);
+      const labName = res.data?.lab_name || uploadPreview.lab_name;
+      const paramCount = res.data?.parameters_indexed || uploadPreview.parameters?.length || 0;
+      setNotification(`INGESTED SUCCESSFULLY: ${labName} with ${paramCount} scope parameters persisted with USER_PROVIDED_REAL_DATA provenance!`);
       setShowUploadModal(false);
       setUploadPreview(null);
       setUploadFile(null);
       loadInitialData();
     } catch (err) {
-      setNotification("Failed to import lab scope record.");
+      console.error("NABL import error:", err);
+      const msg = err?.response?.data?.detail || err?.message || "Failed to import lab scope record";
+      setNotification(`Import Error: ${msg}`);
     } finally {
       setUploadLoading(false);
     }

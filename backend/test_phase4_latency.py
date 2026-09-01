@@ -82,12 +82,10 @@ def run_benchmarks():
     # 1. Check live environment keys
     has_google = bool(settings.GOOGLE_API_KEY or os.getenv("GOOGLE_API_KEY"))
     has_openai = bool(settings.OPENAI_API_KEY or os.getenv("OPENAI_API_KEY"))
-    has_anthropic = bool(settings.ANTHROPIC_API_KEY or os.getenv("ANTHROPIC_API_KEY"))
 
     print("\nAPI KEY CONFIGURATION STATUS:")
     print(f"  • GOOGLE_API_KEY set:    {'YES' if has_google else 'NO'}")
     print(f"  • OPENAI_API_KEY set:    {'YES' if has_openai else 'NO'}")
-    print(f"  • ANTHROPIC_API_KEY set: {'YES' if has_anthropic else 'NO'}")
 
     if not (has_google or has_openai):
         print("\nNOTE: No live LLM keys are configured in environment.")

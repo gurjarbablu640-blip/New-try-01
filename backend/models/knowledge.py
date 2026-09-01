@@ -1,6 +1,5 @@
 """Source-traceable Oorja knowledge base models."""
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text, JSON, func
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -18,7 +17,7 @@ class KnowledgeDocument(Base):
     version = Column(String(100))
     content_hash = Column(String(128), unique=True, index=True)
     status = Column(String(50), default="active", index=True)
-    metadata_json = Column(JSONB)
+    metadata_json = Column(JSON)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -39,7 +38,7 @@ class KnowledgeChunk(Base):
     source_date = Column(Date)
     confidence = Column(Integer, default=100)
     embedding_model = Column(String(200))
-    metadata_json = Column(JSONB)
+    metadata_json = Column(JSON)
     created_at = Column(DateTime, server_default=func.now())
 
     document = relationship("KnowledgeDocument", back_populates="chunks")

@@ -2,7 +2,6 @@
 
 Provides secure credential persistence, masked status reporting, connection diagnostic tests,
 and runtime overrides for OpenAI, Gemini, Apollo, SMTP, IMAP, and Voice services.
-Explicitly removes Anthropic references.
 """
 from __future__ import annotations
 
@@ -138,14 +137,16 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
 # --- Diagnostic Connection Testers ---
 
 def test_ai_provider_connection(provider: str) -> Dict[str, Any]:
-    """Tests connection to OpenAI or Gemini without revealing secrets."""
+    """Tests connection to OpenAI or Gemini with live authentication."""
     provider = provider.lower().strip()
     if provider == "openai":
-        api_key = get_setting_value("OPENAI_API_KEY", "")
-        if not api_key:
-            return {"provider": "openai", "status": "NOT_CONFIGURED", "message": "OPENAI_API_KEY is not set."}
-        if api_key.startswith("mock_") or "test" in api_key:
-            return {"provider": "openai", "status": "CONNECTED", "message": "Mock/Test OpenAI API Key verified successfully."}
+        api_key = str(get_setting_value("OPENAI_API_KEY", "")).strip()
+        if not api_key or api_key.startswith("mock_") or api_key.startswith("YOUR_") or "test-sample" in api_key:
+            return {
+                "provider": "openai",
+                "status": "NOT_CONFIGURED",
+                "message": "OPENAI_API_KEY is not configured with a live key. System is using Internal Deterministic Fallback.",
+            }
         try:
             from openai import OpenAI
             client = OpenAI(api_key=api_key)
@@ -155,37 +156,61 @@ def test_ai_provider_connection(provider: str) -> Dict[str, Any]:
             return {"provider": "openai", "status": "AUTHENTICATION_FAILED", "message": str(err)}
 
     elif provider in ("gemini", "google"):
-        api_key = get_setting_value("GOOGLE_API_KEY", "")
-        if not api_key:
-            return {"provider": "gemini", "status": "NOT_CONFIGURED", "message": "GOOGLE_API_KEY is not set."}
-        if api_key.startswith("mock_") or "test" in api_key:
-            return {"provider": "gemini", "status": "CONNECTED", "message": "Mock/Test Google Gemini API Key verified successfully."}
+        api_key = str(get_setting_value("GOOGLE_API_KEY", "")).strip()
+        if not api_key or api_key.startswith("mock_") or api_key.startswith("YOUR_") or "test" in api_key:
+            return {
+                "provider": "gemini",
+                "status": "NOT_CONFIGURED",
+                "message": "GOOGLE_API_KEY is not configured with a live key. System is using Internal Deterministic Fallback.",
+            }
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            models = genai.list_models()
-            _ = next(iter(models), None)
-            return {"provider": "gemini", "status": "CONNECTED", "message": "Google Gemini API connection verified successfully."}
+            import requests
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
+            payload = {"contents": [{"parts": [{"text": "Reply with 'ok'"}]}]}
+            res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=25)
+            if res.status_code == 200:
+                return {"provider": "gemini", "status": "CONNECTED", "message": "Google Gemini API connection verified successfully (gemini-3.6-flash)."}
+            return {"provider": "gemini", "status": "AUTHENTICATION_FAILED", "message": f"Gemini returned HTTP {res.status_code}: {res.text[:150]}"}
         except Exception as err:
             return {"provider": "gemini", "status": "AUTHENTICATION_FAILED", "message": str(err)}
     else:
-        return {"provider": provider, "status": "UNSUPPORTED", "message": f"Provider '{provider}' is not supported. Use OpenAI or Google Gemini."}
+        return {"provider": provider, "status": "UNSUPPORTED", "message": f"Provider '{provider}' is not supported. Supported AI providers: Google Gemini, OpenAI, Deterministic Fallback."}
 
 
 def test_apollo_connection() -> Dict[str, Any]:
-    """Tests Apollo API key connection."""
-    api_key = get_setting_value("APOLLO_API_KEY", "")
-    if not api_key:
-        return {"status": "NOT_CONFIGURED", "message": "APOLLO_API_KEY is not set."}
-    if api_key.startswith("mock_") or "test" in api_key:
-        return {"status": "CONNECTED", "message": "Mock Apollo API Key verified. Pilot safety limit (≤ 6 contacts) enforced."}
+    """Tests Apollo API key connection with live authentication."""
+    api_key = str(get_setting_value("APOLLO_API_KEY", "")).strip()
+    if not api_key or api_key.startswith("mock_") or api_key.startswith("YOUR_") or "test" in api_key:
+        return {
+            "status": "NOT_CONFIGURED",
+            "message": "APOLLO_API_KEY is not configured with a live key. Apollo contact enrichment is safely disabled.",
+        }
     try:
         import requests
         headers = {"Content-Type": "application/json", "Cache-Control": "no-cache", "X-Api-Key": api_key}
-        res = requests.post("https://api.apollo.io/v1/auth/health", headers=headers, json={}, timeout=10)
+        res = requests.get("https://api.apollo.io/api/v1/auth/health", headers=headers, timeout=10)
         if res.status_code == 200:
-            return {"status": "CONNECTED", "message": "Apollo API connection verified. Pilot safety limit (≤ 6 contacts) enforced."}
-        return {"status": "AUTHENTICATION_FAILED", "message": f"Apollo returned HTTP {res.status_code}."}
+            return {"status": "CONNECTED", "message": "Apollo API connection verified. Pilot safety limit (<= 6 contacts) enforced."}
+        return {"status": "AUTHENTICATION_FAILED", "message": f"Apollo returned HTTP {res.status_code}: {res.text[:150]}"}
+    except Exception as err:
+        return {"status": "SERVER_ERROR", "message": str(err)}
+
+
+def test_serper_connection() -> Dict[str, Any]:
+    """Tests Serper search API connection with live authentication."""
+    api_key = str(get_setting_value("SERPER_API_KEY", "")).strip()
+    if not api_key or api_key.startswith("mock_") or api_key.startswith("YOUR_"):
+        return {
+            "status": "NOT_CONFIGURED",
+            "message": "SERPER_API_KEY is not configured.",
+        }
+    try:
+        import requests
+        headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
+        res = requests.post("https://google.serper.dev/search", headers=headers, json={"q": "test", "num": 1}, timeout=10)
+        if res.status_code == 200:
+            return {"status": "CONNECTED", "message": "Serper search API connection verified successfully."}
+        return {"status": "AUTHENTICATION_FAILED", "message": f"Serper returned HTTP {res.status_code}."}
     except Exception as err:
         return {"status": "SERVER_ERROR", "message": str(err)}
 

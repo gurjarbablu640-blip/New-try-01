@@ -1,6 +1,5 @@
 """Person / Contact model."""
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, JSON, func
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -31,7 +30,7 @@ class Person(Base):
     # APOLLO_ENRICHED, EMAIL_VERIFIED
     discovery_source = Column(String(100))
     # e.g. "web_research", "apollo", "company_website", "manual"
-    evidence_json = Column(JSONB)
+    evidence_json = Column(JSON)
     # Structured evidence trail: [{source, url, snippet, retrieved_at, confidence}]
 
     created_at = Column(DateTime, server_default=func.now())

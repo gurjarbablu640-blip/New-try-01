@@ -72,21 +72,43 @@ class LLMProvider(ABC):
         pass
 
 
+from config import settings
+from services.settings_manager import get_setting_value
+
+logger = logging.getLogger(__name__)
+
+
+import requests
+
+def _normalize_gemini_model(model_name: Optional[str]) -> str:
+    """Normalize user-friendly or API model names to valid Gemini API identifiers."""
+    if not model_name:
+        return "gemini-3.6-flash"
+    m = model_name.strip().lower()
+    if "3.6" in m:
+        return "gemini-3.6-flash"
+    if "3.7" in m:
+        return "gemini-3.7-flash"
+    if "flash" in m:
+        return "gemini-3.6-flash"
+    if "gemini" in m:
+        return model_name.strip()
+    return "gemini-3.6-flash"
+
+
 class GeminiProvider(LLMProvider):
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
-        self.api_key = api_key or settings.GOOGLE_API_KEY
-        self.model_name = model_name or settings.ORCHESTRATOR_GEMINI_MODEL or "gemini-2.0-flash"
-        self._configured = False
-        if self.api_key:
-            try:
-                import google.generativeai as genai
-                genai.configure(api_key=self.api_key)
-                self._configured = True
-            except Exception as e:
-                logger.warning(f"Could not configure Google GenAI: {e}")
+        self.api_key = api_key or str(get_setting_value("GOOGLE_API_KEY", "")).strip()
+        raw_model = model_name or str(get_setting_value("ORCHESTRATOR_GEMINI_MODEL", "")).strip() or "gemini-3.6-flash"
+        self.model_name = _normalize_gemini_model(raw_model)
 
     def is_available(self) -> bool:
-        return bool(self.api_key and self._configured)
+        return bool(
+            self.api_key
+            and not self.api_key.startswith("mock_")
+            and not self.api_key.startswith("YOUR_")
+            and len(self.api_key) > 10
+        )
 
     def complete(
         self,
@@ -99,68 +121,85 @@ class GeminiProvider(LLMProvider):
         if not self.is_available():
             raise RuntimeError("GeminiProvider is not available (GOOGLE_API_KEY missing or unconfigured).")
 
-        import google.generativeai as genai
-
-        generation_config = {
-            "temperature": temperature,
-            "max_output_tokens": max_tokens,
-        }
-        if response_format == "json":
-            generation_config["response_mime_type"] = "application/json"
-
-        # Build model with system instruction
-        model = genai.GenerativeModel(
-            model_name=self.model_name,
-            system_instruction=system_prompt if system_prompt else None,
-            generation_config=generation_config,
-        )
-
-        # Build contents from message list
+        # Format contents for Gemini REST API
         contents = []
         for msg in messages:
             role = "user" if msg["role"] == "user" else "model"
-            contents.append({"role": role, "parts": [msg["content"]]})
+            contents.append({"role": role, "parts": [{"text": msg["content"]}]})
 
         if not contents:
-            contents = [{"role": "user", "parts": ["Hello"]}]
+            contents = [{"role": "user", "parts": [{"text": "Hello"}]}]
 
-        response = model.generate_content(contents)
-        text = response.text if response and response.text else ""
-
-        # Extract usage metadata if available
-        input_tokens = 0
-        output_tokens = 0
-        if hasattr(response, "usage_metadata") and response.usage_metadata:
-            input_tokens = getattr(response.usage_metadata, "prompt_token_count", 0) or 0
-            output_tokens = getattr(response.usage_metadata, "candidates_token_count", 0) or 0
-
-        return LLMResponse(
-            text=text,
-            usage={
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "total_tokens": input_tokens + output_tokens,
+        payload = {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": max_tokens,
             },
-            provider="gemini",
-            model=self.model_name,
-            raw_response=response,
-        )
+        }
+        if system_prompt:
+            payload["systemInstruction"] = {
+                "parts": [{"text": system_prompt}]
+            }
+        if response_format == "json":
+            payload["generationConfig"]["responseMimeType"] = "application/json"
+
+        # Try models in order: configured model -> gemini-3.6-flash -> gemini-3.7-flash -> gemini-flash-latest
+        models_to_try = [self.model_name]
+        for fallback_m in ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-flash-latest"]:
+            if fallback_m not in models_to_try:
+                models_to_try.append(fallback_m)
+
+        last_err = None
+        for m in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={self.api_key}"
+            try:
+                resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    candidates = data.get("candidates", [])
+                    text = ""
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            text = parts[0].get("text", "")
+
+                    usage_meta = data.get("usageMetadata", {})
+                    input_tokens = usage_meta.get("promptTokenCount", 0)
+                    output_tokens = usage_meta.get("candidatesTokenCount", 0)
+
+                    return LLMResponse(
+                        text=text or "",
+                        usage={
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "total_tokens": input_tokens + output_tokens,
+                        },
+                        provider="gemini",
+                        model=m,
+                        raw_response=data,
+                    )
+                else:
+                    last_err = f"HTTP {resp.status_code}: {resp.text}"
+            except Exception as e:
+                last_err = str(e)
+
+        raise RuntimeError(f"Gemini API request failed: {last_err}")
 
 
 class OpenAIProvider(LLMProvider):
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
-        self.api_key = api_key or settings.OPENAI_API_KEY
-        self.model_name = model_name or settings.ORCHESTRATOR_OPENAI_MODEL or "gpt-4o"
-        self._client = None
-        if self.api_key:
-            try:
-                from openai import OpenAI
-                self._client = OpenAI(api_key=self.api_key)
-            except Exception as e:
-                logger.warning(f"Could not initialize OpenAI client: {e}")
+        self.api_key = api_key or str(get_setting_value("OPENAI_API_KEY", "")).strip()
+        self.model_name = model_name or str(get_setting_value("OPENAI_MODEL", "")).strip() or "gpt-4o"
 
     def is_available(self) -> bool:
-        return bool(self.api_key and self._client is not None)
+        return bool(
+            self.api_key
+            and not self.api_key.startswith("mock_")
+            and not self.api_key.startswith("YOUR_")
+            and "test-sample" not in self.api_key
+            and len(self.api_key) > 10
+        )
 
     def complete(
         self,
@@ -179,21 +218,32 @@ class OpenAIProvider(LLMProvider):
         for msg in messages:
             formatted_messages.append({"role": msg["role"], "content": msg["content"]})
 
-        kwargs: dict[str, Any] = {
+        payload = {
             "model": self.model_name,
             "messages": formatted_messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
         if response_format == "json":
-            kwargs["response_format"] = {"type": "json_object"}
+            payload["response_format"] = {"type": "json_object"}
 
-        response = self._client.chat.completions.create(**kwargs)
-        choice = response.choices[0] if response.choices else None
-        text = choice.message.content if choice and choice.message else ""
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
 
-        input_tokens = response.usage.prompt_tokens if response.usage else 0
-        output_tokens = response.usage.completion_tokens if response.usage else 0
+        resp = requests.post(url, json=payload, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            raise RuntimeError(f"OpenAI API HTTP {resp.status_code}: {resp.text}")
+
+        data = resp.json()
+        choices = data.get("choices", [])
+        text = choices[0].get("message", {}).get("content", "") if choices else ""
+
+        usage = data.get("usage", {})
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
 
         return LLMResponse(
             text=text or "",
@@ -204,7 +254,7 @@ class OpenAIProvider(LLMProvider):
             },
             provider="openai",
             model=self.model_name,
-            raw_response=response,
+            raw_response=data,
         )
 
 
@@ -263,8 +313,8 @@ def get_orchestrator_provider() -> Optional[LLMProvider]:
     Returns the configured orchestrator LLM provider with failover.
     If no provider API keys are configured, returns None so callers can fall back to deterministic logic.
     """
-    primary_name = getattr(settings, "ORCHESTRATOR_PRIMARY_PROVIDER", "gemini")
-    fallback_name = getattr(settings, "ORCHESTRATOR_FALLBACK_PROVIDER", "openai")
+    primary_name = str(get_setting_value("ORCHESTRATOR_PRIMARY_PROVIDER", "gemini")).strip()
+    fallback_name = str(get_setting_value("ORCHESTRATOR_FALLBACK_PROVIDER", "openai")).strip()
 
     try:
         primary = get_provider(primary_name)

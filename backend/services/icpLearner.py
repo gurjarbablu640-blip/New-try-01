@@ -14,18 +14,13 @@ Weekly Celery task:
 import json
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional
-
-import anthropic
-from sqlalchemy import desc, func
-from sqlalchemy.orm import Session
-
 from celery_app import celery_app
 from config import settings
 from database import SessionLocal
 from models.company import Company
 from models.pipeline import LeadRating
 from models.website_intel import CompanyWebsiteIntel
+from services.llm_provider import get_orchestrator_provider
 
 logger = logging.getLogger(__name__)
 
@@ -118,10 +113,9 @@ def learn_icp_patterns() -> Dict:
         good_sample = _build_company_summaries(good_company_ids[:15], db)
         bad_sample = _build_company_summaries(bad_company_ids[:15], db)
 
-        # Call Claude to identify patterns
-        if settings.ANTHROPIC_API_KEY:
-            patterns = _claude_learn_patterns(good_sample, bad_sample)
-        else:
+        # Learn patterns via LLM provider or fallback
+        patterns = _llm_learn_patterns(good_sample, bad_sample)
+        if not patterns:
             patterns = _rule_based_patterns(good_company_ids, bad_company_ids, db)
 
         if patterns:
@@ -184,11 +178,13 @@ def _build_company_summaries(company_ids: List[int], db: Session) -> List[Dict]:
     return summaries
 
 
-def _claude_learn_patterns(good_sample: List[Dict], bad_sample: List[Dict]) -> Optional[Dict]:
-    """Use Claude to identify ICP patterns."""
-    try:
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+def _llm_learn_patterns(good_sample: List[Dict], bad_sample: List[Dict]) -> Optional[Dict]:
+    """Use configured LLM provider to identify ICP patterns."""
+    provider = get_orchestrator_provider()
+    if not provider or not provider.is_available():
+        return None
 
+    try:
         prompt = f"""Analyze these lead ratings to identify ICP (Ideal Customer Profile) patterns.
 
 TOP-RATED LEADS (4-5 stars — these are ideal customers):
@@ -219,24 +215,16 @@ Return JSON:
   "insights_summary": "2-3 sentence summary of what makes a good lead"
 }}"""
 
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+        resp = provider.complete(
+            system_prompt="You are a data scientist optimizing B2B sales lead qualification models.",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
             max_tokens=1000,
-            messages=[{"role": "user", "content": prompt}]
         )
-
-        response_text = response.content[0].text
-
-        # Parse JSON
-        try:
-            return json.loads(response_text)
-        except json.JSONDecodeError:
-            start = response_text.index("{")
-            end = response_text.rindex("}") + 1
-            return json.loads(response_text[start:end])
+        return resp.parse_json()
 
     except Exception as e:
-        logger.error(f"Claude ICP learning error: {e}")
+        logger.error(f"LLM ICP learning error: {e}")
         return None
 
 

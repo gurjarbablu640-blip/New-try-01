@@ -12,6 +12,7 @@ import requests
 
 from config import settings
 from services.deduplication import extract_domain, normalize_company_name
+from services.settings_manager import get_setting_value
 
 logger = logging.getLogger(__name__)
 
@@ -214,18 +215,33 @@ def search_apollo_leads(
     force_mock: bool = False,
 ) -> dict[str, Any]:
     """Search leads via Apollo API or mock fallback."""
-    api_key = settings.APOLLO_API_KEY.strip()
-    if force_mock or not api_key:
-        logger.info("Using Apollo Mock Generator (API key empty or force_mock=True)")
-        return _format_mock_results(
-            query=query,
-            locations=locations,
-            titles=titles,
-            page=page,
-            per_page=per_page,
-        )
+    api_key = str(getattr(settings, "APOLLO_API_KEY", "") or get_setting_value("APOLLO_API_KEY", "")).strip()
+    if force_mock or not api_key or api_key == "mock_apollo_key_123" or api_key.startswith("YOUR_"):
+        if force_mock:
+            logger.info("Using Apollo Mock Generator (force_mock=True)")
+            return _format_mock_results(
+                query=query,
+                locations=locations,
+                titles=titles,
+                page=page,
+                per_page=per_page,
+            )
+        return {
+            "status": "APOLLO_NOT_CONFIGURED",
+            "error": "Apollo API key is not configured.",
+            "page": page,
+            "per_page": per_page,
+            "results": [],
+            "mock_mode": False,
+        }
 
-    url = f"{settings.APOLLO_API_BASE_URL.rstrip('/')}/mixed_people/search"
+    base_url = str(getattr(settings, "APOLLO_API_BASE_URL", "")).rstrip("/")
+    if not base_url.endswith("/api/v1") and not base_url.endswith("/v1"):
+        base_url = f"{base_url}/api/v1"
+    elif base_url.endswith("/v1") and not base_url.endswith("/api/v1"):
+        base_url = base_url.replace("/v1", "/api/v1")
+
+    url = f"{base_url}/mixed_people/api_search"
     headers = {
         "Content-Type": "application/json",
         "Cache-Control": "no-cache",
@@ -439,9 +455,9 @@ def enrich_specific_person(
     Apollo is asked to find contact details for this specific person,
     not to return random company contacts.
     """
-    api_key = settings.APOLLO_API_KEY.strip()
+    api_key = str(getattr(settings, "APOLLO_API_KEY", "") or get_setting_value("APOLLO_API_KEY", "")).strip()
 
-    if not api_key:
+    if not api_key or api_key == "mock_apollo_key_123" or api_key.startswith("YOUR_"):
         logger.info("Apollo API key not configured — returning APOLLO_BLOCKED")
         return {
             "status": "APOLLO_BLOCKED",
@@ -460,7 +476,13 @@ def enrich_specific_person(
     first_name = name_parts[0] if name_parts else ""
     last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
 
-    url = f"{settings.APOLLO_API_BASE_URL.rstrip('/')}/people/match"
+    base_url = str(getattr(settings, "APOLLO_API_BASE_URL", "")).rstrip("/")
+    if not base_url.endswith("/api/v1") and not base_url.endswith("/v1"):
+        base_url = f"{base_url}/api/v1"
+    elif base_url.endswith("/v1") and not base_url.endswith("/api/v1"):
+        base_url = base_url.replace("/v1", "/api/v1")
+
+    url = f"{base_url}/people/match"
     headers = {
         "Content-Type": "application/json",
         "Cache-Control": "no-cache",
@@ -468,6 +490,7 @@ def enrich_specific_person(
     }
 
     payload = {
+        "api_key": api_key,
         "first_name": first_name,
         "last_name": last_name,
         "organization_name": company_name,
@@ -564,4 +587,49 @@ def enrich_specific_person(
             "phone": None,
             "raw_response": None,
             "mock_mode": False,
+        }
+
+
+def check_apollo_health(api_key: Optional[str] = None) -> dict[str, Any]:
+    """Check authentication and access health of Apollo API credentials."""
+    key = (api_key or str(getattr(settings, "APOLLO_API_KEY", "") or get_setting_value("APOLLO_API_KEY", ""))).strip()
+    if not key or key == "mock_apollo_key_123" or key.startswith("YOUR_"):
+        return {
+            "status": "NOT_CONFIGURED",
+            "is_logged_in": False,
+            "details": "Apollo API key is not configured.",
+        }
+
+    base_url = str(getattr(settings, "APOLLO_API_BASE_URL", "")).rstrip("/")
+    if not base_url.endswith("/api/v1") and not base_url.endswith("/v1"):
+        base_url = f"{base_url}/api/v1"
+    elif base_url.endswith("/v1") and not base_url.endswith("/api/v1"):
+        base_url = base_url.replace("/v1", "/api/v1")
+
+    url = f"{base_url}/auth/health"
+    headers = {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
+        "X-Api-Key": key,
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                "status": "LIVE_VERIFIED",
+                "is_logged_in": data.get("is_logged_in", True),
+                "details": "Apollo API key authenticated successfully.",
+            }
+        return {
+            "status": f"HTTP_{response.status_code}",
+            "is_logged_in": False,
+            "details": response.text[:200],
+        }
+    except Exception as exc:
+        return {
+            "status": "ERROR",
+            "is_logged_in": False,
+            "details": str(exc),
         }

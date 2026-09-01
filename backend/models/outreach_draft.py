@@ -1,6 +1,5 @@
 """Outreach Drafts model."""
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, ARRAY, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, JSON, func
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -17,10 +16,10 @@ class OutreachDraft(Base):
     whatsapp_message = Column(Text)
 
     # Enhanced fields (Module 10)
-    email_subject_variants = Column(ARRAY(Text), default=[])
+    email_subject_variants = Column(JSON, default=[])
     email_ps = Column(Text)
     call_opener = Column(Text)
-    objection_responses = Column(JSONB)
+    objection_responses = Column(JSON)
     free_value_offer_outline = Column(Text)
     linkedin_connection_note = Column(Text)
     followup_day3_whatsapp = Column(Text)
@@ -28,8 +27,8 @@ class OutreachDraft(Base):
     followup_day14_breakup = Column(Text)
 
     # Metadata
-    generated_by = Column(String(100), default="claude")
-    generation_context = Column(JSONB)  # Store personalization_context used
+    generated_by = Column(String(100), default="llm_orchestrator")
+    generation_context = Column(JSON)  # Store personalization_context used
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

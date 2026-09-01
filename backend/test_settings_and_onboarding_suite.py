@@ -3,7 +3,7 @@
 Tests:
 1. Masked secret retrieval (no plaintext secrets exposed)
 2. Settings persistence and runtime override
-3. Complete removal of Anthropic from settings
+3. Verification that only OpenAI and Gemini are supported (legacy providers rejected)
 4. Diagnostic connection testers (OpenAI, Gemini, Apollo, SMTP, IMAP)
 5. Apollo pilot hard limit enforcement (<= 6 contacts)
 6. Manual prospect onboarding into CRM, CompanyBrain, BeliefState, and Guided Actions
@@ -54,6 +54,10 @@ from services.settings_manager import (
 from services.customer_onboarding import onboard_manual_prospect
 
 
+import tempfile
+import services.settings_manager as sm
+
+
 class TestSettingsAndOnboardingSuite(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -63,8 +67,13 @@ class TestSettingsAndOnboardingSuite(unittest.TestCase):
 
     def setUp(self):
         self.db = self.Session()
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self._original_settings_file = sm.SETTINGS_STORAGE_FILE
+        sm.SETTINGS_STORAGE_FILE = os.path.join(self._temp_dir.name, "test_runtime_settings.json")
 
     def tearDown(self):
+        sm.SETTINGS_STORAGE_FILE = self._original_settings_file
+        self._temp_dir.cleanup()
         self.db.query(SignalEvidenceNode).delete()
         self.db.query(CompanyBeliefState).delete()
         self.db.query(CompanyTimelineEvent).delete()
@@ -115,29 +124,36 @@ class TestSettingsAndOnboardingSuite(unittest.TestCase):
         # Test rejection of unsupported providers in connection tester
         test_res = test_ai_provider_connection("anthropic")
         self.assertEqual(test_res["status"], "UNSUPPORTED")
-        self.assertIn("OpenAI or Google Gemini", test_res["message"])
+        self.assertIn("Google Gemini", test_res["message"])
+        self.assertIn("OpenAI", test_res["message"])
 
     def test_04_diagnostic_connection_testers(self):
         """Test diagnostic connection testers for AI, Apollo, SMTP, and IMAP."""
-        # AI Tester
+        # Unconfigured / Mock Key returns NOT_CONFIGURED
         update_settings({"GOOGLE_API_KEY": "mock_gemini_key_123"})
         gemini_test = test_ai_provider_connection("gemini")
-        self.assertEqual(gemini_test["status"], "CONNECTED")
+        self.assertEqual(gemini_test["status"], "NOT_CONFIGURED")
 
-        # Apollo Tester (verifies pilot limit message)
+        # Apollo Tester on unconfigured / mock returns NOT_CONFIGURED
         update_settings({"APOLLO_API_KEY": "mock_apollo_key_123"})
         apollo_test = test_apollo_connection()
-        self.assertEqual(apollo_test["status"], "CONNECTED")
-        self.assertIn("≤ 6 contacts", apollo_test["message"])
+        self.assertEqual(apollo_test["status"], "NOT_CONFIGURED")
 
         # SMTP & IMAP Testers
-        update_settings({"SMTP_HOST": "localhost", "SMTP_USER": "sales@oorja.local"})
-        smtp_test = test_smtp_connection()
-        self.assertEqual(smtp_test["status"], "CONNECTED")
+        from unittest.mock import patch, MagicMock
+        update_settings({"SMTP_HOST": "localhost", "SMTP_USER": "sales@oorja.local", "SMTP_PASSWORD": "secret_password"})
+        with patch("smtplib.SMTP") as mock_smtp:
+            instance = MagicMock()
+            mock_smtp.return_value = instance
+            smtp_test = test_smtp_connection()
+            self.assertEqual(smtp_test["status"], "CONNECTED")
 
-        update_settings({"IMAP_HOST": "localhost", "IMAP_USER": "sales@oorja.local"})
-        imap_test = test_imap_connection()
-        self.assertEqual(imap_test["status"], "CONNECTED")
+        update_settings({"IMAP_HOST": "localhost", "IMAP_USER": "sales@oorja.local", "IMAP_PASSWORD": "secret_password"})
+        with patch("imaplib.IMAP4_SSL") as mock_imap:
+            instance = MagicMock()
+            mock_imap.return_value = instance
+            imap_test = test_imap_connection()
+            self.assertEqual(imap_test["status"], "CONNECTED")
 
     def test_05_manual_prospect_onboarding_full_loop(self):
         """Test manual customer onboarding seeds CRM, CompanyBrain, BeliefState, and Guided Actions."""

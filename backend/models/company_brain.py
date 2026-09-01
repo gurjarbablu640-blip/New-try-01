@@ -1,6 +1,5 @@
 """SQLAlchemy models for Salesoorja Company Brain, Timeline, Stakeholder Graph, and Regulatory Intelligence."""
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, JSON, func
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -13,7 +12,7 @@ class CompanyIntelligenceFact(Base):
     company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
     category = Column(String(50), nullable=False, index=True)  # equipment, process, certification, expansion, vendor, financial
     fact_key = Column(String(100), nullable=False, index=True)  # e.g. cnc_machines, cmm_mitutoyo, iatf_16949
-    fact_value = Column(JSONB, nullable=True)  # Structured fact attributes
+    fact_value = Column(JSON, nullable=True)  # Structured fact attributes
     source = Column(String(100), nullable=False)  # website_scrape, apollo, crm_activity, quotation, news, regulatory
     source_url = Column(String(500), nullable=True)
     confidence = Column(Float, default=0.8, nullable=False)  # 0.0 to 1.0
@@ -38,7 +37,7 @@ class CompanyTimelineEvent(Base):
     buying_window_impact = Column(String(50), nullable=True)  # immediate, 30_days, 60_days, renewal_cycle
     source = Column(String(100), nullable=False)
     source_ref = Column(String(255), nullable=True)
-    raw_metadata = Column(JSONB, nullable=True)
+    raw_metadata = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     company = relationship("Company", backref="timeline_events")
@@ -71,12 +70,12 @@ class RegulatoryIntelligence(Base):
     regulation_code = Column(String(100), nullable=False, index=True)
     title = Column(String(255), nullable=False)
     summary = Column(Text, nullable=False)
-    affected_industries = Column(JSONB, nullable=True)  # ["Automotive", "Pharmaceutical", "Heavy Engineering"]
-    affected_parameters = Column(JSONB, nullable=True)  # ["Dimensional", "Thermal", "Pressure", "Electrical"]
-    affected_equipment = Column(JSONB, nullable=True)  # ["CMM", "Pressure Gauges", "Temperature Transmitters"]
+    affected_industries = Column(JSON, nullable=True)  # ["Automotive", "Pharmaceutical", "Heavy Engineering"]
+    affected_parameters = Column(JSON, nullable=True)  # ["Dimensional", "Thermal", "Pressure", "Electrical"]
+    affected_equipment = Column(JSON, nullable=True)  # ["CMM", "Pressure Gauges", "Temperature Transmitters"]
     compliance_deadline = Column(Date, nullable=True, index=True)
     # The Mandatory 5-Question Commercial Impact Breakdown:
-    commercial_impact_analysis = Column(JSONB, nullable=False)
+    commercial_impact_analysis = Column(JSON, nullable=False)
     # {
     #   "what_changed": str,
     #   "affected_processes": list[str],

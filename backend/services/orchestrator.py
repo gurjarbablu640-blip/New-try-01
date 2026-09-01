@@ -59,6 +59,30 @@ class AskOorjaOrchestrator:
         session = self._get_or_create_session(session_id, db)
         session_history = self._load_session_history(session.id, db) if session else []
 
+        # Handle simple greetings contextually (Section 17 requirement)
+        q_clean = query.strip().lower().rstrip("!.,?")
+        if q_clean in ["hi", "hello", "hey", "good morning", "good afternoon", "good evening", "hi oorja", "hello oorja", "greetings"]:
+            greeting_answer = (
+                "Good morning. I'm Oorja's calibration-sales intelligence assistant.\n"
+                "I can research prospects, find calibration-demand signals, identify the right Quality/Metrology/Purchase contacts, "
+                "compare NABL capabilities, analyze quotations, and recommend the next sales action.\n\n"
+                "What would you like to investigate?"
+            )
+            self._record_conversation_turn(session, query, greeting_answer, [], [], 1, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}, db)
+            return {
+                "query": query,
+                "intent": "greeting",
+                "answer": greeting_answer,
+                "iterations": 1,
+                "sub_agents_used": ["AskOorjaAssistant"],
+                "tool_calls": [],
+                "verified_facts": [],
+                "tokens_used": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                "session_id": session.id if session else None,
+                "applied_rules": [],
+                "tool_used": "orchestrator",
+            }
+
         # 2. Load Approved Learning Rules
         approved_rules = self._load_approved_rules(db)
         applied_rules = []
@@ -291,17 +315,7 @@ class AskOorjaOrchestrator:
     def _synthesize_final_answer(
         self,
         query: str,
-        context: dict,
-        verified_facts: list[dict],
-        applied_rules: list[str],
-        provider: Optional[LLMProvider],
-    ) -> str:
-        findings = context.get("sub_agent_findings", {})
-
-    def _synthesize_final_answer(
-        self,
-        query: str,
-        findings: dict[str, Any],
+        context: dict[str, Any],
         verified_facts: list[dict],
         applied_rules: list[str],
         provider: Optional[LLMProvider],
@@ -316,9 +330,10 @@ class AskOorjaOrchestrator:
         7. CONFIDENCE
         8. RECOMMENDED ACTION
         """
+        findings = context.get("sub_agent_findings", {}) if isinstance(context, dict) else {}
         system_prompt = (
             "You are Oorja Sales OS Deep Reasoning Assistant (Ask Oorja).\n"
-            "Format EVERY response into the following 8 standardized sections using Markdown headings:\n\n"
+            "Format EVERY response using EXACTLY these 8 Markdown headings verbatim:\n\n"
             "### 1. ANSWER\n"
             "Direct, unambiguous answer to the user's question.\n\n"
             "### 2. WHY\n"
@@ -335,7 +350,7 @@ class AskOorjaOrchestrator:
             "Confidence level (High / Medium / Low) with percentage and explanation.\n\n"
             "### 8. RECOMMENDED ACTION\n"
             "Concrete, actionable next step for the sales representative.\n\n"
-            "If any approved learning rules were applied, mention them under EVIDENCE."
+            "CRITICAL: Do NOT alter, rename, or omit any of the 8 headers above. Every section is mandatory."
         )
 
         user_content = {
@@ -351,7 +366,7 @@ class AskOorjaOrchestrator:
                     system_prompt=system_prompt,
                     messages=[{"role": "user", "content": json.dumps(user_content)}],
                 )
-                if resp.text:
+                if resp.text and "1. ANSWER" in resp.text:
                     return resp.text
             except Exception as e:
                 logger.warning(f"Final synthesis LLM call error: {e}")

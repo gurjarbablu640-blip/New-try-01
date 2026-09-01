@@ -39,9 +39,11 @@ def parse_historical_quote_text(
     discount_pct = 0.0
 
     # Extract quotation number
-    q_match = re.search(r"(?:Quote|Quotation|Ref|Estimate)(?:\s*(?:No|Ref|#|[:\-\s]))*[:\s]+([A-Z0-9\-_/]{3,})", raw_text, re.IGNORECASE)
+    q_match = re.search(r"(?:(?:Quote|Quotation|Estimate)(?:\s*Ref)?|Ref)(?:\s*(?:No\.?|#|:|-))*\s*[:\-#]?\s*([A-Za-z0-9\-_/]{3,})", raw_text, re.IGNORECASE)
     if q_match:
-        quote_number = q_match.group(1).strip()
+        val = q_match.group(1).strip()
+        if len(val) >= 3 and not any(k in val.lower() for k in ["quote", "quotation", "invoice", "date", "ref"]):
+            quote_number = val
 
     # Extract date
     d_match = re.search(r"(?:Date|Dated)[:\s]*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})", raw_text, re.IGNORECASE)
@@ -181,6 +183,7 @@ def ingest_historical_quotation(db: Session, quote_data: Dict[str, Any]) -> Quot
         total=Decimal(str(quote_data.get("total", 0))),
         status=quote_data.get("outcome", "Won"),
         source_file=quote_data.get("source_file", "manual_import"),
+        data_provenance=quote_data.get("data_provenance", "USER_PROVIDED_REAL_DATA"),
         human_approved=1,
         approved_at=datetime.utcnow(),
     )

@@ -4,8 +4,7 @@ Provides persistent evidential belief states, temporal signal evidence nodes,
 causal graphs, contradictions, and epistemic classification (FACT / INFERENCE / HYPOTHESIS).
 """
 from datetime import datetime
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, JSON, func
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -20,16 +19,16 @@ class CompanyBeliefState(Base):
     
     # Core probabilistic beliefs
     # Format: { "calibration_need": { "value": 0.85, "confidence": 0.78, "supporting": [...], "contradicting": [...], "last_updated": "..." } }
-    beliefs = Column(JSONB, nullable=False, default=dict)
+    beliefs = Column(JSON, nullable=False, default=dict)
     
     # Active evidential contradictions requiring resolution
-    contradictions = Column(JSONB, nullable=False, default=list)
+    contradictions = Column(JSON, nullable=False, default=list)
     
     # Inspectable reasoning traces (EVIDENCE -> INTERPRETATION -> CAUSAL PATH -> BELIEF -> DECISION)
-    causal_traces = Column(JSONB, nullable=False, default=list)
+    causal_traces = Column(JSON, nullable=False, default=list)
     
     # Uncertainty-reducing adaptive research tasks
-    active_research_tasks = Column(JSONB, nullable=False, default=list)
+    active_research_tasks = Column(JSON, nullable=False, default=list)
     
     # Summary confidence
     overall_confidence = Column(Float, default=0.5)
@@ -66,7 +65,7 @@ class SignalEvidenceNode(Base):
     # Causal template linking
     causal_template_key = Column(String(100), nullable=True)
     is_contradicted = Column(Boolean, default=False)
-    evidence_metadata = Column(JSONB, nullable=True, default=dict)
+    evidence_metadata = Column(JSON, nullable=True, default=dict)
     
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

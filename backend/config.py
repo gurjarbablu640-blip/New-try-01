@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     IMAP_PASSWORD: str = ""
     IMAP_USE_SSL: bool = True
 
+    # Search & Crawling
+    SEARXNG_BASE_URL: str = "http://localhost:8080"
+
     # App settings
     SECRET_KEY: str = "change-me-in-production"
     DEBUG: bool = True

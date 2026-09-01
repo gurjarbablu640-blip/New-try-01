@@ -13,9 +13,6 @@ Every outreach must:
 """
 import json
 import logging
-from typing import Dict, Any, Optional
-
-import anthropic
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -23,6 +20,7 @@ from database import SessionLocal
 from models.company import Company
 from models.outreach_draft import OutreachDraft
 from services.personalizationEngine import build_personalization_context
+from services.llm_provider import get_orchestrator_provider
 
 logger = logging.getLogger(__name__)
 
@@ -145,13 +143,15 @@ def generate_outreach(company_id: int, db: Session = None) -> Dict[str, Any]:
             logger.error(f"No personalization context for company {company_id}")
             return {"error": "Could not build personalization context"}
 
-        # Generate outreach via Claude
-        outreach = _call_claude_outreach(context)
+        # Generate outreach via LLM / Fallback
+        outreach = _call_llm_outreach(context)
         if not outreach:
-            return {"error": "Claude generation failed"}
+            outreach = _fallback_outreach(context)
 
         # Generate free value offer
-        free_value = _call_claude_free_value(context)
+        free_value = _call_llm_free_value(context)
+        if not free_value:
+            free_value = _fallback_free_value(context)
 
         # Save to database
         _save_outreach_draft(company_id, outreach, free_value, context, db)
@@ -177,45 +177,37 @@ def generate_outreach(company_id: int, db: Session = None) -> Dict[str, Any]:
             db.close()
 
 
-def _call_claude_outreach(context: Dict) -> Optional[Dict]:
-    """Call Claude API to generate outreach content."""
-    if not settings.ANTHROPIC_API_KEY:
-        logger.warning("ANTHROPIC_API_KEY not set, using fallback generation")
+def _call_llm_outreach(context: dict) -> Optional[dict]:
+    """Call configured LLM Provider (Gemini / OpenAI) to generate outreach content."""
+    provider = get_orchestrator_provider()
+    if not provider or not provider.is_available():
+        logger.info("No active LLM provider configured, using deterministic fallback outreach generation")
         return _fallback_outreach(context)
 
     try:
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
         user_message = _build_outreach_prompt(context)
-
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+        resp = provider.complete(
+            system_prompt=SALES_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+            temperature=0.2,
             max_tokens=2000,
-            system=SALES_SYSTEM_PROMPT,
-            messages=[
-                {"role": "user", "content": user_message}
-            ]
         )
-
-        # Parse JSON response
-        response_text = response.content[0].text
-        # Try to extract JSON from response
-        outreach = _parse_json_response(response_text)
-        return outreach
-
+        parsed = resp.parse_json()
+        if parsed:
+            return parsed
+        return _fallback_outreach(context)
     except Exception as e:
-        logger.error(f"Claude API error: {e}")
+        logger.error(f"LLM outreach generation error: {e}")
         return _fallback_outreach(context)
 
 
-def _call_claude_free_value(context: Dict) -> Optional[Dict]:
-    """Call Claude to generate the free value offer (Calibration Risk Report)."""
-    if not settings.ANTHROPIC_API_KEY:
+def _call_llm_free_value(context: dict) -> Optional[dict]:
+    """Call configured LLM Provider (Gemini / OpenAI) to generate the free value offer."""
+    provider = get_orchestrator_provider()
+    if not provider or not provider.is_available():
         return _fallback_free_value(context)
 
     try:
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
         user_message = f"""Company: {context.get('company_name', 'Unknown')}
 Instruments detected: {', '.join(context.get('specific_instruments', ['general instruments']))}
 OEM Brands: {', '.join(context.get('oem_brands', []))}
@@ -225,19 +217,18 @@ Has NABL: {context.get('has_nabl', False)}
 
 {FREE_VALUE_PROMPT}"""
 
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+        resp = provider.complete(
+            system_prompt="You are a senior calibration and metrology specialist.",
+            messages=[{"role": "user", "content": user_message}],
+            temperature=0.2,
             max_tokens=1500,
-            messages=[
-                {"role": "user", "content": user_message}
-            ]
         )
-
-        response_text = response.content[0].text
-        return _parse_json_response(response_text)
-
+        parsed = resp.parse_json()
+        if parsed:
+            return parsed
+        return _fallback_free_value(context)
     except Exception as e:
-        logger.error(f"Claude free value generation error: {e}")
+        logger.error(f"LLM free value generation error: {e}")
         return _fallback_free_value(context)
 
 

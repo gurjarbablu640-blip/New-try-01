@@ -13,6 +13,8 @@ from models.decision_maker_candidate import DecisionMakerCandidate
 
 from models.facility import Facility
 from models.customer_asset import CustomerAsset
+from models.company_brain import CompanyIntelligenceFact, CompanyTimelineEvent
+from models.reasoning_engine import CompanyBeliefState, SignalEvidenceNode
 from services.calibration_intelligence import (
     calculate_company_asset_calibration_summary,
     calculate_asset_due_status,
@@ -87,9 +89,69 @@ def get_company_360(company_id: int):
         from services.nextBestAction import get_next_best_action
         nba = get_next_best_action(company_id, db)
 
+        # Company Brain & Belief State
+        brain_facts = db.query(CompanyIntelligenceFact).filter(CompanyIntelligenceFact.company_id == company_id).order_by(CompanyIntelligenceFact.created_at.desc()).limit(50).all()
+        timeline = db.query(CompanyTimelineEvent).filter(CompanyTimelineEvent.company_id == company_id).order_by(CompanyTimelineEvent.event_date.desc(), CompanyTimelineEvent.id.desc()).limit(50).all()
+        belief = db.query(CompanyBeliefState).filter(CompanyBeliefState.company_id == company_id).first()
+        evidence_nodes = db.query(SignalEvidenceNode).filter(SignalEvidenceNode.company_id == company_id).order_by(SignalEvidenceNode.detection_time.desc()).limit(50).all()
+
         return {
             "company": _company_summary(company),
             "next_best_action": nba,
+            "company_brain": {
+                "facts": [
+                    {
+                        "id": f.id,
+                        "category": f.category,
+                        "fact_key": f.fact_key,
+                        "fact_value": f.fact_value,
+                        "source": f.source,
+                        "source_url": f.source_url,
+                        "confidence": f.confidence,
+                        "evidence_text": f.evidence_text,
+                        "verified_by_human": f.verified_by_human,
+                        "created_at": f.created_at.isoformat() if f.created_at else None,
+                    }
+                    for f in brain_facts
+                ],
+                "timeline_events": [
+                    {
+                        "id": t.id,
+                        "event_type": t.event_type,
+                        "event_date": t.event_date.isoformat() if t.event_date else None,
+                        "title": t.title,
+                        "description": t.description,
+                        "impact_level": t.impact_level,
+                        "buying_window_impact": t.buying_window_impact,
+                        "source": t.source,
+                        "source_ref": t.source_ref,
+                    }
+                    for t in timeline
+                ],
+                "belief_state": {
+                    "overall_confidence": belief.overall_confidence if belief else 0.5,
+                    "beliefs": belief.beliefs if belief else {},
+                    "contradictions": belief.contradictions if belief else [],
+                    "causal_traces": belief.causal_traces if belief else [],
+                    "active_research_tasks": belief.active_research_tasks if belief else [],
+                    "last_reasoned_at": belief.last_reasoned_at.isoformat() if belief and belief.last_reasoned_at else None,
+                },
+                "signal_evidence_nodes": [
+                    {
+                        "id": n.id,
+                        "epistemic_type": n.epistemic_type,
+                        "signal_type": n.signal_type,
+                        "title": n.title,
+                        "description": n.description,
+                        "source": n.source,
+                        "source_url": n.source_url,
+                        "current_effective_confidence": round(n.current_effective_confidence or 0.8, 3),
+                        "event_time": n.event_time.isoformat() if n.event_time else None,
+                        "detection_time": n.detection_time.isoformat() if n.detection_time else None,
+                    }
+                    for n in evidence_nodes
+                ],
+            },
             "contacts": [
                 {"id": p.id, "name": p.full_name, "designation": p.designation, "department": p.department, "email": p.email, "phone": p.phone, "linkedin": p.linkedin_url, "discovery_status": getattr(p, 'discovery_status', 'UNKNOWN')}
                 for p in people

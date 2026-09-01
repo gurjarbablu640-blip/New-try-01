@@ -21,12 +21,12 @@ class TestTruthAuditAndZeroInvention(unittest.TestCase):
             self.db.close()
 
     def test_honest_unconfigured_smtp_and_imap(self):
-        # When credentials are empty, system must honestly return NOT_CONFIGURED
+        # When credentials are empty or server is unreachable, system must honestly report status
         smtp_res = test_smtp_connection()
-        self.assertIn(smtp_res["status"], ["NOT_CONFIGURED", "CONNECTED", "AUTHENTICATION_FAILED"])
+        self.assertIn(smtp_res["status"], ["NOT_CONFIGURED", "CONNECTED", "AUTHENTICATION_FAILED", "CONNECTION_FAILED"])
 
         imap_res = test_imap_connection()
-        self.assertIn(imap_res["status"], ["NOT_CONFIGURED", "CONNECTED", "AUTHENTICATION_FAILED"])
+        self.assertIn(imap_res["status"], ["NOT_CONFIGURED", "CONNECTED", "AUTHENTICATION_FAILED", "CONNECTION_FAILED"])
 
     def test_transparent_apollo_status_and_safety_limit(self):
         # In live mode with no valid API key configured, must report APOLLO_BLOCKED without silent fake mock fallback

@@ -313,6 +313,12 @@ def extract_person_candidates(
         "head", "manager", "director", "lead", "vp", "chief",
     ]
 
+    # Direct profile pattern in result titles: "Name - Title [- Company]"
+    profile_title_pattern = re.compile(
+        r"^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\s*[-–|:]\s*([A-Za-z\s/&,.-]{4,60}?)(?:\s*[-–|:]|\s+at\s+|\s+@\s+|$)",
+        re.IGNORECASE
+    )
+
     for result in search_results:
         snippet = result.get("snippet", "")
         title = result.get("title", "")
@@ -324,27 +330,64 @@ def extract_person_candidates(
         if company_relevance < 0.3:
             continue
 
-        # Extract potential names
-        names = name_pattern.findall(combined_text)
+        # Strategy A: Check for structured profile title: "Name - Title [- Company]"
+        profile_match = profile_title_pattern.match(title.strip())
+        if profile_match:
+            cand_name = profile_match.group(1).strip()
+            cand_raw_title = profile_match.group(2).strip()
+            if not _is_non_name(cand_name) and cand_name.lower() not in seen_names:
+                if any(kw in cand_raw_title.lower() for kw in title_keywords):
+                    seen_names.add(cand_name.lower())
+                    location = _extract_location_hint(combined_text)
+                    candidates.append({
+                        "candidate_name": cand_name,
+                        "candidate_title": cand_raw_title.title(),
+                        "candidate_company_match": company_relevance > 0.5,
+                        "candidate_facility": location.get("facility", ""),
+                        "candidate_location": location.get("city", ""),
+                        "evidence_source": result.get("provider", "web_search"),
+                        "evidence_url": url,
+                        "evidence_snippet": snippet[:300],
+                        "evidence_type": result.get("evidence_type", "WEB_EVIDENCE"),
+                        "persona": result.get("persona", ""),
+                        "search_type": result.get("search_type", ""),
+                        "raw_confidence": 0.85,
+                    })
+                    continue
 
-        for name in names:
+        # Strategy B: LinkedIn profile URL with name in title (e.g., "First Last - Company | LinkedIn")
+        if "linkedin.com/in/" in url and (" - " in title or " | " in title):
+            raw_name_part = title.split(" - ")[0].split(" | ")[0].strip()
+            if not _is_non_name(raw_name_part) and len(raw_name_part.split()) in (2, 3):
+                title_found = _extract_title_near_name(combined_text, raw_name_part, title_keywords) or "Quality / Technical Lead"
+                seen_names.add(raw_name_part.lower())
+                location = _extract_location_hint(combined_text)
+                candidates.append({
+                    "candidate_name": raw_name_part,
+                    "candidate_title": title_found,
+                    "candidate_company_match": company_relevance > 0.5,
+                    "candidate_facility": location.get("facility", ""),
+                    "candidate_location": location.get("city", ""),
+                    "evidence_source": result.get("provider", "web_search"),
+                    "evidence_url": url,
+                    "evidence_snippet": snippet[:300],
+                    "evidence_type": "public_professional_profile",
+                    "persona": result.get("persona", ""),
+                    "search_type": "public_professional_profile",
+                    "raw_confidence": 0.90,
+                })
+                continue
+
+        # Strategy C: Extract name ONLY from title, never from arbitrary snippet sentences
+        title_names = name_pattern.findall(title)
+        for name in title_names:
             name = name.strip()
-            if len(name) < 5 or name.lower() in seen_names:
+            if len(name) < 5 or name.lower() in seen_names or _is_non_name(name):
                 continue
-
-            # Skip common non-name patterns
-            if _is_non_name(name):
-                continue
-
-            # Look for associated title
-            title_found = _extract_title_near_name(combined_text, name, title_keywords)
-
+            title_found = _extract_title_near_name(title, name, title_keywords)
             if title_found:
                 seen_names.add(name.lower())
-
-                # Extract location hint
                 location = _extract_location_hint(combined_text)
-
                 candidates.append({
                     "candidate_name": name,
                     "candidate_title": title_found,
@@ -357,7 +400,7 @@ def extract_person_candidates(
                     "evidence_type": result.get("evidence_type", "WEB_EVIDENCE"),
                     "persona": result.get("persona", ""),
                     "search_type": result.get("search_type", ""),
-                    "raw_confidence": company_relevance * 0.6 + (0.4 if title_found else 0.0),
+                    "raw_confidence": company_relevance * 0.6 + 0.4,
                 })
 
     return candidates
@@ -386,12 +429,36 @@ def _fuzzy_company_match(text: str, company_name: str) -> float:
 
 def _is_non_name(name: str) -> bool:
     """Filter out common false-positive name patterns."""
+    name_lower = name.lower().strip()
     non_names = {
         "quality head", "plant head", "quality manager", "purchase manager",
+        "corporate quality head", "plant quality head", "senior manager",
+        "general manager", "managing director", "operations head",
         "read more", "learn more", "click here", "see more", "view all",
         "terms conditions", "privacy policy", "cookie policy",
+        "phone number", "email address", "contact details",
+        "bharat forge", "bharat forge ltd", "bharat forge limited",
+        "kalyani forge", "talbros automotive", "talbros automotive ltd",
+        "manufacturing quality assurance", "india view", "colleague at",
+        "pharma jobs", "walk in interview", "executive maintenance jobs",
+        "quality engineer", "maintenance head", "plant engineer",
     }
-    return name.lower() in non_names or len(name.split()) > 4
+    if name_lower in non_names:
+        return True
+    action_words = ("responsible", "experienced", "certified", "skilled", "accomplished", "leading", "handling", "seeking", "dedicated")
+    if any(name_lower.startswith(w + " ") or name_lower.startswith(w + "-") for w in action_words):
+        return True
+    if any(term in name_lower for term in (
+        "head", "manager", "director", "phone", "email", "limited", "ltd", "pvt",
+        "assurance", "colleague", "view", "profile", "jobs", "job", "hiring",
+        "interview", "opening", "vacancy", "careers", "executive", "engineer",
+        "operations", "walk-in", "recruitment", "news", "updates", "team",
+        "quality", "maintenance", "procurement", "purchase", "engineering",
+        "production", "metrology", "calibration", "safety", "inspection",
+        "testing", "instrumentation", "services", "solutions",
+    )):
+        return True
+    return len(name.split()) > 4 or len(name.split()) < 2
 
 
 def _extract_title_near_name(text: str, name: str, title_keywords: list) -> Optional[str]:
@@ -467,9 +534,19 @@ def verify_person_candidate(
     candidate: Dict[str, Any],
     company: Company,
 ) -> Dict[str, Any]:
-    """Verify a person candidate and compute match score.
+    """Verify a person candidate against company and calibration relevance.
 
-    Returns verification decision with transparent scoring.
+    Multi-dimensional scoring:
+    - Company Match: 0.30 weight
+    - Role Relevance: 0.30 weight
+    - Facility Match: 0.10 weight
+    - Recency: 0.15 weight
+    - Evidence Quality: 0.15 weight
+
+    Thresholds:
+    - Composite >= 0.55: PERSON_PUBLICLY_VERIFIED
+    - Composite >= 0.30: PERSON_CANDIDATE
+    - Composite < 0.30: PERSON_REJECTED
     """
     scores = {}
 
@@ -869,6 +946,7 @@ def run_full_discovery_pipeline(
         company_name=company.name,
         queries=queries,
         db=db,
+        max_queries=6,
     )
     stages["person_search"] = {
         "status": search_results["overall_status"],
@@ -934,12 +1012,23 @@ def run_full_discovery_pipeline(
 
         if verification["verification_status"] == "PERSON_PUBLICLY_VERIFIED":
             dmc.verified_at = datetime.utcnow()
-            dmc.contact_priority = "PRIMARY" if not verified_candidates else "SECONDARY"
             if not verified_candidates:
+                dmc.contact_priority = "PRIMARY"
                 dmc.priority_reason = (
-                    f"Highest verification score ({verification['composite_score']:.2f}) "
-                    f"for {matching_persona} at {company.name}"
+                    f"Selected as PRIMARY decision-maker: Highest verification match score ({verification['composite_score']:.2f}) "
+                    f"for target {matching_persona} function at {company.name}."
                 )
+            elif len(verified_candidates) <= 2:
+                dmc.contact_priority = "SECONDARY"
+                dmc.priority_reason = (
+                    f"Secondary stakeholder ({matching_persona}) with strong verification score ({verification['composite_score']:.2f})."
+                )
+            else:
+                dmc.contact_priority = "OTHER"
+                dmc.priority_reason = f"Additional stakeholder ({matching_persona}) identified at {company.name}."
+        elif verification["verification_status"] == "PERSON_CANDIDATE":
+            dmc.contact_priority = "OTHER"
+            dmc.priority_reason = "Unverified candidate hypothesis — requires additional evidence before engagement."
 
         db.add(dmc)
         db.flush()
@@ -1123,6 +1212,86 @@ def get_company_decision_makers(
                 "enriched_at": c.enriched_at.isoformat() if c.enriched_at else None,
             }
             for c in candidates
+        ],
+        "primary_decision_maker": next(
+            (
+                {
+                    "id": c.id,
+                    "target_persona": c.target_persona,
+                    "stakeholder_role": c.stakeholder_role,
+                    "contact_priority": c.contact_priority,
+                    "priority_reason": c.priority_reason,
+                    "candidate_name": c.candidate_name,
+                    "candidate_title": c.candidate_title,
+                    "candidate_facility": c.candidate_facility,
+                    "candidate_location": c.candidate_location,
+                    "verification_status": c.verification_status,
+                    "verification_confidence": round(c.verification_confidence or 0, 3),
+                    "score_composite": round(c.score_composite or 0, 3),
+                    "composite_score": round(c.score_composite or 0, 3),
+                    "score_breakdown": {
+                        "company_match": round(c.score_company_match or 0, 3),
+                        "role_relevance": round(c.score_role_relevance or 0, 3),
+                        "facility_match": round(c.score_facility_match or 0, 3),
+                        "recency": round(c.score_recency or 0, 3),
+                        "evidence_quality": round(c.score_evidence_quality or 0, 3),
+                    },
+                    "evidence_sources": c.evidence_sources or [],
+                    "evidence_url": (c.evidence_sources[0]["url"] if c.evidence_sources and isinstance(c.evidence_sources, list) and len(c.evidence_sources) > 0 and isinstance(c.evidence_sources[0], dict) and "url" in c.evidence_sources[0] else None),
+                    "evidence_snippet": (c.evidence_sources[0]["snippet"] if c.evidence_sources and isinstance(c.evidence_sources, list) and len(c.evidence_sources) > 0 and isinstance(c.evidence_sources[0], dict) and "snippet" in c.evidence_sources[0] else None),
+                    "public_profile_url": c.public_profile_url,
+                    "apollo_enrichment_status": c.apollo_enrichment_status,
+                    "apollo_email": c.apollo_email,
+                    "email": c.apollo_email,
+                    "email_status": c.email_status,
+                    "priority_selection_reason": c.priority_reason,
+                }
+                for c in candidates
+                if c.contact_priority == "PRIMARY" and c.candidate_name
+            ),
+            None,
+        ),
+        "secondary_stakeholders": [
+            {
+                "id": c.id,
+                "target_persona": c.target_persona,
+                "persona": c.target_persona,
+                "stakeholder_role": c.stakeholder_role,
+                "contact_priority": c.contact_priority,
+                "candidate_name": c.candidate_name,
+                "candidate_title": c.candidate_title,
+                "candidate_facility": c.candidate_facility,
+                "verification_status": c.verification_status,
+                "score_composite": round(c.score_composite or 0, 3),
+                "composite_score": round(c.score_composite or 0, 3),
+                "score_breakdown": {
+                    "company_match": round(c.score_company_match or 0, 3),
+                    "role_relevance": round(c.score_role_relevance or 0, 3),
+                    "facility_match": round(c.score_facility_match or 0, 3),
+                    "recency": round(c.score_recency or 0, 3),
+                    "evidence_quality": round(c.score_evidence_quality or 0, 3),
+                },
+                "evidence_url": (c.evidence_sources[0]["url"] if c.evidence_sources and isinstance(c.evidence_sources, list) and len(c.evidence_sources) > 0 and isinstance(c.evidence_sources[0], dict) and "url" in c.evidence_sources[0] else None),
+                "evidence_snippet": (c.evidence_sources[0]["snippet"] if c.evidence_sources and isinstance(c.evidence_sources, list) and len(c.evidence_sources) > 0 and isinstance(c.evidence_sources[0], dict) and "snippet" in c.evidence_sources[0] else None),
+                "apollo_enrichment_status": c.apollo_enrichment_status,
+                "apollo_email": c.apollo_email,
+                "email": c.apollo_email,
+            }
+            for c in candidates
+            if c.contact_priority == "SECONDARY" and c.candidate_name
+        ],
+        "other_candidates": [
+            {
+                "id": c.id,
+                "target_persona": c.target_persona,
+                "candidate_name": c.candidate_name,
+                "candidate_title": c.candidate_title,
+                "verification_status": c.verification_status,
+                "score_composite": round(c.score_composite or 0, 3),
+                "composite_score": round(c.score_composite or 0, 3),
+            }
+            for c in candidates
+            if c.contact_priority not in ("PRIMARY", "SECONDARY") and c.candidate_name
         ],
         "summary": {
             "persona_inferred": sum(1 for c in candidates if c.verification_status == "PERSONA_INFERRED"),

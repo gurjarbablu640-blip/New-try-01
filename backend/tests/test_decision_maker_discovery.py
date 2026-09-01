@@ -302,7 +302,8 @@ class TestApolloEnrichmentOrder(unittest.TestCase):
 
     def test_apollo_blocked_for_unconfigured_key(self):
         from services.apollo_adapter import enrich_specific_person
-        with patch("services.apollo_adapter.settings") as mock_settings:
+        with patch("services.apollo_adapter.settings") as mock_settings, \
+             patch("services.apollo_adapter.get_setting_value", return_value=""):
             mock_settings.APOLLO_API_KEY = ""
             mock_settings.APOLLO_API_BASE_URL = "https://api.apollo.io/v1"
             result = enrich_specific_person("Test Person", "Test Company")
@@ -406,6 +407,284 @@ class TestMultipleStakeholderDiscovery(unittest.TestCase):
         roles = [p["stakeholder_role"] for p in personas]
         # Should have distinct roles
         self.assertEqual(len(roles), len(set(roles)))
+
+
+class TestAdversarialCasesAThroughL(unittest.TestCase):
+    """Explicitly verify all 12 Adversarial & Edge Cases (A through L)."""
+
+    def _make_company(self, name="Bharat Forge Ltd", city="Pune", state="Maharashtra", industry="Automotive"):
+        company = MagicMock()
+        company.id = 101
+        company.name = name
+        company.city = city
+        company.state = state
+        company.industry = industry
+        company.buying_window = "30_days"
+        return company
+
+    def test_case_a_clear_correct_person(self):
+        """Case A: Clear correct person -> High verification match score, apollo eligible."""
+        company = self._make_company()
+        candidate = {
+            "candidate_name": "Amit Kulkarni",
+            "candidate_title": "Quality Manager - Metrology & Standards",
+            "candidate_company_match": True,
+            "candidate_location": "Pune",
+            "evidence_url": "https://bharatforge.com/leadership/amit-kulkarni",
+            "evidence_snippet": "Amit Kulkarni is Quality Manager at Bharat Forge Ltd Pune plant.",
+            "search_type": "company_website",
+        }
+        res = verify_person_candidate(candidate, company)
+        self.assertEqual(res["verification_status"], "PERSON_PUBLICLY_VERIFIED")
+        self.assertGreaterEqual(res["composite_score"], APOLLO_ELIGIBLE_THRESHOLD)
+        self.assertTrue(res["apollo_eligible"])
+        self.assertIsNone(res["rejection_reason"])
+
+    def test_case_b_multiple_plausible_people(self):
+        """Case B: Multiple plausible people -> Distinct candidates ranked PRIMARY / SECONDARY with rationale."""
+        company = self._make_company()
+        c1 = MagicMock()
+        c1.candidate_name = "Amit Kulkarni"
+        c1.candidate_title = "Quality Manager"
+        c1.target_persona = "Quality / Metrology"
+        c1.stakeholder_role = "Evaluator"
+        c1.verification_status = "PERSON_PUBLICLY_VERIFIED"
+        c1.score_composite = 0.85
+        c1.contact_priority = "PRIMARY"
+        c1.priority_reason = "Highest verification score (0.85) for Quality / Metrology"
+        c1.evidence_sources = [{"source": "web", "url": "https://bharatforge.com"}]
+        c1.public_profile_url = "https://bharatforge.com/amit"
+        c1.apollo_enrichment_status = "NOT_ATTEMPTED"
+        c1.apollo_email = None
+        c1.apollo_email_confidence = None
+        c1.email_status = "NOT_FOUND"
+        c1.apollo_phone = None
+        c1.pending_research_tasks = []
+
+        c2 = MagicMock()
+        c2.candidate_name = "Sanjay Sharma"
+        c2.candidate_title = "Plant Head"
+        c2.target_persona = "Maintenance / Plant"
+        c2.stakeholder_role = "User"
+        c2.verification_status = "PERSON_PUBLICLY_VERIFIED"
+        c2.score_composite = 0.72
+        c2.contact_priority = "SECONDARY"
+        c2.priority_reason = "Secondary stakeholder for plant operations"
+        c2.evidence_sources = [{"source": "web", "url": "https://bharatforge.com"}]
+        c2.public_profile_url = "https://bharatforge.com/sanjay"
+        c2.apollo_enrichment_status = "NOT_ATTEMPTED"
+        c2.apollo_email = None
+        c2.apollo_email_confidence = None
+        c2.email_status = "NOT_FOUND"
+        c2.apollo_phone = None
+        c2.pending_research_tasks = []
+
+        brief = build_research_brief_with_persons(company, [c1, c2])
+        self.assertEqual(brief["actual_person"]["name"], "Amit Kulkarni")
+        self.assertEqual(len(brief["secondary_contacts"]), 1)
+        self.assertEqual(brief["secondary_contacts"][0]["name"], "Sanjay Sharma")
+        self.assertIn("Amit Kulkarni", brief["contact_sequence"])
+
+    def test_case_c_no_identifiable_person(self):
+        """Case C: No identifiable person -> Returns NO VERIFIED PERSON, research required in brief."""
+        company = self._make_company()
+        brief = build_research_brief_with_persons(company, [])
+        self.assertEqual(brief["actual_person"]["name"], "NO VERIFIED PERSON FOUND")
+        self.assertEqual(brief["actual_person"]["verification_status"], "RESEARCH REQUIRED")
+        self.assertEqual(brief["actual_person"]["person_match_score"], 0)
+        self.assertIn("RESEARCH REQUIRED", brief["next_best_action"])
+
+    def test_case_d_outdated_person(self):
+        """Case D: Outdated person / low recency -> flags for research and verifies pending tasks."""
+        company = self._make_company()
+        candidate = {
+            "candidate_name": "Ramesh Gupta",
+            "candidate_title": "Ex Quality Manager",
+            "candidate_company_match": True,
+            "candidate_location": "Pune",
+            "evidence_url": "https://archive.org/profile",
+            "evidence_snippet": "Ramesh Gupta was Quality Manager at Bharat Forge Ltd until 2018.",
+            "search_type": "title_match",
+        }
+        res = verify_person_candidate(candidate, company)
+        # Low composite or pending research tasks generated
+        self.assertIn("pending_research_tasks", res)
+
+    def test_case_e_wrong_company(self):
+        """Case E: Wrong company -> Verification status is PERSON_REJECTED with reason company_mismatch."""
+        company = self._make_company(name="Bharat Forge Ltd")
+        candidate = {
+            "candidate_name": "Rajesh V. Patel",
+            "candidate_title": "Quality Head",
+            "candidate_company_match": False,
+            "candidate_location": "Dahej",
+            "evidence_url": "https://aarti-industries.com",
+            "evidence_snippet": "Rajesh Patel works at Aarti Industries Ltd Dahej.",
+            "search_type": "title_match",
+        }
+        res = verify_person_candidate(candidate, company)
+        self.assertEqual(res["verification_status"], "PERSON_REJECTED")
+        self.assertEqual(res["rejection_reason"], "company_mismatch")
+        self.assertFalse(res["apollo_eligible"])
+
+    def test_case_f_wrong_facility(self):
+        """Case F: Wrong facility/location -> Facility match score reflects distance/mismatch."""
+        company = self._make_company(name="Tata Motors", city="Pune")
+        candidate_same_city = {
+            "candidate_name": "Anil Deshpande",
+            "candidate_title": "Quality Manager",
+            "candidate_company_match": True,
+            "candidate_location": "Pune",
+            "evidence_url": "https://tatamotors.com",
+            "evidence_snippet": "Anil Deshpande Quality Manager Tata Motors Pune plant.",
+            "search_type": "title_match",
+        }
+        candidate_diff_city = {
+            "candidate_name": "Anil Deshpande",
+            "candidate_title": "Quality Manager",
+            "candidate_company_match": True,
+            "candidate_location": "Chennai",
+            "evidence_url": "https://tatamotors.com",
+            "evidence_snippet": "Anil Deshpande Quality Manager Tata Motors Chennai facility.",
+            "search_type": "title_match",
+        }
+        res_same = verify_person_candidate(candidate_same_city, company)
+        res_diff = verify_person_candidate(candidate_diff_city, company)
+        self.assertGreater(res_same["scores"]["facility_match"], res_diff["scores"]["facility_match"])
+
+    def test_case_g_apollo_no_result(self):
+        """Case G: Apollo no result -> Status NO_RESULT, email None, no fake contact substituted."""
+        from services.apollo_adapter import enrich_specific_person
+        with patch("requests.post") as mock_post:
+            mock_post.return_value.status_code = 200
+            mock_post.return_value.json.return_value = {"person": None}
+
+            with patch("services.apollo_adapter.settings") as mock_settings:
+                mock_settings.APOLLO_API_KEY = "test_key"
+                mock_settings.APOLLO_API_BASE_URL = "https://api.apollo.io/v1"
+                res = enrich_specific_person("Amit Kulkarni", "Bharat Forge Ltd", "Quality Manager")
+
+        self.assertEqual(res["status"], "NO_RESULT")
+        self.assertIsNone(res["email"])
+        self.assertFalse(res.get("mock_mode", False))
+
+    def test_case_h_apollo_authentication_failure(self):
+        """Case H: Apollo auth failure -> Status APOLLO_BLOCKED, no mock contacts substituted."""
+        from services.apollo_adapter import enrich_specific_person
+        with patch("requests.post") as mock_post:
+            mock_post.return_value.status_code = 401
+            mock_post.return_value.text = "Unauthorized"
+
+            with patch("services.apollo_adapter.settings") as mock_settings:
+                mock_settings.APOLLO_API_KEY = "invalid_key"
+                mock_settings.APOLLO_API_BASE_URL = "https://api.apollo.io/v1"
+                res = enrich_specific_person("Amit Kulkarni", "Bharat Forge Ltd")
+
+        self.assertEqual(res["status"], "APOLLO_BLOCKED")
+        self.assertIn("authentication failed", res["error"].lower())
+        self.assertIsNone(res["email"])
+        self.assertFalse(res.get("mock_mode", False))
+
+    def test_case_i_conflicting_evidence(self):
+        """Case I: Conflicting evidence -> Borderline role/company confidence generates adaptive pending research tasks."""
+        company = self._make_company()
+        candidate = {
+            "candidate_name": "Mahesh Joshi",
+            "candidate_title": "Engineering Lead",
+            "candidate_company_match": True,
+            "candidate_location": "Pune",
+            "evidence_url": "https://example.com/mention",
+            "evidence_snippet": "Mahesh Joshi is Engineering Lead at Bharat Forge Pune.",
+            "search_type": "title_match",
+        }
+        res = verify_person_candidate(candidate, company)
+        # Should generate pending research tasks to verify metrology/calibration role
+        self.assertGreater(len(res["pending_research_tasks"]), 0)
+        self.assertIn("pending_research_tasks", res)
+
+    def test_case_j_duplicate_person(self):
+        """Case J: Duplicate person -> Deduplication prevents duplicate candidates from search."""
+        results = [
+            {
+                "title": "Amit Kulkarni Quality Manager Bharat Forge",
+                "url": "https://site1.com/amit",
+                "snippet": "Amit Kulkarni Quality Manager at Bharat Forge Ltd Pune.",
+                "provider": "google",
+                "evidence_type": "WEB_EVIDENCE",
+                "persona": "Quality / Metrology",
+                "search_type": "title_match",
+            },
+            {
+                "title": "Amit Kulkarni - Quality Head Bharat Forge",
+                "url": "https://site2.com/amit",
+                "snippet": "Amit Kulkarni Head of Quality at Bharat Forge Ltd.",
+                "provider": "google",
+                "evidence_type": "WEB_EVIDENCE",
+                "persona": "Quality / Metrology",
+                "search_type": "title_match",
+            },
+        ]
+        candidates = extract_person_candidates(results, "Bharat Forge Ltd")
+        # Same person extracted only once
+        names = [c["candidate_name"].lower() for c in candidates]
+        self.assertEqual(names.count("amit kulkarni"), 1)
+
+    def test_case_k_person_found_but_no_email(self):
+        """Case K: Person found but Apollo returns no email -> Remains PERSON_PUBLICLY_VERIFIED, email NOT FOUND."""
+        from services.decision_maker_discovery import enrich_candidate_via_apollo
+        candidate = MagicMock()
+        candidate.candidate_name = "Amit Kulkarni"
+        candidate.candidate_title = "Quality Manager"
+        candidate.verification_status = "PERSON_PUBLICLY_VERIFIED"
+        candidate.verification_confidence = 0.85
+        candidate.apollo_enrichment_status = "NOT_ATTEMPTED"
+        candidate.apollo_email = None
+
+        db = MagicMock()
+        with patch("services.apollo_adapter.enrich_specific_person") as mock_enrich:
+            mock_enrich.return_value = {
+                "status": "NO_RESULT",
+                "email": None,
+                "email_confidence": None,
+                "phone": None,
+                "raw_response": None,
+            }
+            res = enrich_candidate_via_apollo(candidate, "Bharat Forge Ltd", db)
+
+        self.assertEqual(res["status"], "NO_RESULT")
+        self.assertIsNone(candidate.apollo_email)
+        # Should not falsely mark as APOLLO_ENRICHED if no email found
+        self.assertNotEqual(candidate.verification_status, "APOLLO_ENRICHED")
+
+    def test_case_l_email_found_but_not_verified(self):
+        """Case L: Email found (guessed/unverified) -> Stored as EMAIL_FOUND with LOW/MEDIUM confidence, distinct from EMAIL_VERIFIED."""
+        from services.decision_maker_discovery import enrich_candidate_via_apollo
+        candidate = MagicMock()
+        candidate.candidate_name = "Amit Kulkarni"
+        candidate.candidate_title = "Quality Manager"
+        candidate.verification_status = "PERSON_PUBLICLY_VERIFIED"
+        candidate.verification_confidence = 0.85
+        candidate.apollo_enrichment_status = "NOT_ATTEMPTED"
+        candidate.apollo_email = None
+        candidate.email_status = "NOT_FOUND"
+
+        db = MagicMock()
+        with patch("services.apollo_adapter.enrich_specific_person") as mock_enrich:
+            mock_enrich.return_value = {
+                "status": "ENRICHED",
+                "email": "amit.kulkarni@bharatforge.com",
+                "email_confidence": "LOW",
+                "email_status": "guessed",
+                "phone": None,
+                "raw_response": {"person": {"email": "amit.kulkarni@bharatforge.com", "email_status": "guessed"}},
+            }
+            res = enrich_candidate_via_apollo(candidate, "Bharat Forge Ltd", db)
+
+        self.assertEqual(res["status"], "ENRICHED")
+        self.assertEqual(candidate.apollo_email, "amit.kulkarni@bharatforge.com")
+        self.assertEqual(candidate.email_status, "EMAIL_FOUND")
+        # Crucial: Not EMAIL_VERIFIED
+        self.assertNotEqual(candidate.email_status, "EMAIL_VERIFIED")
 
 
 if __name__ == "__main__":

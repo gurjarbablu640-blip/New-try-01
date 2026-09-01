@@ -1,6 +1,6 @@
 """Company Website Intelligence model."""
 from sqlalchemy import (
-    Column, Integer, String, DateTime, ForeignKey, Text, ARRAY, Float, Boolean, func
+    Column, Integer, String, DateTime, ForeignKey, Text, JSON, Float, Boolean, func
 )
 from sqlalchemy.orm import relationship
 from database import Base
@@ -13,21 +13,21 @@ class CompanyWebsiteIntel(Base):
     company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), unique=True, nullable=False)
 
     # Instruments & Equipment
-    instruments_found = Column(ARRAY(Text), default=[])
-    oem_brands = Column(ARRAY(Text), default=[])
+    instruments_found = Column(JSON, default=[])
+    oem_brands = Column(JSON, default=[])
 
     # Certifications
-    iso_standards = Column(ARRAY(Text), default=[])
+    iso_standards = Column(JSON, default=[])
     certifications_expiry_hints = Column(Text)
 
     # Website analysis
     expansion_signals = Column(Text)
-    services_offered = Column(ARRAY(Text), default=[])
-    industries_served = Column(ARRAY(Text), default=[])
+    services_offered = Column(JSON, default=[])
+    industries_served = Column(JSON, default=[])
 
     # Reviews & Competitor Intel (Module 8f)
-    competitor_mentions = Column(ARRAY(Text), default=[])
-    review_pain_phrases = Column(ARRAY(Text), default=[])
+    competitor_mentions = Column(JSON, default=[])
+    review_pain_phrases = Column(JSON, default=[])
 
     # Metadata
     last_crawled_at = Column(DateTime)

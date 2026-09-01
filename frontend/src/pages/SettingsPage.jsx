@@ -150,15 +150,15 @@ export default function SettingsPage() {
 
   const renderStatusBadge = (configured, connectedStatus = null) => {
     if (connectedStatus === "CONNECTED") {
-      return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-emerald-900/60 text-emerald-300 border border-emerald-700">● Connected</span>;
+      return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-emerald-900/60 text-emerald-300 border border-emerald-700">● LIVE — VERIFIED</span>;
     }
     if (connectedStatus === "AUTHENTICATION_FAILED" || connectedStatus === "CONNECTION_FAILED") {
       return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-rose-900/60 text-rose-300 border border-rose-700">● Auth Failed</span>;
     }
     if (configured) {
-      return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-blue-900/60 text-blue-300 border border-blue-700">● Configured</span>;
+      return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-900/50 text-amber-300 border border-amber-700">● CONFIGURED — NOT LIVE TESTED</span>;
     }
-    return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700">● Not Configured</span>;
+    return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700">● NOT CONFIGURED</span>;
   };
 
   if (loading) {

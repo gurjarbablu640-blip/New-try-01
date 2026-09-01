@@ -163,16 +163,10 @@ def get_next_best_action(company_id: int, db: Session = None) -> Dict[str, Any]:
             "full_scope_ratio": asset_summary["nabl_fit_summary"]["full_scope_ratio"],
         }
 
-        # Try Claude first, fall back to rules
-        if settings.ANTHROPIC_API_KEY:
-            result = _claude_next_action(context)
-            if result:
-                # Save recommendation to pipeline
-                _save_recommendation(pipeline, result, db)
-                return result
-
-        # Fallback to rule-based
-        result = _rule_based_next_action(context)
+        # Try LLM provider if available, fall back to rule-based
+        result = _llm_next_action(context)
+        if not result:
+            result = _rule_based_next_action(context)
         _save_recommendation(pipeline, result, db)
         return result
 
@@ -189,12 +183,14 @@ def get_next_best_action(company_id: int, db: Session = None) -> Dict[str, Any]:
             db.close()
 
 
-def _claude_next_action(context: Dict) -> Optional[Dict]:
-    """Use Claude to determine next best action."""
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+def _llm_next_action(context: Dict) -> Optional[Dict]:
+    """Use configured LLM provider to determine next best action."""
+    from services.llm_provider import get_orchestrator_provider
+    provider = get_orchestrator_provider()
+    if not provider or not provider.is_available():
+        return None
 
+    try:
         signal_text = "\n".join([
             f"  - {s['type']}: {s['reason']}" for s in context.get("signals", [])
         ]) or "  None active"
@@ -230,37 +226,26 @@ Return JSON only:
   "message_draft": "ready-to-send message if applicable (null for WAIT or MARK actions)"
 }}"""
 
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+        resp = provider.complete(
+            system_prompt="You are an expert Indian B2B industrial sales director.",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
             max_tokens=500,
-            messages=[{"role": "user", "content": prompt}]
         )
-
-        response_text = response.content[0].text
-
-        # Parse JSON
-        try:
-            result = json.loads(response_text)
-        except json.JSONDecodeError:
-            # Try to extract JSON
-            start = response_text.index("{")
-            end = response_text.rindex("}") + 1
-            result = json.loads(response_text[start:end])
-
-        # Validate action
-        if result.get("action") not in VALID_ACTIONS:
-            result["action"] = "SEND_EMAIL"
-
-        result["ai_recommendation"] = (
-            f"AI recommends: {_action_to_human(result['action'])} "
-            f"{context.get('person_name', context['company_name'])} "
-            f"{result.get('timing', 'today')} — {result.get('reason', '')}"
-        )
-
-        return result
+        result = resp.parse_json()
+        if result and isinstance(result, dict):
+            if result.get("action") not in VALID_ACTIONS:
+                result["action"] = "SEND_EMAIL"
+            result["ai_recommendation"] = (
+                f"AI recommends: {_action_to_human(result['action'])} "
+                f"{context.get('person_name', context['company_name'])} "
+                f"{result.get('timing', 'today')} — {result.get('reason', '')}"
+            )
+            return result
+        return None
 
     except Exception as e:
-        logger.warning(f"Claude next action failed: {e}")
+        logger.error(f"LLM next action generation error: {e}")
         return None
 
 

@@ -140,6 +140,11 @@ def ingest_lab_scope_record(db: Session, parsed_data: Dict[str, Any]) -> NABLLab
         lab_scope.validity_date = parsed_data.get("validity_date", lab_scope.validity_date)
         lab_scope.state = parsed_data.get("state", lab_scope.state)
         lab_scope.city = parsed_data.get("city", lab_scope.city)
+        if parsed_data.get("data_provenance"):
+            lab_scope.data_provenance = parsed_data["data_provenance"]
+        # Clear existing parameters to prevent accidental duplication on re-upload
+        db.query(NABLScopeParameter).filter(NABLScopeParameter.lab_scope_id == lab_scope.id).delete()
+        db.flush()
     else:
         lab_scope = NABLLabScope(
             lab_name=parsed_data.get("lab_name", "Accredited Laboratory"),
@@ -151,6 +156,7 @@ def ingest_lab_scope_record(db: Session, parsed_data: Dict[str, Any]) -> NABLLab
             city=parsed_data.get("city", ""),
             source_file=parsed_data.get("source_file", ""),
             source_reference=parsed_data.get("source_reference", ""),
+            data_provenance=parsed_data.get("data_provenance", "PILOT_TEST_DATA"),
             active=True,
         )
         db.add(lab_scope)

@@ -1,6 +1,5 @@
 """Web research evidence captured for Sales OS company intelligence."""
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, JSON, func
 from database import Base
 
 
@@ -20,4 +19,4 @@ class WebResearchItem(Base):
     signal_type = Column(String(100), index=True)
     confidence = Column(Integer, default=50)
     evidence_type = Column(String(50), default="WEB_EVIDENCE")
-    metadata_json = Column(JSONB)
+    metadata_json = Column(JSON)

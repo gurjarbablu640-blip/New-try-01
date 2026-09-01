@@ -3,8 +3,7 @@
 Stores accredited laboratory metadata and granular parameter-level scope capabilities
 extracted from official NABL accreditation documents across Pan-India.
 """
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text, JSON, func
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -24,8 +23,9 @@ class NABLLabScope(Base):
     address = Column(Text)
     source_file = Column(String(500))
     source_reference = Column(String(200))
+    data_provenance = Column(String(50), default="PILOT_TEST_DATA", nullable=False, index=True)  # PILOT_TEST_DATA, USER_UPLOADED_REAL
     active = Column(Boolean, default=True, nullable=False, index=True)
-    metadata_json = Column(JSONB)
+    metadata_json = Column(JSON)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

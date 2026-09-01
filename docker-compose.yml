@@ -57,6 +57,22 @@ services:
 
 
   # ============================================================
+  # SEARXNG (Private Self-Hosted Search)
+  # ============================================================
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: salesoorja-searxng
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+
+
+  # ============================================================
   # FASTAPI BACKEND
   # ============================================================
 
@@ -84,9 +100,10 @@ services:
 
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
       APIFY_API_TOKEN: ${APIFY_API_TOKEN}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY}
+      SEARXNG_BASE_URL: http://searxng:8080
 
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: ${DEBUG}

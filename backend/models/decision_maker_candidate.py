@@ -7,9 +7,8 @@ Lifecycle statuses:
 Rejection: PERSON_REJECTED (with structured reason)
 """
 from sqlalchemy import (
-    Column, Integer, String, Float, Boolean, DateTime, Text, ForeignKey, func,
+    Column, Integer, String, Float, Boolean, DateTime, Text, JSON, ForeignKey, func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -83,7 +82,7 @@ class DecisionMakerCandidate(Base):
 
     # ── Persona ─────────────────────────────────────────────────────────
     target_persona = Column(String(200), nullable=False)  # e.g. "Quality / Metrology"
-    target_titles = Column(JSONB, default=[])  # ["Quality Head", "QA Manager", ...]
+    target_titles = Column(JSON, default=[])  # ["Quality Head", "QA Manager", ...]
     stakeholder_role = Column(String(50))  # User, Evaluator, Approver, Purchaser, etc.
     contact_priority = Column(String(20), default="SECONDARY")  # PRIMARY, SECONDARY
     priority_reason = Column(Text)  # Why this person was selected as primary
@@ -96,11 +95,11 @@ class DecisionMakerCandidate(Base):
     candidate_location = Column(String(300))
 
     # ── Evidence ────────────────────────────────────────────────────────
-    evidence_sources = Column(JSONB, default=[])
+    evidence_sources = Column(JSON, default=[])
     # Each entry: {source, url, snippet, retrieved_at, confidence, evidence_type}
     public_profile_url = Column(Text)
     public_profile_evidence = Column(Text)
-    search_queries_used = Column(JSONB, default=[])
+    search_queries_used = Column(JSON, default=[])
 
     # ── Verification ────────────────────────────────────────────────────
     verification_status = Column(String(50), default="PERSONA_INFERRED", index=True)
@@ -122,13 +121,13 @@ class DecisionMakerCandidate(Base):
     apollo_email = Column(String(300))
     apollo_email_confidence = Column(String(50))
     apollo_phone = Column(String(100))
-    apollo_response_json = Column(JSONB)
+    apollo_response_json = Column(JSON)
 
     # ── Email Status ────────────────────────────────────────────────────
     email_status = Column(String(30), default="NOT_FOUND")
 
     # ── Adaptive Research ───────────────────────────────────────────────
-    pending_research_tasks = Column(JSONB, default=[])
+    pending_research_tasks = Column(JSON, default=[])
     # Each: {task, reason, priority, status}
 
     # ── Timestamps ──────────────────────────────────────────────────────

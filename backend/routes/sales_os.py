@@ -470,6 +470,7 @@ def list_quotations(company_id: Optional[int] = None, status: Optional[str] = No
             "human_approved": bool(x.human_approved),
             "company_id": x.company_id,
             "opportunity_id": x.opportunity_id,
+            "data_provenance": getattr(x, "data_provenance", None) or "PILOT_TEST_DATA",
         } for x in items], "total": len(items)}
     finally:
         db.close()
@@ -1058,6 +1059,7 @@ class HistoricalQuoteImportRequest(BaseModel):
     total: float = 0.0
     outcome: Optional[str] = "Won"
     source_file: Optional[str] = "manual_import"
+    data_provenance: Optional[str] = "USER_PROVIDED_REAL_DATA"
     items: Optional[List[dict]] = None
     raw_quote_text: Optional[str] = None
 
@@ -1074,17 +1076,19 @@ def import_historical_quotation_endpoint(payload: HistoricalQuoteImportRequest):
             parsed["customer_name"] = payload.customer_name or parsed.get("customer_name")
             parsed["outcome"] = payload.outcome or parsed.get("outcome")
             parsed["location"] = payload.location or parsed.get("location")
+            parsed["data_provenance"] = payload.data_provenance or "USER_PROVIDED_REAL_DATA"
         else:
             parsed = payload.model_dump()
 
         quote = ingest_historical_quotation(db, parsed)
         return {
-            "status": "IMPORTED",
+            "status": "INGESTED SUCCESSFULLY",
             "quotation_id": quote.id,
             "quotation_number": quote.quotation_number,
             "customer_name": quote.customer_name,
             "line_items_indexed": len(quote.items),
             "total_value": float(quote.total or 0),
+            "data_provenance": quote.data_provenance,
             "message": "Historical quotation ingested successfully into pricing dataset.",
         }
     finally:
@@ -1094,16 +1098,26 @@ def import_historical_quotation_endpoint(payload: HistoricalQuoteImportRequest):
 @router.post("/quotations/upload-historical-file")
 async def upload_historical_quote_file(file: UploadFile = File(...)):
     """Accepts uploaded PDF/CSV/Text historical quotation, parses line items and prices, and returns review preview."""
+    from services.document_extractor import extract_text_from_bytes
     from services.historical_quote_importer import parse_historical_quote_text
 
     content = await file.read()
-    text_content = content.decode("utf-8", errors="ignore")
+    extracted = extract_text_from_bytes(content, filename=file.filename or "historical_quote.pdf")
+    text_content = extracted.get("text", "")
 
-    parsed = parse_historical_quote_text(text_content, source_file=file.filename)
+    parsed = parse_historical_quote_text(text_content, source_file=file.filename or "uploaded_quote")
+    parsed["data_provenance"] = "USER_PROVIDED_REAL_DATA"
+    parsed["extraction_status"] = extracted.get("status", "SUCCESS")
+    parsed["extraction_confidence"] = extracted.get("confidence", 0.9)
+    parsed["total_pages"] = extracted.get("total_pages", 1)
+    if extracted.get("warning"):
+        parsed["warning"] = extracted.get("warning")
+
     return {
         "status": "PARSED_FOR_REVIEW",
         "preview": parsed,
         "total_line_items_detected": len(parsed.get("items", [])),
+        "extraction_quality": extracted.get("status", "SUCCESS"),
         "message": "Review extracted line items and confirm import to update pricing intelligence database.",
     }
 
