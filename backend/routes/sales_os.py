@@ -19,13 +19,6 @@ from models.sales_os import (
     SalesNote,
     SalesTask,
 )
-from services.quotation_intelligence import (
-    ensure_instrument,
-    normalize_instrument_name,
-    price_recommendation,
-    similar_quote_items,
-    record_price_history,
-)
 
 router = APIRouter(prefix="/api/sales-os", tags=["Sales OS"])
 
@@ -1046,89 +1039,3 @@ def update_quotation_status(quotation_id: int, payload: QuotationStatusUpdate):
     finally:
         db.close()
 
-
-class HistoricalQuoteImportRequest(BaseModel):
-    quotation_number: Optional[str] = None
-    quotation_date: Optional[str] = None
-    customer_name: str
-    location: Optional[str] = "Pan-India"
-    calibration_type: Optional[str] = "NABL Calibration"
-    subtotal: float = 0.0
-    discount: float = 0.0
-    tax: float = 0.0
-    total: float = 0.0
-    outcome: Optional[str] = "Won"
-    source_file: Optional[str] = "manual_import"
-    data_provenance: Optional[str] = "USER_PROVIDED_REAL_DATA"
-    items: Optional[List[dict]] = None
-    raw_quote_text: Optional[str] = None
-
-
-@router.post("/quotations/import-historical")
-def import_historical_quotation_endpoint(payload: HistoricalQuoteImportRequest):
-    """Ingests historical quotation data to seed real statistical pricing models and history."""
-    from services.historical_quote_importer import parse_historical_quote_text, ingest_historical_quotation
-
-    db = db_session()
-    try:
-        if payload.raw_quote_text:
-            parsed = parse_historical_quote_text(payload.raw_quote_text, source_file=payload.source_file or "raw_text_entry")
-            parsed["customer_name"] = payload.customer_name or parsed.get("customer_name")
-            parsed["outcome"] = payload.outcome or parsed.get("outcome")
-            parsed["location"] = payload.location or parsed.get("location")
-            parsed["data_provenance"] = payload.data_provenance or "USER_PROVIDED_REAL_DATA"
-        else:
-            parsed = payload.model_dump()
-
-        quote = ingest_historical_quotation(db, parsed)
-        return {
-            "status": "INGESTED SUCCESSFULLY",
-            "quotation_id": quote.id,
-            "quotation_number": quote.quotation_number,
-            "customer_name": quote.customer_name,
-            "line_items_indexed": len(quote.items),
-            "total_value": float(quote.total or 0),
-            "data_provenance": quote.data_provenance,
-            "message": "Historical quotation ingested successfully into pricing dataset.",
-        }
-    finally:
-        db.close()
-
-
-@router.post("/quotations/upload-historical-file")
-async def upload_historical_quote_file(file: UploadFile = File(...)):
-    """Accepts uploaded PDF/CSV/Text historical quotation, parses line items and prices, and returns review preview."""
-    from services.document_extractor import extract_text_from_bytes
-    from services.historical_quote_importer import parse_historical_quote_text
-
-    content = await file.read()
-    extracted = extract_text_from_bytes(content, filename=file.filename or "historical_quote.pdf")
-    text_content = extracted.get("text", "")
-
-    parsed = parse_historical_quote_text(text_content, source_file=file.filename or "uploaded_quote")
-    parsed["data_provenance"] = "USER_PROVIDED_REAL_DATA"
-    parsed["extraction_status"] = extracted.get("status", "SUCCESS")
-    parsed["extraction_confidence"] = extracted.get("confidence", 0.9)
-    parsed["total_pages"] = extracted.get("total_pages", 1)
-    if extracted.get("warning"):
-        parsed["warning"] = extracted.get("warning")
-
-    return {
-        "status": "PARSED_FOR_REVIEW",
-        "preview": parsed,
-        "total_line_items_detected": len(parsed.get("items", [])),
-        "extraction_quality": extracted.get("status", "SUCCESS"),
-        "message": "Review extracted line items and confirm import to update pricing intelligence database.",
-    }
-
-
-@router.get("/quotations/historical/analytics")
-def get_historical_quote_analytics():
-    """Returns genuine statistical pricing benchmarks computed from imported historical quotations."""
-    from services.historical_quote_importer import get_historical_pricing_analytics
-
-    db = db_session()
-    try:
-        return get_historical_pricing_analytics(db)
-    finally:
-        db.close()

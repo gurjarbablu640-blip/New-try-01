@@ -28,15 +28,11 @@ export default function Sidebar({ collapsed, setCollapsed }) {
     { to: "/intelligence", label: "Decision Intel", icon: Zap, badge: "Core", highlight: true },
     { to: "/leads", label: "Lead Factory", icon: Users, badge: "AI" },
     { to: "/companies", label: "Companies 360", icon: Building2 },
+    { to: "/calibration", label: "Calibration Intel", icon: Gauge, badge: "NABL" },
     { to: "/pipeline", label: "Pipeline CRM", icon: GitPullRequest },
     { to: "/campaigns", label: "Campaigns", icon: Send },
     { to: "/inbox", label: "Sales Inbox", icon: Inbox, badge: "Live" },
-    { to: "/quotations", label: "Quotations", icon: FileText },
-    { to: "/calibration", label: "Calibration Intel", icon: Gauge, badge: "NABL" },
-    { to: "/competitors", label: "Competitors", icon: ShieldAlert },
-    { to: "/territory", label: "Territory / Trips", icon: MapPin },
     { to: "/analytics", label: "Sales Analytics", icon: BarChart3 },
-    { to: "/assistant", label: "Ask Oorja AI", icon: Bot },
     { to: "/settings", label: "Settings", icon: Settings },
   ];
 

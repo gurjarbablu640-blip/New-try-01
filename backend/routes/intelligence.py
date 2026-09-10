@@ -260,17 +260,6 @@ class DealOutcomeLoopRequest(BaseModel):
     instrument_category: str = "General"
 
 
-class CallRecordCreateRequest(BaseModel):
-    company_id: int
-    transcript_text: str
-    person_id: Optional[int] = None
-    salesperson_name: str = "Sales Rep"
-    duration_seconds: int = 240
-    call_channel: str = "Phone"
-    recording_file_url: Optional[str] = None
-    call_objective: str = "discovery"
-
-
 @router.post("/revenue-loop/reply")
 def reply_loop_endpoint(payload: EmailReplyLoopRequest, db: Session = Depends(get_db)):
     from services.revenue_loop_coordinator import process_incoming_email_reply_loop
@@ -310,36 +299,6 @@ def revenue_loop_audit_endpoint(company_id: int, db: Session = Depends(get_db)):
     if "error" in res:
         raise HTTPException(404, res["error"])
     return res
-
-
-@router.post("/calls/record")
-def record_call_endpoint(payload: CallRecordCreateRequest, db: Session = Depends(get_db)):
-    from services.call_recorder_service import log_completed_call
-    rec = log_completed_call(
-        db=db,
-        company_id=payload.company_id,
-        transcript_text=payload.transcript_text,
-        person_id=payload.person_id,
-        salesperson_name=payload.salesperson_name,
-        duration_seconds=payload.duration_seconds,
-        call_channel=payload.call_channel,
-        recording_file_url=payload.recording_file_url,
-        call_objective=payload.call_objective,
-    )
-    return {
-        "status": "call_recorded",
-        "call_id": rec.id,
-        "call_score": rec.call_score,
-        "buying_signals_detected": rec.buying_signals_detected,
-        "objections_detected": rec.objections_detected,
-    }
-
-
-@router.get("/calls/coaching-overview")
-def coaching_overview_endpoint(salesperson_name: Optional[str] = None, db: Session = Depends(get_db)):
-    from services.call_recorder_service import get_sales_coaching_overview
-    overview = get_sales_coaching_overview(db, salesperson_name=salesperson_name)
-    return overview
 
 
 # 10. Signal Discovery & Second-Order Causality Engine

@@ -36,7 +36,6 @@ from routes.scraper import router as scraper_router  # noqa: E402
 from routes.outreach import router as outreach_router  # noqa: E402
 from routes.activities import router as activities_router  # noqa: E402
 from routes.export import router as export_router  # noqa: E402
-from routes.orders import router as orders_router  # noqa: E402
 from routes.sales_os import router as sales_os_router  # noqa: E402
 from routes.knowledge import router as knowledge_router  # noqa: E402
 from routes.web_research import router as research_router  # noqa: E402
@@ -60,7 +59,6 @@ app.include_router(scraper_router)
 app.include_router(outreach_router)
 app.include_router(activities_router)
 app.include_router(export_router)
-app.include_router(orders_router)
 app.include_router(sales_os_router)
 app.include_router(knowledge_router)
 app.include_router(research_router)
@@ -94,7 +92,7 @@ async def root():
         "status": "running",
         "core_modules": [
             "Lead Generation", "CRM", "AI Sales Intelligence", "Web Research",
-            "Campaign Engine", "Quotation Intelligence", "Competitor Intelligence",
+            "Campaign Engine", "Competitor Intelligence",
             "Oorja Knowledge Base", "Learning Engine", "Sales Analytics", "Company 360",
         ],
     }
