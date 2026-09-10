@@ -184,7 +184,7 @@ class FollowUpEngine:
 
 Following our earlier note regarding measurement calibration for {facility}, I wanted to share a specific operational benchmark relevant to your facility's {opportunity}.
 
-For manufacturing facilities facing customer audits or equipment expansion, standard 10–14 day calibration turnaround often creates costly line bottlenecks. Oorja Technical Services provides a certified 48-to-72-hour expedited turnaround with on-site calibration teams for Dimensional, Thermal, Electro-Technical, and Pressure/Torque instrumentation under our ISO/IEC 17025:2017 NABL scope (CC-3963).
+For manufacturing facilities facing customer audits or equipment expansion, unaligned calibration schedules often create costly line bottlenecks. Oorja Technical Services provides ISO/IEC 17025:2017 accredited calibration (NABL Certificate CC-3963) for Dimensional, Thermal, Electro-Technical, and Mechanical instrumentation, aligned with plant audit deadlines and scheduled recalibration windows.
 
 Each certificate includes fully documented measurement uncertainty budgets (CMC) and calibration stickers compliant with IATF 16949 / ISO 9001 audit standards.
 
@@ -193,11 +193,10 @@ Would an uncertainty budget specimen or our scope schedule for {facility} be hel
 Best regards,
 
 Oorja Technical Services
-Engineering & Metrology Division
+Engineering & Metrology Services
 Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)
-Pune & Dahej Regional Metrology Centers
 """
-            value_focus = "48-72h turnaround SLA & measurement uncertainty specimen"
+            value_focus = "accredited calibration turnaround and measurement uncertainty schedule"
 
         elif stage == CADENCE_FOLLOW_UP_2_DUE or stage == "FOLLOW_UP_2":
             body_text = f"""Dear {first_name},
@@ -211,9 +210,8 @@ If your plant already has a locked-in calibration schedule under existing AMC, w
 Best regards,
 
 Oorja Technical Services
-Engineering & Metrology Division
+Engineering & Metrology Services
 Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)
-Pune & Dahej Regional Metrology Centers
 """
             value_focus = "traceability matrix review & consultative referral option"
 

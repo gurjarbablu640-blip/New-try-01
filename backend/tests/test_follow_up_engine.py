@@ -165,7 +165,7 @@ class TestFollowUpEngine(unittest.TestCase):
         fu1 = self.engine.generate_follow_up_copy(candidate, "FOLLOW_UP_1")
         self.assertIn("Sanand Plant", fu1["body_text"])
         self.assertIn("CC-3963", fu1["body_text"])
-        self.assertIn("48-to-72-hour", fu1["body_text"])
+        self.assertIn("ISO/IEC 17025:2017", fu1["body_text"])
         self.assertIn("Rajesh", fu1["body_text"])
         self.assertFalse(fu1["audit"]["has_forbidden_filler"])
         self.assertTrue(fu1["audit"]["facility_specific"])

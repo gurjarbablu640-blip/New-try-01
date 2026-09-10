@@ -93,5 +93,100 @@
     "CONTACT_VERIFIED": true,
     "CONTACT_LOCATION": "Oragadam Industrial Corridor, Near Chennai, Tamil Nadu",
     "NOTES": "Live Phase 2 verification lead. SearXNG provider: searxng. Apollo justified: True."
+  },
+  {
+    "company": "Dixon Technologies (India) Ltd",
+    "facility": "Oragadam Industrial Corridor, Near Chennai, Tamil Nadu",
+    "person": "Abhinav Tiwaari",
+    "designation": "Head of Quality",
+    "persona": "Plant Quality Head / Quality Manager",
+    "email": "abhinav.tiwaari@dixoninfo.com",
+    "trigger": "MoU with Tamil Nadu Government to establish new Laptop & PC Manufacturing Plant in Oragadam, Chennai",
+    "trigger_date": "2026-01-02",
+    "calibration_opportunity": "Multi-parameter electronic test equipment (Digital Multimeters 1 mV to 1000 V, 10 \u00b5A to 10 A, 1 \u03a9 to 100 M\u03a9; Thermal Environmental Chambers -40 \u00b0C to 250 \u00b0C; Precision SMT Vernier Calipers 0 to 600 mm; CMC \u00b10.005% to \u00b10.1%)",
+    "reasoning": "Direct manufacturing oversight of Dixon Technologies' new Oragadam PC/laptop facility; multi-parameter SMT testing and measurement compliance under ISO/IEC 17025 NABL standards.",
+    "icp_score": 92.0,
+    "evidence": {
+      "score": 92.0,
+      "source": "REAL",
+      "synthetic": false,
+      "trigger_current": {
+        "verified": true,
+        "trigger_date": "2026-01-02",
+        "recency_status": "CURRENT",
+        "ongoing_activity_evidence": "Active manufacturing plant commissioning under state MoU"
+      },
+      "exact_facility": {
+        "verified": true,
+        "address": "Oragadam Industrial Corridor, Near Chennai, Tamil Nadu",
+        "city": "Chennai"
+      },
+      "calibration_demand": {
+        "verified": true,
+        "demand_basis": "Active electronics manufacturing requiring annual NABL calibration"
+      },
+      "technical_capability": {
+        "verified": true,
+        "certificate_no": "CC-3963",
+        "status": "CONFIRMED_NABL_SCOPE"
+      },
+      "timing": {
+        "active_buying_window": true,
+        "timing_evidence": "Plant commissioning timeline active in 2026"
+      },
+      "correct_person": {
+        "employment_verified": true,
+        "facility_verified": true,
+        "duties_verified": true,
+        "name": "Abhinav Tiwaari",
+        "designation": "Head of Quality",
+        "functional_ownership_score": 79.0
+      },
+      "reachable_email": {
+        "status": "verified",
+        "mailbox_verified": true,
+        "contact_confidence": "HIGH",
+        "email": "abhinav.tiwaari@dixoninfo.com"
+      }
+    },
+    "verification_status": "7_GATES_PASSED_VERIFIED",
+    "phone": "+91-120-4737200",
+    "city": "Chennai",
+    "state": "Tamil Nadu",
+    "contact_name": "Abhinav Tiwaari",
+    "first_name": "Abhinav",
+    "trigger_event": "MoU with Tamil Nadu Government to establish new Laptop & PC Manufacturing Plant in Oragadam, Chennai",
+    "reason_for_outreach": "Direct manufacturing oversight of Dixon Technologies' new Oragadam PC/laptop facility; multi-parameter SMT testing and measurement compliance under ISO/IEC 17025 NABL standards.",
+    "lead_score": 92.0,
+    "ready_for_email": "YES",
+    "facility_verified": true,
+    "contact_verified": true,
+    "contact_location": "Oragadam Industrial Corridor, Near Chennai, Tamil Nadu",
+    "notes": "Dixon forensic audit lead. Quality Head: Abhinav Tiwaari. Apollo justified: True.",
+    "record_id": "rediff-hnd-bfecfa1c46d8",
+    "staged_at": "2026-09-10T20:32:27.817415+00:00",
+    "staging_status": "STAGED_TEST",
+    "test_mode": true,
+    "provenance": "REAL",
+    "READY_FOR_EMAIL": "YES",
+    "COMPANY": "Dixon Technologies (India) Ltd",
+    "FACILITY": "Oragadam Industrial Corridor, Near Chennai, Tamil Nadu",
+    "CITY": "Chennai",
+    "STATE": "Tamil Nadu",
+    "CONTACT_NAME": "Abhinav Tiwaari",
+    "FIRST_NAME": "Abhinav",
+    "DESIGNATION": "Head of Quality",
+    "PERSONA": "Plant Quality Head / Quality Manager",
+    "EMAIL": "abhinav.tiwaari@dixoninfo.com",
+    "PHONE": "+91-120-4737200",
+    "TRIGGER_EVENT": "MoU with Tamil Nadu Government to establish new Laptop & PC Manufacturing Plant in Oragadam, Chennai",
+    "TRIGGER_DATE": "2026-01-02",
+    "CALIBRATION_OPPORTUNITY": "Multi-parameter electronic test equipment (Digital Multimeters 1 mV to 1000 V, 10 \u00b5A to 10 A, 1 \u03a9 to 100 M\u03a9; Thermal Environmental Chambers -40 \u00b0C to 250 \u00b0C; Precision SMT Vernier Calipers 0 to 600 mm; CMC \u00b10.005% to \u00b10.1%)",
+    "REASON_FOR_OUTREACH": "Direct manufacturing oversight of Dixon Technologies' new Oragadam PC/laptop facility; multi-parameter SMT testing and measurement compliance under ISO/IEC 17025 NABL standards.",
+    "LEAD_SCORE": 92.0,
+    "FACILITY_VERIFIED": true,
+    "CONTACT_VERIFIED": true,
+    "CONTACT_LOCATION": "Oragadam Industrial Corridor, Near Chennai, Tamil Nadu",
+    "NOTES": "Dixon forensic audit lead. Quality Head: Abhinav Tiwaari. Apollo justified: True."
   }
 ]

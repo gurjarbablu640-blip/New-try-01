@@ -461,8 +461,8 @@ def discover_new_calibration_opportunities(
     except Exception as e:
         logger.warning("Live search discovery note: %s", e)
 
-    # Combine live search candidates with verified catalog
-    candidate_pool = live_search_candidates + [dict(c, data_provenance="PILOT_CATALOG_CANDIDATE") for c in filtered]
+    # Combine catalog candidates with live search candidates, ensuring state diversity
+    candidate_pool = [dict(c, data_provenance="PILOT_CATALOG_CANDIDATE") for c in filtered] + live_search_candidates
     discovered_candidates = []
     for candidate in candidate_pool[:limit]:
         ingested = ingest_discovered_signal_lead(

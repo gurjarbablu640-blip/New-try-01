@@ -212,6 +212,16 @@ class RediffBridge:
             or evidence.get("reachable_email", {}).get("mailbox_verified")
             or candidate_data.get("contact_verified", True)
         )
+        # Strict production send guard:
+        mailbox_verified = bool(evidence.get("reachable_email", {}).get("mailbox_verified"))
+        if production and not mailbox_verified:
+            return {
+                "success": False,
+                "reason": "Cannot stage for production send: Contact email is unverified/inferred (mailbox_verified=False). Transition to STAGED_TEST only.",
+                "record": None,
+            }
+
+        staging_status = "READY_FOR_PRODUCTION_SEND" if (production and not settings.OUTBOUND_TEST_MODE and mailbox_verified) else "STAGED_TEST"
 
         record = RediffHandoffRecord(
             company=candidate_data["company"],
@@ -241,6 +251,7 @@ class RediffBridge:
             evidence=evidence,
             verification_status="7_GATES_PASSED_VERIFIED",
             provenance=provenance,
+            staging_status=staging_status,
             test_mode=bool(settings.OUTBOUND_TEST_MODE),
         )
 
@@ -272,6 +283,8 @@ class RediffBridge:
         """List staged records in the queue."""
         records = self._load_queue()
         if status:
+            if status == "STAGED":
+                return [r for r in records if r.get("staging_status") in ("STAGED", "STAGED_TEST")]
             return [r for r in records if r.get("staging_status") == status]
         return records
 
@@ -285,7 +298,7 @@ class RediffBridge:
         if record_ids:
             target_records = [r for r in records if r.get("record_id") in record_ids]
         else:
-            target_records = [r for r in records if r.get("staging_status") == "STAGED"]
+            target_records = [r for r in records if r.get("staging_status") in ("STAGED", "STAGED_TEST", "READY_FOR_PRODUCTION_SEND")]
 
         if not target_records:
             return {
@@ -425,9 +438,8 @@ If you are not the direct functional owner for instrument calibration at {facili
 Best regards,
 
 Oorja Technical Services
-Engineering & Metrology Division
+Engineering & Metrology Services
 Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)
-Facilities: Pune & Dahej Regional Metrology Centers
 """
 
         body_html = f"""<!DOCTYPE html>
@@ -468,8 +480,8 @@ Facilities: Pune & Dahej Regional Metrology Centers
     </div>
     <p>Best regards,<br>
     <strong>Oorja Technical Services</strong><br>
-    Engineering & Metrology Division<br>
-    Pune & Dahej Regional Metrology Centers</p>
+    Engineering & Metrology Services<br>
+    Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)</p>
     <div class="footer">
       This outreach preview is generated under OUTBOUND_TEST_MODE. No live transmission has occurred.<br>
       CC: Bablu@oorjatechnical.org, piyushk@oorjatechnical.com
