@@ -215,3 +215,59 @@ async def crawl_company_pipeline(
 def crawl_company_pipeline_sync(company_domain_or_url: str, **kwargs: Any) -> Dict[str, Any]:
     """Synchronous entrypoint for pipeline callers."""
     return asyncio.run(crawl_company_pipeline(company_domain_or_url, **kwargs))
+
+
+_FACILITY_URL_CACHE: Dict[str, List[str]] = {}
+
+
+def discover_facility_pages(
+    domain: str,
+    html_text: Optional[str] = None,
+    max_pages: int = 4,
+    timeout: int = 8,
+) -> List[str]:
+    """Deep facility discovery: inspect root page navigation and cached paths for plant/manufacturing pages.
+
+    Crawls or scans the root domain for manufacturing, plant, facility, and infrastructure
+    sub-pages to locate physical plant operations in India.
+    """
+    clean_domain = domain.removeprefix("https://").removeprefix("http://").removeprefix("www.").strip().rstrip("/")
+    if clean_domain in _FACILITY_URL_CACHE:
+        return _FACILITY_URL_CACHE[clean_domain]
+
+    discovered: List[str] = []
+    keywords = [
+        "manufacturing", "facilities", "plants", "locations", "operations",
+        "factories", "infrastructure", "about-us", "production", "contact"
+    ]
+
+    if not html_text:
+        import urllib.request
+        base_url = f"https://www.{clean_domain}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 Salesoorja-Facility-Discovery/2.0",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        try:
+            req = urllib.request.Request(base_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                html_text = resp.read().decode("utf-8", errors="replace")
+        except Exception as exc:
+            logger.debug("discover_facility_pages root fetch failed for %s: %s", clean_domain, exc)
+            html_text = ""
+
+    if html_text:
+        links = re.findall(r'href=[\'"](/?[a-zA-Z0-9_\-\./]+)[\'"]', html_text)
+        seen: Set[str] = set()
+        for link in links:
+            clean = link.split("?")[0].split("#")[0].strip()
+            if any(k in clean.lower() for k in keywords):
+                if clean.startswith("http") and clean_domain in clean and clean not in seen:
+                    discovered.append(clean)
+                    seen.add(clean)
+                elif clean.startswith("/") and clean not in seen:
+                    discovered.append(f"https://www.{clean_domain}{clean}")
+                    seen.add(clean)
+
+    _FACILITY_URL_CACHE[clean_domain] = discovered[:max_pages]
+    return _FACILITY_URL_CACHE[clean_domain]

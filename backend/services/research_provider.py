@@ -254,6 +254,7 @@ class ResearchProviderRouter:
                 "q": query,
                 "format": "json",
                 "categories": "general",
+                "engines": "google,bing,brave",
                 "language": "en-IN",
             }
             try:

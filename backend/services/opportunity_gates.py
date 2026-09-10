@@ -174,10 +174,24 @@ def _facility_passes(value: Any, evidence: Mapping[str, Any]) -> tuple[bool, str
 
 
 def _person_passes(value: Any) -> tuple[bool, str, dict[str, Any]]:
-    """Enforce employment, duties, and strict person-facility linkage."""
+    """Enforce human name validity, employment, duties, and strict person-facility linkage."""
     if not isinstance(value, Mapping):
         passed = _truth(value)
         return passed, ("evidence present" if passed else "missing or insufficient person evidence"), {}
+
+    # Person name validation
+    name = str(value.get("name") or value.get("full_name") or value.get("candidate_name") or "").strip()
+    val_status = str(value.get("person_name_validation") or value.get("name_validation_status") or "").upper()
+    if not val_status and name:
+        from services.contact_confidence import validate_person_name
+        val_res = validate_person_name(name)
+        val_status = val_res["person_name_validation"]
+
+    if val_status == "INVALID_ROLE_TEXT":
+        return False, f"Person candidate name '{name}' is invalid role or functional text (INVALID_ROLE_TEXT)", {
+            "person_name_validation": "INVALID_ROLE_TEXT",
+            "candidate_name": name,
+        }
 
     emp = _truth(value.get("employment_verified"))
     duties = _truth(value.get("duties_verified"))
@@ -187,7 +201,9 @@ def _person_passes(value: Any) -> tuple[bool, str, dict[str, Any]]:
             missing.append("employment_verified")
         if not duties:
             missing.append("duties_verified")
-        return False, f"Person verification missing: {', '.join(missing)}", {}
+        return False, f"Person verification missing: {', '.join(missing)}", {
+            "person_name_validation": val_status or "UNKNOWN",
+        }
 
     # Person-to-facility linkage classification:
     # FACILITY_OWNER, GROUP_FUNCTION_OWNER, FUNCTIONALLY_RELEVANT, COMPANY_ONLY, UNKNOWN
@@ -207,17 +223,35 @@ def _person_passes(value: Any) -> tuple[bool, str, dict[str, Any]]:
             classification = "COMPANY_ONLY"
 
     if classification == "COMPANY_ONLY":
-        return False, "Person has company-level title only; plant facility ownership is not proven", {"classification": classification}
+        return False, "Person has company-level title only; plant facility ownership is not proven", {
+            "classification": classification,
+            "person_name_validation": val_status or "VALID",
+        }
     elif classification == "UNKNOWN":
-        return False, "Person-to-facility linkage is UNKNOWN", {"classification": classification}
+        return False, "Person-to-facility linkage is UNKNOWN", {
+            "classification": classification,
+            "person_name_validation": val_status or "VALID",
+        }
     elif classification == "FUNCTIONALLY_RELEVANT":
         if _truth(value.get("facility_verified")):
-            return True, "Person is functionally relevant with verified plant responsibilities", {"classification": classification}
-        return False, "Person has functional relevance but lacks verified facility or group-wide plant ownership", {"classification": classification}
+            return True, "Person is functionally relevant with verified plant responsibilities", {
+                "classification": classification,
+                "person_name_validation": val_status or "VALID",
+            }
+        return False, "Person has functional relevance but lacks verified facility or group-wide plant ownership", {
+            "classification": classification,
+            "person_name_validation": val_status or "VALID",
+        }
     elif classification in ("FACILITY_OWNER", "GROUP_FUNCTION_OWNER"):
-        return True, f"Person verified as {classification}", {"classification": classification}
+        return True, f"Person verified as {classification}", {
+            "classification": classification,
+            "person_name_validation": val_status or "VALID",
+        }
     else:
-        return False, f"Invalid person facility classification: {classification}", {"classification": classification}
+        return False, f"Invalid person facility classification: {classification}", {
+            "classification": classification,
+            "person_name_validation": val_status or "VALID",
+        }
 
 
 def _technical_capability_passes(value: Any) -> tuple[bool, str, dict[str, Any]]:
@@ -426,11 +460,22 @@ def _email_passes(value: Any) -> bool:
         status = str(value.get("status") or value.get("verification_status") or "").lower()
         if status in {"mx_only", "mx", "unverified", "risky", "unknown", "not_found"}:
             return False
+        address = str(value.get("address") or value.get("email") or "").strip()
+        if not address:
+            return False
+
+        # Generic corporate, investor relations, careers, support, and procurement emails cannot satisfy reachable-person gate
+        email_class = str(value.get("email_classification") or value.get("classification") or "").upper()
+        if not email_class:
+            from services.contact_confidence import classify_email_address
+            email_class = classify_email_address(address)["classification"]
+
+        if email_class in {"GENERIC_CORPORATE", "INVESTOR_RELATIONS", "CAREERS", "SUPPORT", "PROCUREMENT_GENERIC"}:
+            return False
+
         trusted = _truth(value.get("mailbox_verified")) or _truth(value.get("trusted_verification"))
         assessment = str(value.get("contact_confidence") or "").upper()
-        address = value.get("address") or value.get("email")
-        return (status in {"verified", "email_verified", "deliverable"} and trusted and assessment in {"VERIFIED", "HIGH", "DIRECT"}
-                and bool(str(address or "").strip()))
+        return (status in {"verified", "email_verified", "deliverable"} and trusted and assessment in {"VERIFIED", "HIGH", "DIRECT"})
     return False
 
 
@@ -577,3 +622,145 @@ def evaluate_company_opportunity(db: Any, company_id: int, *, production: bool =
     )
     result.update({"company_id": company.id, "company_name": company.name})
     return result
+
+
+def evaluate_apollo_credit_gate(evidence: Mapping[str, Any]) -> dict[str, Any]:
+    """Strictly evaluate whether a lead qualifies for paid Apollo contact enrichment.
+
+    All of the following MUST be satisfied:
+    A. Current/valid trigger passes (recency CURRENT or RECENT with ongoing activity)
+    B. Trigger-facility linkage is DIRECT or STRONG
+    C. Exact facility verified
+    D. Calibration consequence matches Oorja scope (CONFIRMED_NABL_SCOPE or verified service)
+    E. Buying timing is sufficiently current (active expansion, commissioning, hiring, etc.)
+    F. A REAL HUMAN decision-maker is confidently identified (person_name_validation in {"VALID", "PROBABLE"})
+    G. Person classification is FACILITY_OWNER, GROUP_FUNCTION_OWNER, or strong FUNCTIONALLY_RELEVANT
+       (COMPANY_ONLY, UNKNOWN, INVALID_ROLE_TEXT must NEVER qualify!)
+    H. Missing person-specific email or direct mobile is the main remaining blocker.
+    """
+    from services.contact_confidence import classify_email_address, validate_person_name
+
+    evidence = evidence or {}
+    criteria = {}
+
+    # A. Trigger current
+    trig_val = _evidence_value(evidence, "trigger_current")
+    trig_pass, trig_reason, _ = _trigger_passes(trig_val)
+    criteria["trigger_current"] = {"passed": trig_pass, "reason": trig_reason}
+
+    # B. Trigger-facility linkage
+    tf_conf = "DIRECT"
+    if isinstance(trig_val, Mapping):
+        tf_conf = str(trig_val.get("trigger_facility_confidence") or trig_val.get("linkage_confidence") or "DIRECT").upper()
+    tf_pass = tf_conf in {"DIRECT", "STRONG"}
+    criteria["trigger_facility_linkage"] = {
+        "passed": tf_pass,
+        "confidence": tf_conf,
+        "reason": f"Linkage is {tf_conf}" if tf_pass else "Trigger-to-facility linkage is WEAK",
+    }
+
+    # C. Exact facility verified
+    fac_val = _evidence_value(evidence, "exact_facility")
+    fac_pass, fac_reason, _ = _facility_passes(fac_val, evidence)
+    criteria["exact_facility"] = {"passed": fac_pass, "reason": fac_reason}
+
+    # D. Calibration consequence / Oorja scope
+    cap_val = _evidence_value(evidence, "technical_capability")
+    cap_pass, cap_reason, _ = _technical_capability_passes(cap_val)
+    criteria["technical_capability"] = {"passed": cap_pass, "reason": cap_reason}
+
+    # E. Buying timing
+    timing_val = _evidence_value(evidence, "timing")
+    timing_pass, timing_reason, _ = _timing_passes(timing_val, evidence)
+    criteria["timing"] = {"passed": timing_pass, "reason": timing_reason}
+
+    # F. Real human decision maker (NOT invalid role text)
+    person_val = _evidence_value(evidence, "correct_person")
+    person_dict = person_val if isinstance(person_val, Mapping) else {}
+    candidate_name = str(person_dict.get("name") or person_dict.get("full_name") or person_dict.get("candidate_name") or "").strip()
+    val_res = validate_person_name(candidate_name)
+    name_val_status = val_res["person_name_validation"]
+    human_pass = (name_val_status in {"VALID", "PROBABLE"} and bool(candidate_name))
+    criteria["real_human_person"] = {
+        "passed": human_pass,
+        "name": candidate_name,
+        "person_name_validation": name_val_status,
+        "reason": f"Candidate '{candidate_name}' is {name_val_status}" if human_pass else f"Candidate name '{candidate_name}' is {name_val_status} (not a real human name)",
+    }
+
+    # G. Person facility classification
+    person_class = str(
+        person_dict.get("facility_classification")
+        or person_dict.get("classification")
+        or person_dict.get("person_facility_classification")
+        or ""
+    ).upper()
+    if not person_class:
+        if _truth(person_dict.get("facility_verified")):
+            person_class = "FACILITY_OWNER"
+        else:
+            person_class = "COMPANY_ONLY"
+
+    if person_class in {"COMPANY_ONLY", "UNKNOWN", "INVALID_ROLE_TEXT"}:
+        class_pass = False
+        class_reason = f"Person classification '{person_class}' cannot trigger Apollo (requires plant or group authority)"
+    elif person_class in {"FACILITY_OWNER", "GROUP_FUNCTION_OWNER"}:
+        class_pass = True
+        class_reason = f"Person is verified as {person_class}"
+    elif person_class == "FUNCTIONALLY_RELEVANT":
+        # Allowed only if facility verified or strong supporting role evidence
+        is_strong = _truth(person_dict.get("facility_verified")) or _truth(person_dict.get("current_employment_verified"))
+        class_pass = bool(is_strong)
+        class_reason = "Functionally relevant person with verified plant role" if class_pass else "Functionally relevant person lacks sufficient plant-level evidence"
+    else:
+        class_pass = False
+        class_reason = f"Unrecognized person classification: {person_class}"
+
+    criteria["person_authority"] = {
+        "passed": class_pass,
+        "classification": person_class,
+        "reason": class_reason,
+    }
+
+    # H. Missing direct contact info
+    email_val = _evidence_value(evidence, "reachable_email")
+    email_dict = email_val if isinstance(email_val, Mapping) else {}
+    curr_addr = str(email_dict.get("address") or email_dict.get("email") or "").strip()
+    email_class = classify_email_address(curr_addr)["classification"]
+    email_status = str(email_dict.get("status") or email_dict.get("verification_status") or "").upper()
+
+    # If email is already VERIFIED and PERSON_SPECIFIC, direct contact is already present
+    has_verified_direct_email = (email_status in {"VERIFIED", "EMAIL_VERIFIED"} and email_class == "PERSON_SPECIFIC")
+    phone_val = evidence.get("phone") or person_dict.get("phone")
+    phone_dict = phone_val if isinstance(phone_val, Mapping) else {}
+    has_direct_mobile = bool(phone_dict.get("is_direct_mobile"))
+
+    needs_contact = not (has_verified_direct_email and has_direct_mobile)
+    criteria["missing_direct_contact"] = {
+        "passed": needs_contact,
+        "has_verified_direct_email": has_verified_direct_email,
+        "has_direct_mobile": has_direct_mobile,
+        "reason": "Direct person email or mobile is missing (Apollo can provide direct contact)" if needs_contact else "Direct verified email and mobile already exist",
+    }
+
+    all_passed = (
+        trig_pass and tf_pass and fac_pass and cap_pass and timing_pass
+        and human_pass and class_pass and needs_contact
+    )
+
+    if all_passed:
+        status = "QUALIFIED_FOR_APOLLO"
+        reason = f"All 8 Apollo criteria met: Real human decision-maker '{candidate_name}' ({person_class}) at verified facility with active trigger; missing direct contact data."
+    else:
+        status = "NOT_QUALIFIED"
+        failed = [k for k, v in criteria.items() if not v["passed"]]
+        failed_reasons = [criteria[k]["reason"] for k in failed[:2]]
+        reason = f"Apollo gate blocked ({', '.join(failed)}): {'; '.join(failed_reasons)}"
+
+    return {
+        "passed": all_passed,
+        "apollo_recommended": all_passed,
+        "status": status,
+        "reason": reason,
+        "criteria": criteria,
+    }

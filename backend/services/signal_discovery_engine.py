@@ -517,3 +517,39 @@ def discover_new_calibration_opportunities(
         "candidates": discovered_candidates,
     }
 
+
+def generate_industrial_trigger_query(company_name: str) -> str:
+    """Generate an industrial trigger query with negative financial and stock keywords.
+
+    Ensures web and SearXNG research prioritizes capex, commissioning, plant expansions,
+    machinery setup, and metrology rather than stock prices, brokerage ratings, and equity noise.
+    """
+    clean_name = company_name.strip()
+    return (
+        f'{clean_name} ("new plant" OR "manufacturing facility" OR "commissioning" OR '
+        f'"commercial production" OR "capacity expansion" OR "new production line" OR '
+        f'"new machinery" OR "new laboratory" OR "metrology" OR "capex commissioning" OR '
+        f'"production ramp-up") -stock -share -"target price" -brokerage -"price target" -trading'
+    )
+
+
+def filter_negative_financial_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Filter out pure stock/share price articles from trigger results while preserving genuine industrial capex news."""
+    clean_results = []
+    for r in results:
+        combo = (r.get("title", "") + " " + r.get("snippet", "")).lower()
+        is_pure_financial = (
+            any(fin in combo for fin in [
+                "share price", "stock price", "price target", "target price",
+                "buy rating", "brokerage recommendation", "nse live", "bse live",
+                "quarterly profit", "sensex today", "nifty 50"
+            ])
+            and not any(ind in combo for ind in [
+                "plant", "capex", "commission", "facility", "expansion",
+                "factory", "line", "production", "capacity", "laboratory", "metrology"
+            ])
+        )
+        if not is_pure_financial:
+            clean_results.append(r)
+    return clean_results if clean_results else results
+

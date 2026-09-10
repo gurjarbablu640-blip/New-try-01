@@ -33,6 +33,7 @@ from models.decision_maker_candidate import (
     REJECTION_REASONS,
     STAKEHOLDER_ROLES,
 )
+from services.contact_confidence import validate_person_name
 from services.research_provider import research_router, PROVIDER_LIVE, PROVIDER_NOT_CONFIGURED
 
 logger = logging.getLogger(__name__)
@@ -409,6 +410,189 @@ def extract_person_candidates(
     return candidates
 
 
+GENERIC_SECTOR_STOP_WORDS = {
+    "limited", "ltd", "private", "pvt", "inc", "corp", "corporation",
+    "co", "the", "of", "and", "&", "india", "technologies", "technology",
+    "tech", "laboratories", "laboratory", "labs", "lab", "energy",
+    "industries", "industry", "solutions", "services", "enterprises",
+    "enterprise", "group", "holdings", "systems", "products", "international"
+}
+
+OTHER_KNOWN_COMPANIES = [
+    "dr. reddy", "dr reddy", "dr.reddy", "sun pharma", "cipla", "lupin",
+    "aurobindo", "zydus", "torrent pharma", "biocon", "mankind pharma",
+    "hetero", "laurus labs", "natco", "alkem", "glenmark", "abbott", "pfizer",
+    "lava", "panasonic", "foxconn", "optiemus", "bhagwati", "micromax",
+    "samsung", "apple", "xiaomi", "jabil", "flextronics", "pegatron", "wistron",
+    "maruti suzuki", "maruti", "tata motors", "mahindra", "hyundai", "honda",
+    "toyota", "bajaj auto", "hero motocorp", "bosch", "denso", "motherson",
+    "endurance", "subros", "talbros", "kalyani", "bharat forge",
+    "siemens", "abb", "schneider", "l&t", "larsen & toubro", "bhel",
+    "gamesa", "vestas", "inox wind", "ge vernova", "ge renewable", "enercon",
+    "hal", "bel", "isro", "airbus", "boeing", "lockheed", "safran", "collins aerospace"
+]
+
+
+def classify_company_evidence(
+    candidate_name: str,
+    evidence_text: str,
+    target_company_name: str,
+    target_domain: str = "",
+) -> Dict[str, Any]:
+    """Classify the company evidence for a candidate into one of 6 classes:
+    - EXACT_CURRENT_COMPANY: Explicitly and currently employed at target company.
+    - STRONG_CURRENT_COMPANY: Strong indicators of current role at target company.
+    - AMBIGUOUS_COMPANY: Ambiguous mention, multiple companies, or unconfirmed link (requires corroboration).
+    - OTHER_COMPANY: Associated with a different company (competitor, client, other firm).
+    - FORMER_COMPANY: Past employee (ex-, former, previously at, past:, until).
+    - UNKNOWN: Insufficient evidence of any company affiliation.
+
+    Returns:
+        company_evidence_status: str
+        is_current_employee: bool
+        passes_current_employment: bool
+        requires_corroboration: bool
+        reason: str
+    """
+    text = (evidence_text or "").strip()
+    text_lower = text.lower()
+    comp_lower = (target_company_name or "").lower().strip()
+    cand_lower = (candidate_name or "").lower().strip()
+
+    if not text or not comp_lower:
+        return {
+            "company_evidence_status": "UNKNOWN",
+            "is_current_employee": False,
+            "passes_current_employment": False,
+            "requires_corroboration": False,
+            "reason": "Empty evidence text or target company name for verification"
+        }
+
+    # Extract core distinctive tokens of target company
+    raw_tokens = re.findall(r'[a-z0-9]+', comp_lower)
+    core_tokens = [t for t in raw_tokens if t not in GENERIC_SECTOR_STOP_WORDS and len(t) >= 3]
+    if not core_tokens:
+        core_tokens = [t for t in raw_tokens if len(t) >= 3]
+
+    has_target_core = any(ct in text_lower for ct in core_tokens)
+
+    # 1. Check for FORMER_COMPANY
+    former_patterns = [
+        r'\b(?:ex-|former|previously\s+at|past\s*:|prior\s+to|was\s+at|served\s+as.*?until|left\s+)\b.*?(?:' + '|'.join(re.escape(t) for t in core_tokens) + r')',
+        r'(?:' + '|'.join(re.escape(t) for t in core_tokens) + r').*?\b(?:until|till|\d{4}\s*-\s*20(?:1\d|2[0-4])\b)',
+        r'\b(?:former|ex-)\s+[a-zA-Z\s,]+?\bat\s+(?:' + '|'.join(re.escape(t) for t in core_tokens) + r')',
+    ]
+    if any(re.search(pat, text_lower) for pat in former_patterns):
+        return {
+            "company_evidence_status": "FORMER_COMPANY",
+            "is_current_employee": False,
+            "passes_current_employment": False,
+            "requires_corroboration": False,
+            "reason": f"Evidence indicates former or past tenure at {target_company_name}, not current employment"
+        }
+
+    # 2. Check for OTHER_COMPANY (Cross-company contamination)
+    detected_other = []
+    for other in OTHER_KNOWN_COMPANIES:
+        if any(ct in other for ct in core_tokens):
+            continue
+        if re.search(r'\b' + re.escape(other) + r'\b', text_lower):
+            detected_other.append(other)
+
+    other_appointment_patterns = [
+        r'([a-z0-9&.\'\s]{3,35}?(?:laboratories|pharma|technologies|motors|electronics|energy|industries|ltd|limited))\s+(?:has\s+)?(?:elevated|appointed|promoted|named|hired)\s+([a-z\s]+)',
+        r'([a-z\s]+)\s+(?:elevated|appointed|promoted|named|hired)\s+as\s+[a-z\s]+?\s+at\s+([a-z0-9&.\'\s]{3,35})',
+    ]
+    for pat in other_appointment_patterns:
+        m = re.search(pat, text_lower)
+        if m:
+            comp_part = m.group(1).strip()
+            if not any(ct in comp_part for ct in core_tokens):
+                return {
+                    "company_evidence_status": "OTHER_COMPANY",
+                    "is_current_employee": False,
+                    "passes_current_employment": False,
+                    "requires_corroboration": False,
+                    "reason": f"Candidate is explicitly associated with another company ('{comp_part.title()}') rather than target company {target_company_name}"
+                }
+
+    # If target core token is completely absent from the text:
+    if not has_target_core:
+        if detected_other:
+            return {
+                "company_evidence_status": "OTHER_COMPANY",
+                "is_current_employee": False,
+                "passes_current_employment": False,
+                "requires_corroboration": False,
+                "reason": f"Target company '{target_company_name}' absent; snippet refers to other company: {', '.join(detected_other)}"
+            }
+        return {
+            "company_evidence_status": "UNKNOWN",
+            "is_current_employee": False,
+            "passes_current_employment": False,
+            "requires_corroboration": False,
+            "reason": f"Target company '{target_company_name}' core name not found in evidence text"
+        }
+
+    # Target core token IS present. But does candidate belong to target or other company?
+    if detected_other:
+        cand_tokens = cand_lower.split()
+        surname = cand_tokens[-1] if cand_tokens else ""
+        for other in detected_other:
+            pat_other = r'\b' + re.escape(other) + r'\b.*?\b' + re.escape(surname) + r'\b'
+            pat_other_rev = r'\b' + re.escape(surname) + r'\b.*?\bat\s+' + re.escape(other) + r'\b'
+            if (surname and (re.search(pat_other, text_lower) or re.search(pat_other_rev, text_lower))) and not re.search(r'\bat\s+(?:' + '|'.join(re.escape(t) for t in core_tokens) + r')', text_lower):
+                return {
+                    "company_evidence_status": "OTHER_COMPANY",
+                    "is_current_employee": False,
+                    "passes_current_employment": False,
+                    "requires_corroboration": False,
+                    "reason": f"Candidate is associated with other company '{other.title()}' in multi-company context"
+                }
+
+        # Multiple companies without clear current attachment -> AMBIGUOUS_COMPANY
+        if not re.search(r'\b(?:at|with)\s+(?:' + '|'.join(re.escape(t) for t in core_tokens) + r')\b', text_lower):
+            return {
+                "company_evidence_status": "AMBIGUOUS_COMPANY",
+                "is_current_employee": False,
+                "passes_current_employment": False,
+                "requires_corroboration": True,
+                "reason": f"Multiple companies mentioned ({', '.join(detected_other)} and {target_company_name}); current employer is ambiguous"
+            }
+
+    # 3. Check for EXACT_CURRENT_COMPANY vs STRONG_CURRENT_COMPANY
+    direct_patterns = [
+        r'\b(?:at|working\s+at|currently\s+at)\s+(?:' + '|'.join(re.escape(t) for t in core_tokens) + r')\b',
+        r'(?:' + '|'.join(re.escape(t) for t in core_tokens) + r')\b.*?(?:plant\s+head|quality|manager|engineer|lead|head)\b',
+        r'\b(?:plant\s+head|quality\s+head|manager|incharge)\s+at\s+(?:' + '|'.join(re.escape(t) for t in core_tokens) + r')\b',
+        r'linkedin\s*-\s*[a-z\s]+.*?(?:' + '|'.join(re.escape(t) for t in core_tokens) + r')\b',
+    ]
+    if any(re.search(pat, text_lower) for pat in direct_patterns):
+        if comp_lower in text_lower or (target_domain and target_domain in text_lower):
+            return {
+                "company_evidence_status": "EXACT_CURRENT_COMPANY",
+                "is_current_employee": True,
+                "passes_current_employment": True,
+                "requires_corroboration": False,
+                "reason": f"Directly and currently verified at {target_company_name}"
+            }
+        return {
+            "company_evidence_status": "STRONG_CURRENT_COMPANY",
+            "is_current_employee": True,
+            "passes_current_employment": True,
+            "requires_corroboration": False,
+            "reason": f"Strong current role indicators at {target_company_name}"
+        }
+
+    return {
+        "company_evidence_status": "AMBIGUOUS_COMPANY",
+        "is_current_employee": False,
+        "passes_current_employment": False,
+        "requires_corroboration": True,
+        "reason": f"Target company name '{target_company_name}' present, but direct role attachment to candidate is unconfirmed"
+    }
+
+
 def _fuzzy_company_match(text: str, company_name: str) -> float:
     """Calculate fuzzy match score between text and company name."""
     text_lower = text.lower()
@@ -418,11 +602,12 @@ def _fuzzy_company_match(text: str, company_name: str) -> float:
     if company_lower in text_lower:
         return 1.0
 
-    # Key word overlap
-    company_words = set(company_lower.split())
-    # Remove common stop words
-    stop_words = {"ltd", "pvt", "limited", "private", "inc", "co", "the", "of", "and", "&"}
-    company_words -= stop_words
+    # Key word overlap excluding generic sector words
+    company_words = set(re.findall(r'[a-z0-9]+', company_lower))
+    company_words -= GENERIC_SECTOR_STOP_WORDS
+    if not company_words:
+        # Fallback to non-stop words
+        company_words = set(re.findall(r'[a-z0-9]+', company_lower)) - {"ltd", "pvt", "limited", "private", "inc", "co", "the", "and"}
     if not company_words:
         return 0.0
 
@@ -430,9 +615,15 @@ def _fuzzy_company_match(text: str, company_name: str) -> float:
     return matches / len(company_words)
 
 
+
 def _is_non_name(name: str) -> bool:
     """Filter out common false-positive name patterns."""
-    name_lower = name.lower().strip()
+    name_clean = name.strip()
+    val_res = validate_person_name(name_clean)
+    if not val_res.get("is_human_name", True) or val_res.get("person_name_validation") == "INVALID_ROLE_TEXT":
+        return True
+
+    name_lower = name_clean.lower()
     non_names = {
         "quality head", "plant head", "quality manager", "purchase manager",
         "corporate quality head", "plant quality head", "senior manager",
@@ -461,7 +652,7 @@ def _is_non_name(name: str) -> bool:
         "testing", "instrumentation", "services", "solutions",
     )):
         return True
-    return len(name.split()) > 4 or len(name.split()) < 2
+    return len(name_clean.split()) > 4 or len(name_clean.split()) < 2
 
 
 def _extract_title_near_name(text: str, name: str, title_keywords: list) -> Optional[str]:
@@ -1400,3 +1591,266 @@ def get_company_decision_makers(
             "rejected": sum(1 for c in candidates if c.verification_status == "PERSON_REJECTED"),
         },
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# STEP 9: Functional Calibration Ownership Hierarchy & Candidate Ranking
+# ═════════════════════════════════════════════════════════════════════════
+
+FUNCTIONAL_HIERARCHY_LEVELS = [
+    "METROLOGY_CALIBRATION_OWNER",        # 1. Metrology / Calibration owner
+    "PLANT_QUALITY_HEAD",                 # 2. Plant Quality Head / Quality Manager / QA-QC Head
+    "INSTRUMENTATION_VALIDATION_OWNER",   # 3. Instrumentation / Validation / Testing owner
+    "MAINTENANCE_HEAD",                   # 4. Maintenance Head where calibration ownership is credible
+    "PLANT_OPERATIONS_HEAD",              # 5. Plant Operations / Plant Head / Works Manager
+    "PROCUREMENT_VENDOR_DEV",             # 6. Procurement / Vendor Development
+    "GENERAL_CORPORATE_EXECUTIVE",        # 7. Senior general corporate / non-functional
+]
+
+
+def classify_functional_role(title: str, snippet: str = "") -> Tuple[str, str, int]:
+    """Classify person into functional hierarchy level for calibration procurement.
+
+    Preferred hierarchy:
+    1. Metrology / Calibration owner (25 pts)
+    2. Plant Quality Head / Quality Manager / QA-QC Head (22 pts)
+    3. Instrumentation / Validation / Testing owner (20 pts)
+    4. Maintenance Head where calibration ownership is credible (16 pts)
+    5. Plant Operations / Plant Head only when evidence shows ownership or no stronger specialist exists (12 pts)
+    6. Procurement / Vendor Development only when appropriate for supplier onboarding (8 pts)
+    7. General Corporate Executive (4 pts)
+
+    Returns: (function_name, hierarchy_level, base_duties_score_max_25)
+    """
+    t_lower = (title or "").lower()
+    s_lower = (snippet or "").lower()
+
+    # 1. Metrology / Calibration owner
+    if any(k in t_lower for k in ["metrology", "calibration", "standards room", "dimensional lab", "standards lab"]):
+        return ("Metrology / Calibration", "METROLOGY_CALIBRATION_OWNER", 25)
+    if "calibration" in s_lower and any(k in t_lower for k in ["quality", "instrumentation", "lab"]):
+        return ("Metrology / Calibration", "METROLOGY_CALIBRATION_OWNER", 25)
+
+    # 2. Plant Quality Head / Quality Manager / QA-QC Head
+    if any(k in t_lower for k in [
+        "plant quality", "quality head", "head quality", "head of quality",
+        "qa head", "qc head", "quality manager", "qa manager", "qc manager",
+        "manager quality", "dgm quality", "agm quality", "gm quality",
+        "vp quality", "head qa", "head - quality", "head- quality"
+    ]):
+        return ("Plant Quality / QA-QC", "PLANT_QUALITY_HEAD", 22)
+    if "quality" in t_lower and any(k in t_lower for k in ["assurance", "control", "qms", "iatf", "cqo", "inspection"]):
+        return ("Plant Quality / QA-QC", "PLANT_QUALITY_HEAD", 22)
+
+    # 3. Instrumentation / Validation / Testing owner
+    if any(k in t_lower for k in ["instrumentation", "validation", "testing", "test lab", "cqa", "analytical"]):
+        return ("Instrumentation / Testing", "INSTRUMENTATION_VALIDATION_OWNER", 20)
+
+    # 4. Maintenance Head where calibration ownership is credible
+    if any(k in t_lower for k in [
+        "maintenance head", "head maintenance", "maintenance manager",
+        "chief engineer", "plant engineer", "engineering manager", "head engineering"
+    ]):
+        return ("Maintenance / Engineering", "MAINTENANCE_HEAD", 16)
+
+    # 5. Plant Operations / Plant Head
+    if any(k in t_lower for k in [
+        "plant head", "works manager", "factory manager", "operations head",
+        "head operations", "avp operations", "vp operations", "gm operations",
+        "unit head", "general manager operations", "production head", "head of plant"
+    ]):
+        return ("Plant Operations", "PLANT_OPERATIONS_HEAD", 12)
+
+    # 6. Procurement / Vendor Development
+    if any(k in t_lower for k in ["purchase", "procurement", "vendor development", "sourcing", "supply chain"]):
+        return ("Procurement / Commercial", "PROCUREMENT_VENDOR_DEV", 8)
+
+    # 7. Generic corporate
+    return ("Corporate Executive", "GENERAL_CORPORATE_EXECUTIVE", 4)
+
+
+def score_candidate_functional_ownership(
+    candidate: Dict[str, Any],
+    facility_info: Dict[str, Any],
+    trigger_info: Dict[str, Any],
+    target_company_name: str = "",
+) -> Dict[str, Any]:
+    """Calculate the 100-point Functional Calibration Ownership Score for a candidate.
+
+    Scoring weights (Evidence-Based):
+    1. Current company verified: 20 pts
+    2. Exact facility/location: 20 pts
+    3. Actual duties/responsibilities (functional hierarchy): 25 pts
+    4. Trigger/function alignment: 15 pts
+    5. Calibration/metrology ownership evidence: 10 pts
+    6. Seniority/authority: 5 pts
+    7. Evidence recency/quality: 5 pts
+    Total: 100 pts
+    """
+    scores: Dict[str, float] = {}
+    title = candidate.get("candidate_title") or candidate.get("title") or ""
+    snippet = candidate.get("evidence_snippet") or candidate.get("snippet") or ""
+    name = candidate.get("candidate_name") or candidate.get("name") or ""
+    cand_loc = (candidate.get("candidate_location") or candidate.get("location") or "").lower()
+    t_lower = title.lower()
+    s_lower = snippet.lower()
+    combined = f"{t_lower} {s_lower}"
+
+    # 1. Current Company Verified (max 20) with cross-company contamination check
+    target_comp = target_company_name or candidate.get("target_company_name") or candidate.get("company_name") or ""
+    if target_comp:
+        comp_eval = classify_company_evidence(name, combined, target_comp)
+        comp_status = comp_eval["company_evidence_status"]
+        if comp_status == "EXACT_CURRENT_COMPANY":
+            scores["current_company_verified"] = 20.0
+            is_curr_emp = True
+        elif comp_status == "STRONG_CURRENT_COMPANY":
+            scores["current_company_verified"] = 18.0
+            is_curr_emp = True
+        elif comp_status == "AMBIGUOUS_COMPANY":
+            scores["current_company_verified"] = 5.0
+            is_curr_emp = False
+        else:  # OTHER_COMPANY, FORMER_COMPANY, UNKNOWN
+            scores["current_company_verified"] = 0.0
+            is_curr_emp = False
+        comp_reason = comp_eval["reason"]
+    else:
+        comp_match = candidate.get("candidate_company_match", False)
+        if comp_match or candidate.get("current_company_verified", False):
+            scores["current_company_verified"] = 20.0
+            comp_status = "STRONG_CURRENT_COMPANY"
+            is_curr_emp = True
+            comp_reason = "Company match inferred from candidate context"
+        else:
+            scores["current_company_verified"] = 0.0
+            comp_status = "UNKNOWN"
+            is_curr_emp = False
+            comp_reason = "Unverified company association"
+
+    # 2. Exact Facility / Location Link (max 20)
+    target_city = (facility_info.get("city") or "").lower()
+    if target_city and target_city != "not_found" and (target_city in cand_loc or target_city in combined):
+        scores["exact_facility_location"] = 20.0
+        facility_link = f"DIRECT ({target_city.title()} verified)"
+    elif any(state_term in cand_loc for state_term in ["haryana", "uttar pradesh", "andhra pradesh", "karnataka", "telangana", "gujarat", "maharashtra"]):
+        scores["exact_facility_location"] = 12.0
+        facility_link = "REGIONAL (State match)"
+    elif any(k in t_lower for k in ["plant", "works", "unit", "site"]):
+        scores["exact_facility_location"] = 10.0
+        facility_link = "FACILITY_LEVEL (City unconfirmed)"
+    elif any(k in t_lower for k in ["corporate", "group", "vp", "director"]):
+        scores["exact_facility_location"] = 8.0
+        facility_link = "GROUP_WIDE (Multi-plant oversight)"
+    else:
+        scores["exact_facility_location"] = 5.0
+        facility_link = "COMPANY_WIDE (Unknown location)"
+
+    # 3. Actual Duties / Responsibilities - Functional Hierarchy (max 25)
+    func_name, hier_class, base_duty_score = classify_functional_role(title, snippet)
+    scores["actual_duties_responsibilities"] = float(base_duty_score)
+
+    # 4. Trigger / Function Alignment (max 15)
+    trigger_title = (trigger_info.get("title") or "").lower()
+    if any(k in trigger_title for k in ["plant", "capex", "commissioning", "facility", "expansion", "capacity"]):
+        if hier_class in {"PLANT_QUALITY_HEAD", "METROLOGY_CALIBRATION_OWNER"}:
+            scores["trigger_function_alignment"] = 15.0
+        elif hier_class in {"INSTRUMENTATION_VALIDATION_OWNER", "MAINTENANCE_HEAD"}:
+            scores["trigger_function_alignment"] = 14.0
+        elif hier_class == "PLANT_OPERATIONS_HEAD":
+            scores["trigger_function_alignment"] = 10.0
+        else:
+            scores["trigger_function_alignment"] = 5.0
+    else:
+        if hier_class in {"METROLOGY_CALIBRATION_OWNER", "PLANT_QUALITY_HEAD"}:
+            scores["trigger_function_alignment"] = 12.0
+        else:
+            scores["trigger_function_alignment"] = 8.0
+
+    # 5. Calibration / Metrology Ownership Evidence (max 10)
+    has_explicit_cal = any(k in combined for k in ["metrology", "calibration", "cqc", "standards room", "dimensional", "iso 17025", "cmm", "gauge", "master equipment"])
+    has_qa_testing = any(k in combined for k in ["quality assurance", "qa/qc", "testing lab", "validation", "inspection", "iatf 16949", "audit"])
+    if has_explicit_cal:
+        scores["calibration_metrology_ownership"] = 10.0
+        cal_evidence = "EXPLICIT (Metrology/calibration scope documented)"
+    elif has_qa_testing:
+        scores["calibration_metrology_ownership"] = 7.0
+        cal_evidence = "HIGH (QA/QC inspection & measurement equipment oversight)"
+    elif hier_class in {"MAINTENANCE_HEAD", "INSTRUMENTATION_VALIDATION_OWNER"}:
+        scores["calibration_metrology_ownership"] = 5.0
+        cal_evidence = "MODERATE (Plant instrumentation/maintenance responsibility)"
+    elif hier_class == "PLANT_OPERATIONS_HEAD":
+        scores["calibration_metrology_ownership"] = 3.0
+        cal_evidence = "INDIRECT (Overall plant operational sign-off)"
+    else:
+        scores["calibration_metrology_ownership"] = 1.0
+        cal_evidence = "MINIMAL (Commercial/procurement only)"
+
+    # 6. Seniority / Authority (max 5)
+    if any(k in t_lower for k in ["head", "director", "vp", "chief", "avp", "gm", "general manager", "dgm", "agm"]):
+        scores["seniority_authority"] = 5.0
+        authority = "HIGH (Budget & vendor approval authority)"
+    elif any(k in t_lower for k in ["manager", "lead", "in-charge", "incharge"]):
+        scores["seniority_authority"] = 4.0
+        authority = "OPERATIONAL (Direct calibration owner/manager)"
+    elif any(k in t_lower for k in ["senior engineer", "specialist", "executive"]):
+        scores["seniority_authority"] = 3.0
+        authority = "TECHNICAL (Evaluator / user level)"
+    else:
+        scores["seniority_authority"] = 2.0
+        authority = "GENERAL"
+
+    # 7. Evidence Recency & Quality (max 5)
+    recency_str = candidate.get("recency") or "2025-2026"
+    ev_url = candidate.get("evidence_url") or candidate.get("source_url") or ""
+    if "linkedin.com/in/" in ev_url or "official" in ev_url:
+        scores["evidence_recency_quality"] = 5.0
+    elif any(yr in snippet for yr in ["2026", "2025"]):
+        scores["evidence_recency_quality"] = 5.0
+    elif "2024" in snippet:
+        scores["evidence_recency_quality"] = 4.0
+    else:
+        scores["evidence_recency_quality"] = 3.0
+
+    total_score = round(sum(scores.values()), 1)
+
+    return {
+        "candidate_name": name,
+        "candidate_title": title,
+        "function": func_name,
+        "hierarchy_class": hier_class,
+        "functional_ownership_score": total_score,
+        "score_breakdown": scores,
+        "current_company_verified": is_curr_emp,
+        "company_evidence_status": comp_status,
+        "company_verification_reason": comp_reason,
+        "facility_link": facility_link,
+        "calibration_metrology_ownership_evidence": cal_evidence,
+        "quality_instrumentation_responsibility": "DIRECT" if hier_class in {"METROLOGY_CALIBRATION_OWNER", "PLANT_QUALITY_HEAD", "INSTRUMENTATION_VALIDATION_OWNER"} else "SUPERVISORY" if hier_class in {"MAINTENANCE_HEAD", "PLANT_OPERATIONS_HEAD"} else "COMMERCIAL",
+        "trigger_relevance": "HIGH" if scores["trigger_function_alignment"] >= 14.0 else "MEDIUM" if scores["trigger_function_alignment"] >= 10.0 else "LOW",
+        "authority": authority,
+        "source_url": ev_url,
+        "evidence_snippet": snippet[:250],
+        "recency": recency_str,
+        "contact_confidence": candidate.get("contact_confidence", "PROBABLE"),
+    }
+
+
+def rank_calibration_candidates(
+    candidates: List[Dict[str, Any]],
+    facility_info: Dict[str, Any],
+    trigger_info: Dict[str, Any],
+    target_company_name: str = "",
+) -> List[Dict[str, Any]]:
+    """Rank all candidates using functional calibration ownership scoring.
+
+    Returns candidates sorted descending by current company verification first,
+    then by functional ownership score.
+    """
+    scored = [
+        score_candidate_functional_ownership(cand, facility_info, trigger_info, target_company_name=target_company_name)
+        for cand in candidates
+    ]
+    # Current company verified must win over unverified/other/former companies
+    scored.sort(key=lambda x: (x["current_company_verified"], x["functional_ownership_score"]), reverse=True)
+    return scored
+

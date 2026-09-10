@@ -13,14 +13,18 @@ server:
   bind_address: "0.0.0.0"
   secret_key: "salesoorja_searxng_secret_key_2026"
 
-# Public search pages can exceed the upstream 3-second default.
 outgoing:
-  request_timeout: 8.0
-  max_request_timeout: 12.0
+  request_timeout: 5.0
+  max_request_timeout: 8.0
 
-# Google works for the public-person queries; CSE was timing out.
 engines:
+  - name: duckduckgo
+    disabled: true
   - name: google
     disabled: false
   - name: google cse
     disabled: true
+  - name: bing
+    disabled: false
+  - name: qwant
+    disabled: false
