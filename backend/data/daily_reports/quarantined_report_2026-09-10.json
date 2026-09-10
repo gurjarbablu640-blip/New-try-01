@@ -11,5 +11,6 @@
   "inbox_checks_count": 2,
   "night_research_queued": 0,
   "operating_mode": "TEST_MODE",
-  "status": "COMPLETED"
+  "status": "QUARANTINED",
+  "provenance": "SYNTHETIC_FIXTURE_DRY_RUN"
 }

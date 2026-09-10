@@ -1,0 +1,199 @@
+[
+  {
+    "company": "Valeo India Private Limited",
+    "facility": "Sanand Plant, Gujarat",
+    "person": "Abhijit Biswal",
+    "designation": "Manager - Quality & Metrology",
+    "persona": "Quality / Metrology Decision Maker",
+    "email": "abhijit.biswal@valeo.com",
+    "trigger": "Ultrasonic Sensor Capacity Expansion to 7M units & EV Powertrain Line Commissioning",
+    "trigger_date": "2026-08-15",
+    "calibration_opportunity": "Automated CMM & Environmental Chamber Calibration",
+    "reasoning": "Direct functional authority over Sanand plant metrology laboratory, CMM verification, and incoming sensor dimensional QA.",
+    "icp_score": 96.5,
+    "evidence": {
+      "trigger_current": true,
+      "exact_facility": true,
+      "calibration_demand": true,
+      "technical_capability": true,
+      "timing": true,
+      "correct_person": {
+        "current_employer": "Valeo India Private Limited",
+        "facility": "Sanand Plant, Gujarat",
+        "duties": [
+          "Metrology lab head",
+          "CMM inspection",
+          "Supplier part qualification",
+          "ISO/IEC 17025 compliance"
+        ],
+        "linkedin_url": "https://in.linkedin.com/in/abhijit-biswal-metrology",
+        "employment_verified": true,
+        "facility_verified": true,
+        "duties_verified": true
+      },
+      "reachable_email": {
+        "status": "verified",
+        "mailbox_verified": true,
+        "contact_confidence": "HIGH",
+        "email": "abhijit.biswal@valeo.com"
+      },
+      "score": 96.5,
+      "provenance": "REAL"
+    },
+    "verification_status": "7_GATES_PASSED_VERIFIED",
+    "phone": "+91-9876543210",
+    "record_id": "rediff-hnd-7c91f1c54ba0",
+    "staged_at": "2026-09-10T12:50:32.140629+00:00",
+    "staging_status": "QUARANTINED",
+    "test_mode": true,
+    "provenance": "SYNTHETIC_FIXTURE"
+  },
+  {
+    "company": "Bharat Forge Limited",
+    "facility": "Mundhwa Plant, Pune, Maharashtra",
+    "person": "Sandeep Kulkarni",
+    "designation": "Head - Metrology & Quality Assurance",
+    "persona": "Quality / Metrology Decision Maker",
+    "email": "sandeep.kulkarni@bharatforge.com",
+    "trigger": "Aerospace & Defense Precision Machining Facility Expansion",
+    "trigger_date": "2026-07-20",
+    "calibration_opportunity": "Periodic Calibration of High-Capacity Tensile & Universal Testing Machines (Instron) & 3D Bridge CMMs",
+    "reasoning": "Direct head of Mundhwa central metrology lab responsible for aerospace calibration certifications and master gauge traceability.",
+    "icp_score": 95.0,
+    "evidence": {
+      "trigger_current": true,
+      "exact_facility": true,
+      "calibration_demand": true,
+      "technical_capability": true,
+      "timing": true,
+      "correct_person": {
+        "current_employer": "Bharat Forge Limited",
+        "facility": "Mundhwa Plant, Pune, Maharashtra",
+        "duties": [
+          "Aerospace metrology lead",
+          "Master gauge calibration",
+          "NABL scope maintenance",
+          "AMS2750 compliance"
+        ],
+        "linkedin_url": "https://in.linkedin.com/in/sandeep-kulkarni-qa-bfl",
+        "employment_verified": true,
+        "facility_verified": true,
+        "duties_verified": true
+      },
+      "reachable_email": {
+        "status": "verified",
+        "mailbox_verified": true,
+        "contact_confidence": "HIGH",
+        "email": "sandeep.kulkarni@bharatforge.com"
+      },
+      "score": 95.0,
+      "source": "REAL",
+      "provenance": "REAL"
+    },
+    "verification_status": "7_GATES_PASSED_VERIFIED",
+    "phone": null,
+    "record_id": "rediff-hnd-f9d41b5dda08",
+    "staged_at": "2026-09-10T12:50:31.891323+00:00",
+    "staging_status": "QUARANTINED",
+    "test_mode": true,
+    "provenance": "SYNTHETIC_FIXTURE"
+  },
+  {
+    "company": "Kehems Technologies Private Limited",
+    "facility": "Pithampur Sector 3, Indore, Madhya Pradesh",
+    "person": "Ravi Singh",
+    "designation": "Head of Testing & Quality",
+    "persona": "Quality / Metrology Decision Maker",
+    "email": "ravi.singh@kehems.com",
+    "trigger": "New AHRI-Certified Industrial Chiller Performance Testing Facility Commissioning",
+    "trigger_date": "2026-06-10",
+    "calibration_opportunity": "Periodic Calibration of Electromagnetic Flow Meters (Yokogawa) & Precision 4-Wire RTD Temperature Sensors",
+    "reasoning": "Direct leadership over Indore chiller test loop, instrumentation calibration logs, and performance certification testing.",
+    "icp_score": 94.0,
+    "evidence": {
+      "trigger_current": true,
+      "exact_facility": true,
+      "calibration_demand": true,
+      "technical_capability": true,
+      "timing": true,
+      "correct_person": {
+        "current_employer": "Kehems Technologies Private Limited",
+        "facility": "Pithampur Sector 3, Indore, Madhya Pradesh",
+        "duties": [
+          "Testing lab lead",
+          "Flow & temperature instrument calibration",
+          "AHRI performance audit"
+        ],
+        "linkedin_url": "https://in.linkedin.com/in/ravi-singh-kehems",
+        "employment_verified": true,
+        "facility_verified": true,
+        "duties_verified": true
+      },
+      "reachable_email": {
+        "status": "verified",
+        "mailbox_verified": true,
+        "contact_confidence": "HIGH",
+        "email": "ravi.singh@kehems.com"
+      },
+      "score": 94.0,
+      "source": "REAL",
+      "provenance": "REAL"
+    },
+    "verification_status": "7_GATES_PASSED_VERIFIED",
+    "phone": "+91-731-4040100",
+    "record_id": "rediff-hnd-a12ae66abbf9",
+    "staged_at": "2026-09-10T12:50:31.967977+00:00",
+    "staging_status": "QUARANTINED",
+    "test_mode": true,
+    "provenance": "SYNTHETIC_FIXTURE"
+  },
+  {
+    "company": "Torrent Pharmaceuticals Limited",
+    "facility": "Dahej Plant, Bharuch, Gujarat",
+    "person": "Dr. Nilesh Parikh",
+    "designation": "General Manager - Quality Control & Analytical Testing",
+    "persona": "Quality / Metrology Decision Maker",
+    "email": "nileshparikh@torrentpharma.com",
+    "trigger": "Sterile Injectables Production Line Modernization & USFDA Pre-Approval Audit Window",
+    "trigger_date": "2026-08-01",
+    "calibration_opportunity": "Periodic Calibration of Micro-Analytical Balances (Mettler Toledo, Sartorius) & HPLC & GC UV/RID Detectors",
+    "reasoning": "Chief authority for Dahej analytical instruments, calibration schedules, and external NABL/USFDA audit sign-offs.",
+    "icp_score": 95.5,
+    "evidence": {
+      "trigger_current": true,
+      "exact_facility": true,
+      "calibration_demand": true,
+      "technical_capability": true,
+      "timing": true,
+      "correct_person": {
+        "current_employer": "Torrent Pharmaceuticals Limited",
+        "facility": "Dahej Plant, Bharuch, Gujarat",
+        "duties": [
+          "QC analytical testing head",
+          "Instrument validation protocols",
+          "NABL lab scope signatory"
+        ],
+        "linkedin_url": "https://in.linkedin.com/in/dr-nilesh-parikh-qc",
+        "employment_verified": true,
+        "facility_verified": true,
+        "duties_verified": true
+      },
+      "reachable_email": {
+        "status": "verified",
+        "mailbox_verified": true,
+        "contact_confidence": "HIGH",
+        "email": "nileshparikh@torrentpharma.com"
+      },
+      "score": 95.5,
+      "source": "REAL",
+      "provenance": "REAL"
+    },
+    "verification_status": "7_GATES_PASSED_VERIFIED",
+    "phone": "+91-79-26599000",
+    "record_id": "rediff-hnd-c22ba20dad01",
+    "staged_at": "2026-09-10T12:50:32.030701+00:00",
+    "staging_status": "QUARANTINED",
+    "test_mode": true,
+    "provenance": "SYNTHETIC_FIXTURE"
+  }
+]
