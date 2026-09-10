@@ -106,6 +106,47 @@ class TestReplyProcessor(unittest.TestCase):
         self.assertEqual(res.learning_signal, "NEUTRAL")
         self.assertFalse(res.feed_to_learning)
 
+    def test_classify_no_current_requirement(self):
+        packet = {
+            "from": "works.manager@escorts.in",
+            "subject": "Re: Calibration support",
+            "body": "Thank you for the email. We have no requirement currently as our audit was completed last month.",
+        }
+        res = self.processor.classify_reply(packet)
+        self.assertEqual(res.classification, "NO_CURRENT_REQUIREMENT")
+        self.assertEqual(res.learning_signal, "NEUTRAL")
+
+    def test_classify_not_interested(self):
+        packet = {
+            "from": "qa.lead@bhel.in",
+            "subject": "Re: Calibration quotation",
+            "body": "Not interested. Please remove me from your mailing list.",
+        }
+        res = self.processor.classify_reply(packet)
+        self.assertEqual(res.classification, "NOT_INTERESTED")
+        self.assertEqual(res.learning_signal, "NEGATIVE")
+
+    def test_classify_objection(self):
+        packet = {
+            "from": "qc@kirloskar.com",
+            "subject": "Re: Testing services",
+            "body": "Your quotes are too expensive compared to local laboratories in Kolhapur.",
+        }
+        res = self.processor.classify_reply(packet)
+        self.assertEqual(res.classification, "OBJECTION")
+        self.assertEqual(res.learning_signal, "NEGATIVE")
+
+    def test_classify_irrelevant(self):
+        packet = {
+            "from": "news@dailyupdate.com",
+            "subject": "Weekly Newsletter",
+            "body": "Here are the top news headlines for the manufacturing sector this week.",
+        }
+        res = self.processor.classify_reply(packet)
+        self.assertEqual(res.classification, "IRRELEVANT")
+        self.assertEqual(res.learning_signal, "NEUTRAL")
+        self.assertFalse(res.feed_to_learning)
+
     def test_process_and_store_persists_record(self):
         packet = {
             "message_id": "<reply-test-999@domain.com>",
@@ -121,3 +162,4 @@ class TestReplyProcessor(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

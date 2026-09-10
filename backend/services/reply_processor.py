@@ -49,6 +49,10 @@ CANONICAL_CLASSIFICATIONS = (
     "IRRELEVANT",
 )
 
+CLASSIFICATION_ALIASES = {
+    "EXISTING_VENDOR_OBJECTION": "EXISTING_VENDOR",
+}
+
 STORAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "reply_history")
 
 
@@ -105,6 +109,7 @@ class ReplyProcessor:
         body = str(reply_packet.get("body") or "").strip()
         sender = str(reply_packet.get("from") or "").strip()
         content = f"{subject}\n{body}".lower()
+        body_lower = body.lower()
 
         # 1. BOUNCE check (Mail Delivery Subsystem, undeliverable, 550, bounce)
         if (
@@ -144,7 +149,46 @@ class ReplyProcessor:
                 learning_signal="NEUTRAL",
             )
 
-        # 3. REFERRAL check ("contact Mr. X", "talk to", "forwarding to", "please reach out to")
+        # 3. NOT_INTERESTED check ("unsubscribe", "not interested", "remove me", "do not email", "stop emailing")
+        # Evaluated early to ensure opt-outs take precedence over thread subject words
+        if (
+            "not interested" in content
+            or "unsubscribe" in content
+            or "remove me" in content
+            or "do not email" in content
+            or "stop emailing" in content
+            or "please remove" in content
+        ):
+            snippet = self._extract_snippet(body, ["not interested", "unsubscribe", "remove", "stop"])
+            return ReplyClassificationResult(
+                classification="NOT_INTERESTED",
+                confidence=0.95,
+                evidence_snippet=snippet,
+                reasons=["Explicit opt-out or lack of interest requested"],
+                feed_to_learning=True,
+                learning_signal="NEGATIVE",
+            )
+
+        # 4. WRONG_PERSON ("i do not handle", "not my department", "left the company", "wrong person")
+        if (
+            "not my department" in content
+            or "wrong person" in content
+            or "do not handle" in content
+            or "no longer with" in content
+            or "left the company" in content
+            or "not involved in calibration" in content
+        ):
+            snippet = self._extract_snippet(body, ["not my department", "wrong person", "do not handle", "no longer", "left"])
+            return ReplyClassificationResult(
+                classification="WRONG_PERSON",
+                confidence=0.90,
+                evidence_snippet=snippet,
+                reasons=["Recipient indicates functional role mismatch or departure"],
+                feed_to_learning=True,
+                learning_signal="NEGATIVE",
+            )
+
+        # 5. REFERRAL check ("contact Mr. X", "talk to", "forwarding to", "please reach out to")
         referral_match = re.search(
             r"(?:please\s+contact|talk\s+to|reach\s+out\s+to|connect\s+with|forwarding\s+to)\s+(?:(?:mr|ms|mrs|dr)\.?\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
             body,
@@ -170,26 +214,26 @@ class ReplyProcessor:
                 learning_signal="POSITIVE",
             )
 
-        # 4. WRONG_PERSON ("i do not handle", "not my department", "left the company", "wrong person")
+        # 6. OBJECTION ("too expensive", "your lab is too far", "turnaround time", "only accept on-site")
+        # Evaluated before enquiry keywords to prevent "Your quotes are too expensive" becoming ENQUIRY
         if (
-            "not my department" in content
-            or "wrong person" in content
-            or "do not handle" in content
-            or "no longer with" in content
-            or "left the company" in content
-            or "not involved in calibration" in content
+            "expensive" in body_lower
+            or "too far" in body_lower
+            or "turnaround time" in body_lower
+            or "on-site only" in body_lower
+            or "scope does not cover" in body_lower
         ):
-            snippet = self._extract_snippet(body, ["not my department", "wrong person", "do not handle", "no longer", "left"])
+            snippet = self._extract_snippet(body, ["expensive", "far", "turnaround", "on-site", "scope"])
             return ReplyClassificationResult(
-                classification="WRONG_PERSON",
-                confidence=0.90,
+                classification="OBJECTION",
+                confidence=0.85,
                 evidence_snippet=snippet,
-                reasons=["Recipient indicates functional role mismatch or departure"],
+                reasons=["Specific commercial, geographical, or accreditation objection raised"],
                 feed_to_learning=True,
                 learning_signal="NEGATIVE",
             )
 
-        # 5. EXISTING_VENDOR ("already have a vendor", "annual contract", "under amc", "existing agency")
+        # 7. EXISTING_VENDOR ("already have a vendor", "annual contract", "under amc", "existing agency")
         if (
             "already have a vendor" in content
             or "existing vendor" in content
@@ -208,7 +252,24 @@ class ReplyProcessor:
                 learning_signal="NEGATIVE",
             )
 
-        # 6. FUTURE_REQUIREMENT ("next quarter", "next shutdown", "after december", "reach out in", "next year")
+        # 8. NO_CURRENT_REQUIREMENT ("no requirement right now", "no requirement at present", "currently not required")
+        if (
+            "no requirement" in content
+            or "not required currently" in content
+            or "not needed right now" in content
+            or "no calibration needs currently" in content
+        ):
+            snippet = self._extract_snippet(body, ["no requirement", "not required", "not needed"])
+            return ReplyClassificationResult(
+                classification="NO_CURRENT_REQUIREMENT",
+                confidence=0.88,
+                evidence_snippet=snippet,
+                reasons=["No immediate need, but no hostility or permanent opt-out expressed"],
+                feed_to_learning=True,
+                learning_signal="NEUTRAL",
+            )
+
+        # 9. FUTURE_REQUIREMENT ("next quarter", "next shutdown", "after december", "reach out in", "next year")
         future_terms = ["next quarter", "next month", "next year", "next shutdown", "after march", "after december", "contact us in", "reach out in"]
         if any(term in content for term in future_terms):
             snippet = self._extract_snippet(body, future_terms)
@@ -223,15 +284,17 @@ class ReplyProcessor:
                 learning_signal="POSITIVE",
             )
 
-        # 7. ENQUIRY ("send quote", "quote for", "quotation", "scope of calibration", "what is your rate", "pricing for")
+        # 10. ENQUIRY ("send quote", "quote for", "quotation", "scope of calibration", "what is your rate", "pricing for")
         if (
-            "quote" in content
-            or "quotation" in content
-            or "pricing" in content
-            or "rate list" in content
-            or "scope of accreditation" in content
-            or "calibration charges" in content
-            or "rfq" in content
+            "send" in body_lower and ("quote" in body_lower or "quotation" in body_lower or "rate" in body_lower)
+            or "quotation for" in body_lower
+            or "quote for" in body_lower
+            or "pricing" in body_lower
+            or "rate list" in body_lower
+            or "scope of accreditation" in body_lower
+            or "calibration charges" in body_lower
+            or "rfq" in body_lower
+            or ("quote" in body_lower and "please" in body_lower)
         ):
             snippet = self._extract_snippet(body, ["quote", "quotation", "pricing", "rate", "scope", "charges", "rfq"])
             return ReplyClassificationResult(
@@ -243,7 +306,7 @@ class ReplyProcessor:
                 learning_signal="POSITIVE",
             )
 
-        # 8. INTERESTED ("call me", "let's discuss", "send brochure", "schedule a meeting", "available on tuesday")
+        # 11. INTERESTED ("call me", "let's discuss", "send brochure", "schedule a meeting", "available on tuesday")
         if (
             "call me" in content
             or "discuss" in content
@@ -264,59 +327,6 @@ class ReplyProcessor:
                 learning_signal="POSITIVE",
             )
 
-        # 9. OBJECTION ("too expensive", "your lab is too far", "turnaround time", "only accept on-site")
-        if (
-            "expensive" in content
-            or "too far" in content
-            or "turnaround time" in content
-            or "on-site only" in content
-            or "nabl scope does not cover" in content
-        ):
-            snippet = self._extract_snippet(body, ["expensive", "far", "turnaround", "on-site", "scope"])
-            return ReplyClassificationResult(
-                classification="OBJECTION",
-                confidence=0.85,
-                evidence_snippet=snippet,
-                reasons=["Specific commercial, geographical, or accreditation objection raised"],
-                feed_to_learning=True,
-                learning_signal="NEGATIVE",
-            )
-
-        # 10. NOT_INTERESTED ("unsubscribe", "not interested", "remove me", "do not email", "stop emailing")
-        if (
-            "not interested" in content
-            or "unsubscribe" in content
-            or "remove me" in content
-            or "do not email" in content
-            or "stop emailing" in content
-            or "please remove" in content
-        ):
-            snippet = self._extract_snippet(body, ["not interested", "unsubscribe", "remove", "stop"])
-            return ReplyClassificationResult(
-                classification="NOT_INTERESTED",
-                confidence=0.95,
-                evidence_snippet=snippet,
-                reasons=["Explicit opt-out or lack of interest requested"],
-                feed_to_learning=True,
-                learning_signal="NEGATIVE",
-            )
-
-        # 11. NO_CURRENT_REQUIREMENT ("no requirement right now", "no requirement at present", "currently not required")
-        if (
-            "no requirement" in content
-            or "not required currently" in content
-            or "not needed right now" in content
-            or "no calibration needs currently" in content
-        ):
-            snippet = self._extract_snippet(body, ["no requirement", "not required", "not needed"])
-            return ReplyClassificationResult(
-                classification="NO_CURRENT_REQUIREMENT",
-                confidence=0.88,
-                evidence_snippet=snippet,
-                reasons=["No immediate need, but no hostility or permanent opt-out expressed"],
-                feed_to_learning=True,
-                learning_signal="NEUTRAL",
-            )
 
         # 12. Default: IRRELEVANT
         snippet = (body[:200] if body else subject[:100]).strip()

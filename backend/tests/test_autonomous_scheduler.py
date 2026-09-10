@@ -100,6 +100,51 @@ class TestAutonomousScheduler(unittest.TestCase):
         self.assertIn("10:00 AM", summary["schedule"])
         self.assertIn("6:00 PM", summary["schedule"])
 
+    def test_daily_report_18_operational_metrics_and_enquiry_kpi(self):
+        full_metrics = {
+            "companies_discovered": 45,
+            "valid_current_triggers": 38,
+            "exact_facilities_found": 32,
+            "qualified_opportunities": 20,
+            "correct_person_confidence": 0.88,
+            "public_contacts_found": 15,
+            "apollo_required_leads": 5,
+            "staged_ready_for_email": 12,
+            "hold_leads": 8,
+            "rejected_leads": 5,
+            "false_positive_reasons": {"stale_trigger": 3, "unconfirmed_city": 2},
+            "average_research_time_sec": 14.2,
+            "llm_calls": 18,
+            "llm_cache_hit_rate": 0.35,
+            "apollo_credits": 0,
+            "replies_processed": 6,
+            "enquiries_generated": 2,  # Primary KPI
+        }
+        report = self.scheduler.execute_evening_cutoff_and_report(date_str="2026-09-11", custom_metrics=full_metrics)
+        d = report.to_dict()
+
+        # Check all 18 metrics present
+        self.assertEqual(d["companies_discovered"], 45)
+        self.assertEqual(d["valid_current_triggers"], 38)
+        self.assertEqual(d["exact_facilities_found"], 32)
+        self.assertEqual(d["qualified_opportunities"], 20)
+        self.assertEqual(d["correct_person_confidence"], 0.88)
+        self.assertEqual(d["public_contacts_found"], 15)
+        self.assertEqual(d["apollo_required_leads"], 5)
+        self.assertEqual(d["ready_for_email"], 12)
+        self.assertEqual(d["hold_leads"], 8)
+        self.assertEqual(d["rejected_leads"], 5)
+        self.assertIn("stale_trigger", d["false_positive_reasons"])
+        self.assertEqual(d["average_research_time_sec"], 14.2)
+        self.assertEqual(d["llm_calls"], 18)
+        self.assertEqual(d["llm_cache_hit_rate"], 0.35)
+        self.assertEqual(d["apollo_credits_used"], 0)
+        self.assertEqual(d["emails_staged"], 12)
+        self.assertEqual(d["replies_received"], 6)
+        self.assertEqual(d["enquiries_generated"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+

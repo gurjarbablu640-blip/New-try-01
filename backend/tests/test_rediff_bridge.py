@@ -104,6 +104,68 @@ class TestRediffBridge(unittest.TestCase):
         staged = self.bridge.list_staged()
         self.assertEqual(staged[0]["staging_status"], "EXPORTED")
 
+    def test_20_point_mapped_fields_in_record_and_csv(self):
+        candidate = self._valid_candidate()
+        stage_res = self.bridge.stage_candidate(candidate)
+        record = stage_res["record"]
+
+        # Check all 20 required fields in mapped dict
+        required_20_fields = [
+            "READY_FOR_EMAIL", "COMPANY", "FACILITY", "CITY", "STATE",
+            "CONTACT_NAME", "FIRST_NAME", "DESIGNATION", "PERSONA", "EMAIL", "PHONE",
+            "TRIGGER_EVENT", "TRIGGER_DATE", "CALIBRATION_OPPORTUNITY", "REASON_FOR_OUTREACH",
+            "LEAD_SCORE", "FACILITY_VERIFIED", "CONTACT_VERIFIED", "CONTACT_LOCATION", "NOTES"
+        ]
+        for f in required_20_fields:
+            self.assertIn(f, record, f"Missing required 20-field mapping: {f}")
+
+        self.assertEqual(record["READY_FOR_EMAIL"], "YES")
+        self.assertEqual(record["COMPANY"], "Valeo India")
+        self.assertEqual(record["FIRST_NAME"], "Abhijit")
+        self.assertEqual(record["CONTACT_NAME"], "Abhijit Biswal")
+        self.assertEqual(record["TRIGGER_EVENT"], "New EV Powertrain Line Commissioning")
+        self.assertEqual(record["CALIBRATION_OPPORTUNITY"], "Automated CMM and Gauging Rig Calibration")
+
+        # Check CSV export contains all 20 fields as header
+        export_csv = self.bridge.export_batch([stage_res["record_id"]], export_format="csv")
+        csv_header = export_csv["payload"].splitlines()[0]
+        for f in required_20_fields:
+            self.assertIn(f, csv_header)
+
+    def test_generate_outreach_preview_quality_audit(self):
+        candidate = self._valid_candidate()
+        stage_res = self.bridge.stage_candidate(candidate)
+        record = stage_res["record"]
+
+        preview = self.bridge.generate_outreach_preview(record)
+        self.assertEqual(preview["preview_status"], "READY_FOR_PREVIEW")
+        self.assertTrue(preview["test_mode"])
+        self.assertTrue(preview["no_send_enforced"])
+        self.assertEqual(preview["to"], "abhijit.biswal@valeo.com")
+        self.assertIn("Bablu@oorjatechnical.org", preview["cc"])
+        self.assertIn("piyushk@oorjatechnical.com", preview["cc"])
+
+        # Quality audit checks
+        audit = preview["audit_checks"]
+        self.assertTrue(audit["is_designation_aware"])
+        self.assertTrue(audit["is_trigger_aware"])
+        self.assertTrue(audit["is_facility_aware"])
+        self.assertTrue(audit["is_consultative"])
+        self.assertTrue(audit["asks_referral"])
+        self.assertTrue(audit["cc_3963_scope_validated"])
+        self.assertFalse(audit["has_unsupported_nabl_claims"])
+        self.assertFalse(audit["fake_urgency_detected"])
+        self.assertFalse(audit["ai_filler_detected"])
+
+        # Body checks
+        self.assertIn("CC-3963", preview["body_text"])
+        self.assertIn("ISO/IEC 17025:2017", preview["body_text"])
+        self.assertIn("Abhijit", preview["body_text"])
+        self.assertIn("Sanand Plant", preview["body_text"])
+        self.assertIn("New EV Powertrain Line Commissioning", preview["body_text"])
+        self.assertIn("point me to the right lead", preview["body_text"].lower())
+
 
 if __name__ == "__main__":
     unittest.main()
+

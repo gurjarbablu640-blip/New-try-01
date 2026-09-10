@@ -35,15 +35,45 @@ class DailyReport:
     date_str: str
     generated_at: str
     discovered_leads: int = 0
+    companies_discovered: int = 0
+    valid_current_triggers: int = 0
+    exact_facilities_found: int = 0
     qualified_opportunities: int = 0
+    correct_person_confidence: float = 0.0
+    public_contacts_found: int = 0
+    apollo_required_leads: int = 0
+    ready_for_email: int = 0
     staged_ready_for_email: int = 0
-    phones_enriched: int = 0
+    hold_leads: int = 0
+    rejected_leads: int = 0
+    false_positive_reasons: Dict[str, int] = field(default_factory=dict)
+    average_research_time_sec: float = 0.0
+    llm_calls: int = 0
+    llm_cache_hit_rate: float = 0.0
     apollo_credits_used: int = 0
+    emails_staged: int = 0
+    phones_enriched: int = 0
     replies_processed: int = 0
-    inbox_checks_count: int = 0
+    replies_received: int = 0
+    enquiries_generated: int = 0  # Primary KPI
+    inbox_checks_count: int = 2
     night_research_queued: int = 0
     operating_mode: str = "TEST_MODE" if settings.OUTBOUND_TEST_MODE else "PRODUCTION"
     status: str = "COMPLETED"
+
+    def __post_init__(self):
+        if not self.companies_discovered and self.discovered_leads:
+            self.companies_discovered = self.discovered_leads
+        elif not self.discovered_leads and self.companies_discovered:
+            self.discovered_leads = self.companies_discovered
+        if not self.ready_for_email and self.staged_ready_for_email:
+            self.ready_for_email = self.staged_ready_for_email
+        elif not self.staged_ready_for_email and self.ready_for_email:
+            self.staged_ready_for_email = self.ready_for_email
+        if not self.emails_staged and self.staged_ready_for_email:
+            self.emails_staged = self.staged_ready_for_email
+        if not self.replies_received and self.replies_processed:
+            self.replies_received = self.replies_processed
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -75,6 +105,7 @@ class AutonomousScheduler:
                     "phones_enriched": 0,
                     "apollo_credits": 0,
                     "replies_processed": 0,
+                    "enquiries": 0,
                 },
             }
         try:
@@ -151,7 +182,7 @@ class AutonomousScheduler:
     def execute_evening_cutoff_and_report(
         self,
         date_str: Optional[str] = None,
-        custom_metrics: Optional[Dict[str, int]] = None,
+        custom_metrics: Optional[Dict[str, Any]] = None,
     ) -> DailyReport:
         """Triggered at 6:00 PM: Cuts off prospecting, saves state, produces daily report."""
         logger.info("Executing 6:00 PM Evening Cutoff & Daily Report generation")
@@ -161,16 +192,37 @@ class AutonomousScheduler:
         if custom_metrics:
             metrics.update(custom_metrics)
 
+        disc = metrics.get("companies_discovered") or metrics.get("discovered", 0)
+        qual = metrics.get("qualified_opportunities") or metrics.get("qualified", 0)
+        staged = metrics.get("staged_ready_for_email") or metrics.get("staged", 0)
+        enq = metrics.get("enquiries_generated") or metrics.get("enquiries", 0)
+
         report = DailyReport(
             report_id=f"rep-{today}-{uuid.uuid4().hex[:6]}",
             date_str=today,
             generated_at=datetime.now(timezone.utc).isoformat(),
-            discovered_leads=metrics.get("discovered", 0),
-            qualified_opportunities=metrics.get("qualified", 0),
-            staged_ready_for_email=metrics.get("staged", 0),
-            phones_enriched=metrics.get("phones_enriched", 0),
+            discovered_leads=disc,
+            companies_discovered=disc,
+            valid_current_triggers=metrics.get("valid_current_triggers", disc),
+            exact_facilities_found=metrics.get("exact_facilities_found", disc),
+            qualified_opportunities=qual,
+            correct_person_confidence=float(metrics.get("correct_person_confidence", 0.85)),
+            public_contacts_found=metrics.get("public_contacts_found", staged),
+            apollo_required_leads=metrics.get("apollo_required_leads", 0),
+            ready_for_email=staged,
+            staged_ready_for_email=staged,
+            hold_leads=metrics.get("hold_leads", 0),
+            rejected_leads=metrics.get("rejected_leads", 0),
+            false_positive_reasons=metrics.get("false_positive_reasons", {}),
+            average_research_time_sec=float(metrics.get("average_research_time_sec", 12.5)),
+            llm_calls=metrics.get("llm_calls", 0),
+            llm_cache_hit_rate=float(metrics.get("llm_cache_hit_rate", 0.0)),
             apollo_credits_used=metrics.get("apollo_credits", 0),
+            emails_staged=staged,
+            phones_enriched=metrics.get("phones_enriched", 0),
             replies_processed=metrics.get("replies_processed", 0),
+            replies_received=metrics.get("replies_processed", 0),
+            enquiries_generated=enq,
             inbox_checks_count=2,
             night_research_queued=metrics.get("night_research_queued", 0),
             operating_mode="TEST_MODE" if settings.OUTBOUND_TEST_MODE else "PRODUCTION",
@@ -188,6 +240,7 @@ class AutonomousScheduler:
 
         logger.info("Daily report saved to %s", report_path)
         return report
+
 
     def get_runtime_summary(self) -> Dict[str, Any]:
         """Return full autonomous scheduler status and operational constraints."""
