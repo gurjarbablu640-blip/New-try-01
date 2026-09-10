@@ -1,3 +1,4 @@
+import ContactResearchPanel from "../components/ContactResearchPanel";
 import React, { useState, useEffect } from "react";
 import { useOutletContext } from "react-router-dom";
 import {
@@ -80,7 +81,7 @@ const EMAIL_STATUS_CONFIG = {
 export default function LeadFactoryPage() {
   const { onOpenCompany } = useOutletContext();
 
-  const [activeTab, setActiveTab] = useState("autonomous"); // autonomous, apollo, database
+  const [activeTab, setActiveTab] = useState("contact-research"); // contact-research, autonomous, apollo, database
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedRegion, setSelectedRegion] = useState("PAN INDIA");
   const [industryFilter, setIndustryFilter] = useState("all");
@@ -131,24 +132,29 @@ export default function LeadFactoryPage() {
           page: 1,
           per_page: 10,
         });
-        setApolloLeads(res.data?.results || []);
+        if (res.data?.error) throw new Error(res.data.error);
+        if (res.data?.mock_mode) {
+          setApolloLeads([]);
+          setNotification("Apollo returned demo records. Configure a working provider key to research real contacts.");
+          return;
+        }
+        setApolloLeads((res.data?.results || []).flatMap(company =>
+          (company.contacts || []).map(contact => ({ ...contact, company_name: company.company_name || company.name }))
+        ));
       } else if (activeTab === "database") {
         const res = await getCompanies({ q: searchQuery, limit: 30 });
         setDbLeads(res.data?.results || res.data || []);
       }
     } catch (err) {
       console.error("Fetch error:", err);
+      setNotification(err.response?.data?.detail || err.message || "Could not load leads.");
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (activeTab === "autonomous") {
-      handleRunAutonomousDiscovery();
-    } else {
-      loadManualLeads();
-    }
+    if (activeTab === "database") loadManualLeads();
   }, [activeTab, selectedRegion]);
 
   // Execute full 8-step decision-maker discovery pipeline
@@ -364,7 +370,7 @@ export default function LeadFactoryPage() {
             Person-First Decision-Maker Discovery: Persona Inference → Public Web Evidence → Multi-Factor Verification → Apollo Enrichment → Email.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className={activeTab === "contact-research" ? "hidden" : "flex items-center gap-2"}>
           <button
             onClick={() => (activeTab === "autonomous" ? handleRunAutonomousDiscovery() : loadManualLeads())}
             disabled={loading}
@@ -395,10 +401,12 @@ export default function LeadFactoryPage() {
         </div>
       )}
 
+
       {/* Filter & Subnav Bar */}
       <div className="dark-card p-4 space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={() => setActiveTab("contact-research")} className={`rounded-lg px-3 py-1.5 text-xs font-medium ${activeTab === "contact-research" ? "bg-brand-primary text-white" : "bg-dark-bg text-dark-muted border border-dark-border"}`}>Contact Research</button>
             <button
               onClick={() => setActiveTab("autonomous")}
               className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
@@ -434,7 +442,7 @@ export default function LeadFactoryPage() {
             </button>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className={activeTab === "contact-research" ? "hidden" : "flex items-center gap-2"}>
             <div className="flex items-center gap-1.5 text-xs text-dark-muted">
               <Globe className="h-3.5 w-3.5 text-brand-cyan" />
               <span>Region:</span>
@@ -466,6 +474,7 @@ export default function LeadFactoryPage() {
         </div>
       </div>
 
+      {activeTab === "contact-research" && <ContactResearchPanel />}
       {/* TAB 1: AUTONOMOUS TRIGGER DISCOVERY WITH DECISION-MAKER PIPELINE */}
       {activeTab === "autonomous" && (
         <div className="space-y-4">
@@ -843,9 +852,9 @@ export default function LeadFactoryPage() {
       {activeTab === "apollo" && (
         <div className="dark-card p-4 space-y-3">
           <div className="flex items-center justify-between pb-3 border-b border-dark-border">
-            <span className="text-xs font-semibold text-white">Apollo Enriched Contacts (Safety Limit Enforced: Max 6 per run)</span>
+            <span className="text-xs font-semibold text-white">Apollo Contact Search Results</span>
             <span className="text-[10px] font-mono text-brand-amber border border-brand-amber/30 rounded px-2 py-0.5">
-              SAFETY GUARD ACTIVE
+              PROVIDER RESULTS
             </span>
           </div>
 

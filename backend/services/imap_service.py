@@ -260,87 +260,43 @@ def process_incoming_email(db: Session, email_data: Dict[str, Any]) -> Dict[str,
 
 
 def poll_imap_inbox(db: Session, folder: str = "INBOX", limit: int = 50) -> Dict[str, Any]:
-    """
-    Connect to IMAP server, fetch unseen messages, parse and process them.
-    In mock / unconfigured mode, returns clean empty report.
-    """
-    if not settings.IMAP_HOST or settings.IMAP_HOST.strip() == "":
-        logger.info("[MOCK IMAP] IMAP host not configured. Running in mock polling mode.")
+    """Read only recent matched outreach replies; never scan arbitrary message bodies."""
+    from services.restricted_inbox import collect_replies
+    if folder != "INBOX":
+        return {"status": "error", "error": "Only INBOX is permitted"}
+    if not settings.IMAP_HOST:
+        return {"status": "not_configured", "messages_checked": 0, "processed_results": []}
+    if settings.OUTBOUND_TEST_MODE:
         return {
-            "status": "ok",
+            "status": "test_mode",
+            "messages_checked": 0,
+            "processed_results": [],
             "mock_mode": True,
-            "messages_checked": 0,
-            "processed_results": [],
+            "warning": "Outbound test mode is active; development testing does not access real mailbox.",
         }
-
+    mail = None
     try:
-        if settings.IMAP_USE_SSL:
-            mail = imaplib.IMAP4_SSL(settings.IMAP_HOST, settings.IMAP_PORT)
-        else:
-            mail = imaplib.IMAP4(settings.IMAP_HOST, settings.IMAP_PORT)
-
-        if settings.IMAP_USER and settings.IMAP_PASSWORD:
-            mail.login(settings.IMAP_USER, settings.IMAP_PASSWORD)
-
-        mail.select(folder)
-        _, data = mail.search(None, "UNSEEN")
-        mail_ids = data[0].split()
-
-        processed_results = []
-        for mid in mail_ids[-limit:]:
-            _, msg_data = mail.fetch(mid, "(RFC822)")
-            for response_part in msg_data:
-                if isinstance(response_part, tuple):
-                    msg = email.message_from_bytes(response_part[1])
-                    subject = clean_header_str(msg.get("Subject"))
-                    from_hdr = clean_header_str(msg.get("From"))
-                    msg_id = clean_header_str(msg.get("Message-ID"))
-                    in_reply_to = clean_header_str(msg.get("In-Reply-To"))
-                    references = clean_header_str(msg.get("References"))
-
-                    # Body extraction
-                    body = ""
-                    if msg.is_multipart():
-                        for part in msg.walk():
-                            ctype = part.get_content_type()
-                            if ctype == "text/plain":
-                                body = part.get_payload(decode=True).decode("utf-8", errors="replace")
-                                break
-                    else:
-                        body = msg.get_payload(decode=True).decode("utf-8", errors="replace")
-
-                    headers_dict = {
-                        "in-reply-to": in_reply_to,
-                        "references": references,
-                        "message-id": msg_id,
-                        "x-oorja-recipient-id": clean_header_str(msg.get("X-Oorja-Recipient-ID")),
-                    }
-
-                    parsed_email = {
-                        "from": from_hdr,
-                        "subject": subject,
-                        "body": body,
-                        "message_id": msg_id,
-                        "headers": headers_dict,
-                    }
-
-                    res = process_incoming_email(db, parsed_email)
-                    processed_results.append(res)
-
-        mail.close()
-        mail.logout()
-        return {
-            "status": "ok",
-            "mock_mode": False,
-            "messages_checked": len(mail_ids),
-            "processed_results": processed_results,
-        }
+        mail = (imaplib.IMAP4_SSL if settings.IMAP_USE_SSL else imaplib.IMAP4)(settings.IMAP_HOST, settings.IMAP_PORT)
+        mail.login(settings.IMAP_USER, settings.IMAP_PASSWORD)
+        def matched(header):
+            recipient, _, _, _ = match_incoming_thread(db, dict(header.items()),
+                extract_email_from_header(header.get('From', '')), header.get('Subject', ''))
+            if not recipient:
+                return False
+            events = db.query(CampaignEvent).filter(CampaignEvent.recipient_id == recipient.id,
+                CampaignEvent.event_type == 'sent').all()
+            # Legacy events without explicit real-send evidence are held for reconciliation.
+            return any(isinstance(e.payload, dict) and e.payload.get('simulated') is False
+                       and e.payload.get('test_mode') is False for e in events)
+        def seen(message_id):
+            return db.query(CampaignEvent).filter(CampaignEvent.provider_message_id == message_id).first() is not None
+        return collect_replies(mail, matched, lambda item: process_incoming_email(db, item), seen, limit)
     except Exception as exc:
-        logger.error(f"IMAP polling error: {exc}")
-        return {
-            "status": "error",
-            "error": str(exc),
-            "mock_mode": False,
-            "messages_checked": 0,
-            "processed_results": [],
-        }
+        logger.error("Restricted IMAP poll failed (%s)", type(exc).__name__)
+        return {"status": "error", "error": type(exc).__name__, "messages_checked": 0, "processed_results": []}
+    finally:
+        if mail:
+            try:
+                mail.logout()
+            except Exception:
+                pass

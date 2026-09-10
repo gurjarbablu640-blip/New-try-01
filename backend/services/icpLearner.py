@@ -14,6 +14,11 @@ Weekly Celery task:
 import json
 import logging
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
 from celery_app import celery_app
 from config import settings
 from database import SessionLocal

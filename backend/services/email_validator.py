@@ -95,19 +95,12 @@ def check_mx_records(domain: str) -> tuple[bool, list[str], str]:
         import dns.resolver  # type: ignore
 
         answers = dns.resolver.resolve(domain, "MX", lifetime=4.0)
-        mx_hosts = [str(r.exchange).rstrip(".") for r in answers]
+        mx_hosts = [str(r.exchange).rstrip(".") for r in answers if str(r.exchange) != "."]
         if mx_hosts:
             return True, mx_hosts, "MX records found"
         return False, [], "No MX records returned"
     except ImportError:
-        # Fallback to basic socket hostname lookup if dnspython is not loaded
-        import socket
-
-        try:
-            socket.gethostbyname(domain)
-            return True, [domain], "Domain resolves via A record (fallback)"
-        except socket.error as e:
-            return False, [], f"Domain host resolution failed: {e}"
+        return False, [], "DNS MX checker unavailable; mailbox remains unverified"
     except Exception as exc:
         return False, [], f"DNS lookup failed: {exc}"
 
@@ -178,7 +171,7 @@ def validate_email_address(email: str | None) -> dict[str, Any]:
             "verified_at": datetime.utcnow().isoformat(),
         }
 
-    status = "risky" if is_role else "valid"
+    status = "unverified"
     reason = "Role-based address on active domain" if is_role else "Valid format and active MX records"
 
     return {
@@ -186,7 +179,9 @@ def validate_email_address(email: str | None) -> dict[str, Any]:
         "normalized_email": clean,
         "status": status,
         "reason": reason,
-        "is_valid": status in {"valid", "risky"},
+        "is_valid": True,  # Structural validity only; not mailbox deliverability.
+        "mailbox_verified": False,
+        "verification_method": "SYNTAX_AND_DNS",
         "is_disposable": False,
         "is_role_account": is_role,
         "has_mx_records": True,

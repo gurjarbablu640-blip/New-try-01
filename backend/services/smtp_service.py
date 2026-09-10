@@ -55,6 +55,10 @@ def send_email_message(
     """
     if not to_email:
         return {"success": False, "error": "Recipient email address is required."}
+    if settings.OUTBOUND_TEST_MODE:
+        return {"success": False, "status": "TEST_MODE_NOT_SENT", "simulated": True,
+                "test_mode": True, "original_recipient": to_email,
+                "error": "Development preview only. No SMTP connection or email sent."}
 
     # Determine delivery target
     actual_recipient = to_email
@@ -98,13 +102,13 @@ def send_email_message(
     if not settings.SMTP_HOST or settings.SMTP_HOST.strip() == "":
         logger.info(f"[MOCK/DRY-RUN SMTP] Sent email to '{actual_recipient}' (Original: '{to_email}') - ID: {msg_id}")
         return {
-            "success": True,
+            "success": False,
             "message_id": msg_id,
             "actual_recipient": actual_recipient,
             "original_recipient": to_email,
             "test_mode": settings.OUTBOUND_TEST_MODE,
             "simulated": True,
-            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "error": "SMTP is not configured; no email sent.",
         }
 
     try:
@@ -130,16 +134,16 @@ def send_email_message(
             "sent_at": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as exc:
-        logger.warning(f"SMTP delivery failed: {exc}. Falling back to recorded simulation.")
+        logger.warning("SMTP delivery failed; delivery must be reconciled before retry.")
         return {
-            "success": True,
+            "success": False,
             "message_id": msg_id,
             "actual_recipient": actual_recipient,
             "original_recipient": to_email,
             "test_mode": settings.OUTBOUND_TEST_MODE,
             "simulated": True,
             "warning": f"SMTP host unavailable: {exc}",
-            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "error": "SMTP delivery failed or is uncertain; not recorded as sent.",
         }
 
 

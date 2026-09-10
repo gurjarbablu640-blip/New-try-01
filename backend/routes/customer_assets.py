@@ -1,5 +1,5 @@
 """Customer Asset & Calibration Due Intelligence API routes."""
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -129,6 +129,28 @@ def list_assets_due_soon(days: int = Query(default=60, ge=1, le=365), db: Sessio
 
     filtered.sort(key=lambda x: x["days_until_due"] if x["days_until_due"] is not None else 999)
     return {"total": len(filtered), "filter_days": days, "results": filtered}
+
+
+@router.get("/calibration-due")
+def list_calibration_due(
+    days: int = Query(default=45, ge=1, le=365),
+    limit: int = Query(default=5, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Read a bounded dashboard preview of active assets due in the next N days."""
+    today = date.today()
+    query = db.query(CustomerAsset).filter(
+        CustomerAsset.status == "Active",
+        CustomerAsset.calibration_due_date >= today,
+        CustomerAsset.calibration_due_date <= today + timedelta(days=days),
+    )
+    total = query.count()
+    rows = query.order_by(CustomerAsset.calibration_due_date.asc(), CustomerAsset.id.asc()).limit(limit).all()
+    company_ids = {asset.company_id for asset in rows}
+    names = dict(db.query(Company.id, Company.name).filter(Company.id.in_(company_ids)).all()) if company_ids else {}
+    return {"total": total, "filter_days": days, "results": [
+        {**_serialize_asset(asset), "company_name": names.get(asset.company_id)} for asset in rows
+    ]}
 
 
 @router.get("/overdue")

@@ -17,12 +17,15 @@ from sqlalchemy.orm import Session
 from models.company import Company
 from models.person import Person
 from services.scoringEngine import calculate_icp_score
+from services.opportunity_gates import evaluate_company_opportunity, READY_FOR_EMAIL, HOT
 
 VALID_QUALIFICATION_STATUSES = {
     "RAW",
     "NEEDS_ENRICHMENT",
     "QUALIFIED",
     "READY_FOR_OUTREACH",
+    READY_FOR_EMAIL,
+    HOT,
     "DISQUALIFIED",
 }
 
@@ -54,27 +57,9 @@ def evaluate_lead_qualification(db: Session, company_id: int) -> dict[str, Any]:
         new_status = "DISQUALIFIED"
         reason = f"ICP score ({icp_score}) is below minimum viable qualification threshold (25)"
     else:
-        # Check contacts attached to company
-        persons = db.query(Person).filter(Person.company_id == company_id).all()
-        has_deliverable_contact = any(
-            p.email_verification_status in {"valid", "risky"} or (p.email and p.email_verification_status == "unverified")
-            for p in persons
-        )
-        has_decision_maker = any(p.is_decision_maker == 1 for p in persons)
-
-        if icp_score >= 40:
-            if has_deliverable_contact and has_decision_maker:
-                new_status = "READY_FOR_OUTREACH"
-                reason = f"Strong ICP fit ({icp_score}) with verified decision-maker contact"
-            elif has_deliverable_contact:
-                new_status = "READY_FOR_OUTREACH"
-                reason = f"Strong ICP fit ({icp_score}) with deliverable contact email"
-            else:
-                new_status = "NEEDS_ENRICHMENT"
-                reason = f"Strong ICP fit ({icp_score}) but requires decision-maker / email enrichment"
-        else:
-            new_status = "QUALIFIED"
-            reason = f"Viable target ICP ({icp_score}) under evaluation"
+        gates = evaluate_company_opportunity(db, company_id)
+        new_status = gates["status"] if gates["status"] in {READY_FOR_EMAIL, HOT} else "NEEDS_ENRICHMENT" if icp_score >= 40 else "QUALIFIED"
+        reason = gates["reason"]
 
     company.qualification_status = new_status
     company.qualification_reason = reason
@@ -102,6 +87,9 @@ def set_qualification_status(
     upper_status = status.strip().upper()
     if upper_status not in VALID_QUALIFICATION_STATUSES:
         return {"error": f"Invalid status: {status}. Must be one of {VALID_QUALIFICATION_STATUSES}"}
+
+    if upper_status in {"READY_FOR_OUTREACH", READY_FOR_EMAIL, HOT}:
+        return {"error": "Ready status is evaluator-controlled; run the seven opportunity gates"}
 
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:

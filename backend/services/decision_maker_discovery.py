@@ -231,6 +231,7 @@ def execute_web_person_search(
     queries: List[Dict[str, str]],
     db: Session,
     max_queries: int = 8,
+    free_only: bool = False,
 ) -> Dict[str, Any]:
     """Execute real web searches using configured research provider.
 
@@ -251,8 +252,10 @@ def execute_web_person_search(
             num_results=5,
             company_id=company_id,
             db=db,
+            free_only=free_only,
         )
 
+        search_provider_used = search_result["provider"]
         executed_queries.append({
             "query": q_info["query"],
             "persona": q_info["persona"],
@@ -862,11 +865,67 @@ def build_research_brief_with_persons(
 # STEP 8: Full Pipeline Orchestration
 # ═════════════════════════════════════════════════════════════════════════
 
+
+def reuse_crm_email(candidate, db):
+    """Avoid enrichment when the same company's named CRM contact has a usable email."""
+    if candidate.apollo_email or candidate.verification_status == "PERSON_REJECTED":
+        return
+    contacts = db.query(Person).filter(Person.company_id == candidate.company_id).all()
+    target = " ".join((candidate.candidate_name or "").lower().split())
+    for person in contacts:
+        if " ".join((person.full_name or "").lower().split()) != target or not target:
+            continue
+        email = person.email or ""
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+            continue
+        if str(person.email_verification_status or "").lower() not in ("verified", "valid", "email_verified", "deliverable"):
+            continue
+        source = str(person.discovery_source or "").lower()
+        if "mock" in source or "mock" in str(person.evidence_json or "").lower():
+            continue
+        if not person.evidence_json and source != "manual":
+            continue
+        candidate.apollo_email = email
+        candidate.apollo_email_confidence = "CRM_REUSED"
+        candidate.email_status = "EMAIL_FOUND"
+        return
+
+
+def merge_candidate_evidence(existing, discovered):
+    """Reuse a candidate row, retaining rejections and accumulated evidence."""
+    evidence = list(existing.evidence_sources or [])
+    seen = {(item.get("url"), item.get("snippet")) for item in evidence}
+    for item in discovered.evidence_sources or []:
+        key = (item.get("url"), item.get("snippet"))
+        if key not in seen:
+            evidence.append(item)
+            seen.add(key)
+    existing.evidence_sources = evidence[-30:]
+    if existing.verification_status == "PERSON_REJECTED":
+        return existing
+    # Fresh contradictory evidence can reject a previously accepted machine result.
+    if discovered.verification_status == "PERSON_REJECTED":
+        existing.verification_status = discovered.verification_status
+        existing.rejection_reason = discovered.rejection_reason
+        existing.rejection_details = discovered.rejection_details
+    elif existing.verification_status not in ("APOLLO_ENRICHED", "EMAIL_VERIFIED"):
+        existing.verification_status = discovered.verification_status
+    for field in ("verification_confidence", "verification_notes", "score_composite",
+                  "score_company_match", "score_role_relevance", "score_facility_match",
+                  "score_recency", "score_evidence_quality", "pending_research_tasks"):
+        setattr(existing, field, getattr(discovered, field))
+    return existing
+
+
 def run_full_discovery_pipeline(
     company_id: int,
     db: Session,
     signal_type: Optional[str] = None,
     max_apollo_enrichments: int = 3,
+    max_queries: int = 6,
+    free_only: bool = False,
+    additional_evidence: Optional[List[Dict[str, Any]]] = None,
+    before_apollo=None,
 ) -> Dict[str, Any]:
     """Orchestrate the complete decision-maker discovery pipeline.
 
@@ -940,21 +999,33 @@ def run_full_discovery_pipeline(
         "queries": [q["query"] for q in queries[:5]],  # Sample
     }
 
+    # Official pages are first: stop search if they already identify a relevant person.
+    official_candidates = extract_person_candidates(additional_evidence or [], company.name)
+    official_adequate = any(
+        verify_person_candidate(candidate, company)["composite_score"] >= APOLLO_ELIGIBLE_THRESHOLD
+        for candidate in official_candidates
+    )
+    if official_adequate:
+        queries = []
+
     # ── 4. Web/Public Research ────────────────────────────────────────
     search_results = execute_web_person_search(
         company_id=company_id,
         company_name=company.name,
         queries=queries,
         db=db,
-        max_queries=6,
+        max_queries=max_queries,
+        free_only=free_only,
     )
     stages["person_search"] = {
         "status": search_results["overall_status"],
-        "provider": search_results["search_provider"],
+        "provider": "official_website" if official_adequate else search_results["search_provider"],
         "provider_statuses": search_results["provider_statuses"],
         "total_results": search_results["total_results"],
         "queries_executed": len(search_results["queries_executed"]),
     }
+
+    search_results["results"].extend(additional_evidence or [])
 
     # ── 5. Person Candidate Extraction ────────────────────────────────
     raw_candidates = extract_person_candidates(
@@ -1030,10 +1101,18 @@ def run_full_discovery_pipeline(
             dmc.contact_priority = "OTHER"
             dmc.priority_reason = "Unverified candidate hypothesis — requires additional evidence before engagement."
 
-        db.add(dmc)
+        existing_candidate = db.query(DecisionMakerCandidate).filter(
+            DecisionMakerCandidate.company_id == company_id,
+            DecisionMakerCandidate.candidate_name == dmc.candidate_name,
+            DecisionMakerCandidate.candidate_title == dmc.candidate_title,
+        ).first()
+        if existing_candidate:
+            dmc = merge_candidate_evidence(existing_candidate, dmc)
+        else:
+            db.add(dmc)
         db.flush()
 
-        if verification["verification_status"] == "PERSON_REJECTED":
+        if dmc.verification_status == "PERSON_REJECTED":
             rejected_candidates.append(dmc)
         else:
             verified_candidates.append(dmc)
@@ -1073,14 +1152,29 @@ def run_full_discovery_pipeline(
     }
 
     # ── 7. Apollo Enrichment ──────────────────────────────────────────
+    from services.contact_confidence import enrich_free_candidate
+    known_contacts = []
+    for person in db.query(Person).filter(Person.company_id == company_id).all():
+        for item in person.evidence_json or []:
+            if isinstance(item, dict) and item.get('type') == 'email_assessment' and item.get('status') in ('VERIFIED', 'PUBLICLY_FOUND'):
+                known_contacts.append({'name': person.full_name, 'email': person.email,
+                                       'status': item['status'], 'source': item.get('evidence')})
+    for candidate in verified_candidates:
+        reuse_crm_email(candidate, db)
+        enrich_free_candidate(candidate, company, search_results['results'], known_contacts)
+    db.commit()
+
     apollo_eligible = [
         c for c in verified_candidates
         if (c.score_composite or 0) >= APOLLO_ELIGIBLE_THRESHOLD
         and c.verification_status != "PERSON_REJECTED"
+        and not c.apollo_email
     ][:max_apollo_enrichments]
 
     apollo_results = []
     for candidate in apollo_eligible:
+        if before_apollo is not None and not before_apollo():
+            break
         result = enrich_candidate_via_apollo(candidate, company.name, db)
         apollo_results.append({
             "name": candidate.candidate_name,
@@ -1099,13 +1193,15 @@ def run_full_discovery_pipeline(
     # ── 8. Email Status ───────────────────────────────────────────────
     email_results = []
     for c in verified_candidates:
+        assessment = enrich_free_candidate(c, company, search_results['results'], known_contacts)
         email_results.append({
             "name": c.candidate_name,
             "email": c.apollo_email or "NOT FOUND",
             "email_status": c.email_status,
             "apollo_status": c.apollo_enrichment_status,
+            "assessment": assessment,
         })
-
+    db.commit()
     stages["email"] = {
         "status": "REAL",
         "results": email_results,
@@ -1146,6 +1242,8 @@ def run_full_discovery_pipeline(
         "processing_time_seconds": elapsed,
         "stages": stages,
         "research_brief": brief,
+        "public_evidence": search_results["results"],
+        "candidate_ids": [c.id for c in verified_candidates + rejected_candidates],
         "summary": {
             "personas_inferred": len(personas),
             "queries_generated": len(queries),

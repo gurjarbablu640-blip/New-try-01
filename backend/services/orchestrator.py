@@ -366,7 +366,7 @@ class AskOorjaOrchestrator:
                     system_prompt=system_prompt,
                     messages=[{"role": "user", "content": json.dumps(user_content)}],
                 )
-                if resp.text and "1. ANSWER" in resp.text:
+                if resp.text and all(f"### {i}." in resp.text for i in range(1, 9)):
                     return resp.text
             except Exception as e:
                 logger.warning(f"Final synthesis LLM call error: {e}")

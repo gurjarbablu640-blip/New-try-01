@@ -42,6 +42,8 @@ export default function DashboardPage() {
   const [aiAnswer, setAiAnswer] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadErrors, setLoadErrors] = useState({});
+  const [replyTotal, setReplyTotal] = useState(0);
 
   useEffect(() => {
     const loadDashboard = async () => {
@@ -56,6 +58,12 @@ export default function DashboardPage() {
           getInboxReplies({ limit: 4 }),
         ]);
 
+        setLoadErrors(Object.fromEntries(
+          [sumRes, oppRes, quoteRes, calRes, bwRes, repRes].map((res, index) =>
+            [["summary", "opportunities", "quotations", "calibration", "buyingWindows", "replies"][index], res.status === "rejected"]
+          )
+        ));
+        if (repRes.status === "fulfilled") setReplyTotal(repRes.value.data?.total ?? repRes.value.data?.results?.length ?? 0);
         if (sumRes.status === "fulfilled") setSummary(sumRes.value.data);
         if (oppRes.status === "fulfilled") setOpportunities(oppRes.value.data?.results || oppRes.value.data || []);
         if (quoteRes.status === "fulfilled") setQuotations(quoteRes.value.data?.results || quoteRes.value.data || []);
@@ -89,7 +97,7 @@ export default function DashboardPage() {
   const totalPipelineVal = summary?.open_pipeline_value || opportunities.reduce((acc, o) => acc + Number(o.estimated_value || 0), 0);
   const leadsCount = summary?.leads_count ?? 0;
   const qualLeadsCount = summary?.qualified_leads ?? 0;
-  const repliesCount = recentReplies.length;
+  const repliesCount = replyTotal;
   const oppsCount = summary?.open_opportunities ?? opportunities.length;
   const quotesCount = summary?.open_quotations ?? quotations.length;
 
@@ -134,10 +142,10 @@ export default function DashboardPage() {
             <Users className="h-4 w-4 text-brand-cyan" />
           </div>
           <div className="mt-2 font-mono text-2xl font-bold text-white">
-            {leadsCount}
+            {loading ? "..." : loadErrors.summary ? "Unavailable" : leadsCount}
           </div>
           <div className="mt-1 text-[11px] text-dark-muted flex items-center gap-0.5">
-            <span>{leadsCount > 0 ? "Indexed accounts" : "No leads yet"}</span>
+            <span>{loading ? "Loading..." : loadErrors.summary ? "Could not load data" : leadsCount > 0 ? "Indexed accounts" : "No leads yet"}</span>
           </div>
         </div>
 
@@ -147,10 +155,10 @@ export default function DashboardPage() {
             <Flame className="h-4 w-4 text-brand-amber" />
           </div>
           <div className="mt-2 font-mono text-2xl font-bold text-white">
-            {qualLeadsCount}
+            {loading ? "..." : loadErrors.summary ? "Unavailable" : qualLeadsCount}
           </div>
           <div className="mt-1 text-[11px] text-brand-amber flex items-center gap-0.5">
-            <span>{qualLeadsCount > 0 ? "Ready for outreach" : "None qualified"}</span>
+            <span>{loading ? "Loading..." : loadErrors.summary ? "Could not load data" : qualLeadsCount > 0 ? "Ready for outreach" : "None qualified"}</span>
           </div>
         </div>
 
@@ -160,10 +168,10 @@ export default function DashboardPage() {
             <Send className="h-4 w-4 text-brand-secondary" />
           </div>
           <div className="mt-2 font-mono text-2xl font-bold text-white">
-            {repliesCount}
+            {loading ? "..." : loadErrors.replies ? "Unavailable" : repliesCount}
           </div>
           <div className="mt-1 text-[11px] text-brand-emerald">
-            {repliesCount > 0 ? "Inbound signals" : "No replies yet"}
+            {loading ? "Loading..." : loadErrors.replies ? "Could not load data" : repliesCount > 0 ? "Inbound signals" : "No replies yet"}
           </div>
         </div>
 
@@ -173,10 +181,10 @@ export default function DashboardPage() {
             <GitPullRequest className="h-4 w-4 text-brand-primary" />
           </div>
           <div className="mt-2 font-mono text-2xl font-bold text-white">
-            {oppsCount}
+            {loading ? "..." : loadErrors.summary ? "Unavailable" : oppsCount}
           </div>
           <div className="mt-1 text-[11px] text-dark-muted">
-            {oppsCount > 0 ? "In active pipeline" : "No open deals"}
+            {loading ? "Loading..." : loadErrors.summary ? "Could not load data" : oppsCount > 0 ? "In active pipeline" : "No open deals"}
           </div>
         </div>
 
@@ -186,10 +194,10 @@ export default function DashboardPage() {
             <FileText className="h-4 w-4 text-brand-cyan" />
           </div>
           <div className="mt-2 font-mono text-2xl font-bold text-white">
-            {quotesCount}
+            {loading ? "..." : loadErrors.summary ? "Unavailable" : quotesCount}
           </div>
           <div className="mt-1 text-[11px] text-brand-cyan">
-            {quotesCount > 0 ? "Commercial drafts" : "No quotes yet"}
+            {loading ? "Loading..." : loadErrors.summary ? "Could not load data" : quotesCount > 0 ? "Commercial drafts" : "No quotes yet"}
           </div>
         </div>
 
@@ -199,10 +207,10 @@ export default function DashboardPage() {
             <TrendingUp className="h-4 w-4 text-brand-emerald" />
           </div>
           <div className="mt-2 font-mono text-2xl font-bold text-brand-emerald">
-            ₹{Number(totalPipelineVal).toLocaleString("en-IN")}
+            {loading ? "..." : loadErrors.summary ? "Unavailable" : `₹${Number(totalPipelineVal).toLocaleString("en-IN")}`}
           </div>
           <div className="mt-1 text-[11px] text-brand-emerald">
-            {totalPipelineVal > 0 ? "Calculated pipeline" : "₹0.00"}
+            {loading ? "Loading..." : loadErrors.summary ? "Could not load data" : totalPipelineVal > 0 ? "Calculated pipeline" : "₹0.00"}
           </div>
         </div>
       </div>
@@ -271,10 +279,10 @@ export default function DashboardPage() {
                   </div>
                   <div>
                     <div className="font-medium text-white text-sm">
-                      {qualLeadsCount > 0 ? `${qualLeadsCount} Qualified Leads Ready for Outreach` : "Lead Factory Pipeline Ready"}
+                      {loading ? "Loading..." : loadErrors.summary ? "Could not load data" : qualLeadsCount > 0 ? `${qualLeadsCount} Qualified Leads Ready for Outreach` : "Lead Factory Pipeline Ready"}
                     </div>
                     <div className="text-xs text-dark-muted">
-                      {qualLeadsCount > 0 ? "Verified decision-makers across industrial corridors" : "Discover new high-priority manufacturing accounts"}
+                      {loading ? "Loading..." : loadErrors.summary ? "Could not load data" : qualLeadsCount > 0 ? "Review contacts and evidence before outreach" : "Discover new high-priority manufacturing accounts"}
                     </div>
                   </div>
                 </div>
@@ -291,10 +299,10 @@ export default function DashboardPage() {
                   </div>
                   <div>
                     <div className="font-medium text-white text-sm">
-                      {repliesCount > 0 ? `${repliesCount} Inbound Replies in Inbox` : "Sales Inbox & IMAP Monitor"}
+                      {loading ? "Loading..." : loadErrors.replies ? "Could not load data" : repliesCount > 0 ? `${repliesCount} Inbound Replies in Inbox` : "Sales Inbox & IMAP Monitor"}
                     </div>
                     <div className="text-xs text-dark-muted">
-                      {repliesCount > 0 ? "Incoming communications classified by Reply Intelligence" : "Monitoring inbound emails for RFQs and buying signals"}
+                      {loading ? "Loading..." : loadErrors.replies ? "Could not load data" : repliesCount > 0 ? "Incoming communications classified by Reply Intelligence" : "Review recorded replies and inbox configuration"}
                     </div>
                   </div>
                 </div>
@@ -311,10 +319,10 @@ export default function DashboardPage() {
                   </div>
                   <div>
                     <div className="font-medium text-white text-sm">
-                      {calibrationsDue.length > 0 ? `${calibrationsDue.length} Customer Assets Due for Calibration` : "Asset Calibration Intelligence"}
+                      {loading ? "Loading..." : loadErrors.calibration ? "Could not load calibration dates" : calibrationsDue.length > 0 ? `${calibrationsDue.length} Assets in Calibration Preview` : "Asset Calibration Intelligence"}
                     </div>
                     <div className="text-xs text-dark-muted">
-                      {calibrationsDue.length > 0 ? "Instruments in active 30-60 day buying window" : "Track customer instruments and renewal dates"}
+                      {loading ? "Loading..." : loadErrors.calibration ? "Could not load calibration dates" : calibrationsDue.length > 0 ? "Recorded instruments due in the next 45 days" : "Track customer instruments and renewal dates"}
                     </div>
                   </div>
                 </div>
@@ -331,10 +339,10 @@ export default function DashboardPage() {
                   </div>
                   <div>
                     <div className="font-medium text-white text-sm">
-                      {quotesCount > 0 ? `${quotesCount} Quotations on Record` : "Quotation Intelligence & History"}
+                      {loading ? "Loading..." : loadErrors.summary ? "Could not load data" : quotesCount > 0 ? `${quotesCount} Quotations on Record` : "Quotation Intelligence & History"}
                     </div>
                     <div className="text-xs text-dark-muted">
-                      {quotesCount > 0 ? "Draft and finalized line-item calibration proposals" : "Import historical quotations or draft new proposals"}
+                      {loading ? "Loading..." : loadErrors.summary ? "Could not load data" : quotesCount > 0 ? "Draft and finalized line-item calibration proposals" : "Import historical quotations or draft new proposals"}
                     </div>
                   </div>
                 </div>
@@ -357,7 +365,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="mt-4 space-y-2.5">
-              {opportunities.length > 0 ? (
+              {loading ? <p className="text-xs text-dark-muted">Loading opportunities...</p> : loadErrors.opportunities ? <p role="alert" className="text-xs text-brand-amber">Could not load opportunities. Refresh to retry.</p> : opportunities.length > 0 ? (
                 opportunities.map((opp) => (
                   <div
                     key={opp.id}
@@ -404,7 +412,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="mt-4 space-y-2.5">
-              {calibrationsDue.length > 0 ? (
+              {loading ? <p className="text-xs text-dark-muted">Loading calibration dates...</p> : loadErrors.calibration ? <p role="alert" className="text-xs text-brand-amber">Could not load calibration dates. Refresh to retry.</p> : calibrationsDue.length > 0 ? (
                 calibrationsDue.map((item) => (
                   <div
                     key={item.asset_id || item.id}
@@ -424,7 +432,7 @@ export default function DashboardPage() {
                 ))
               ) : (
                 <div className="rounded-xl border border-dark-border bg-dark-panel p-4 text-center text-xs text-dark-muted">
-                  All active customer instruments calibrated.
+                  No recorded active assets are due in the next 45 days. Overdue assets are listed on the asset board.
                 </div>
               )}
             </div>
@@ -435,7 +443,7 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between pb-3 border-b border-dark-border">
               <div className="flex items-center gap-2">
                 <Calendar className="h-5 w-5 text-brand-emerald" />
-                <h2 className="font-semibold text-white text-base">Suggested Trip Itinerary</h2>
+                <h2 className="font-semibold text-white text-base">Territory Planning</h2>
               </div>
               <button
                 onClick={() => navigate("/territory")}
@@ -445,18 +453,8 @@ export default function DashboardPage() {
               </button>
             </div>
 
-            <div className="mt-4 rounded-xl border border-brand-emerald/30 bg-brand-emerald/5 p-3.5">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-white text-xs">Dahej PCPIR & Port Belt</span>
-                <span className="text-[10px] font-mono text-brand-emerald font-bold">NEXT TUESDAY</span>
-              </div>
-              <div className="mt-1 text-xs text-dark-muted">
-                3 plants with 8 overdue pressure & thermal instruments within 15 km.
-              </div>
-              <div className="mt-3 flex items-center justify-between pt-2 border-t border-dark-border text-xs">
-                <span className="text-dark-muted">Est. Spend Opportunity:</span>
-                <span className="font-mono font-bold text-white">₹38,500</span>
-              </div>
+            <div className="mt-4 rounded-xl border border-brand-emerald/30 bg-brand-emerald/5 p-3.5 text-xs text-dark-muted">
+              Open Territory Planning to review customer locations and create a trip from your saved accounts.
             </div>
           </div>
 
@@ -473,7 +471,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="mt-4 space-y-2.5">
-              {recentReplies.length > 0 ? (
+              {loading ? <p className="text-xs text-dark-muted">Loading replies...</p> : loadErrors.replies ? <p role="alert" className="text-xs text-brand-amber">Could not load recorded replies. Refresh to retry.</p> : recentReplies.length > 0 ? (
                 recentReplies.map((rep, idx) => (
                   <div
                     key={idx}
@@ -485,13 +483,13 @@ export default function DashboardPage() {
                       <div className="text-[11px] text-dark-muted truncate max-w-[200px]">{rep.subject}</div>
                     </div>
                     <span className="rounded bg-brand-primary/20 px-2 py-0.5 text-[10px] font-semibold text-brand-primary border border-brand-primary/30">
-                      {rep.classification?.category || "INTERESTED"}
+                      {rep.classification?.category || "UNCLASSIFIED"}
                     </span>
                   </div>
                 ))
               ) : (
                 <div className="text-center py-4 text-xs text-dark-muted">
-                  No new unread replies. Outbound sequences active.
+                  No campaign replies recorded yet.
                 </div>
               )}
             </div>

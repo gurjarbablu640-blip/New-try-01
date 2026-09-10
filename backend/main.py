@@ -51,6 +51,7 @@ from routes.territory import router as territory_router  # noqa: E402
 from routes.intelligence import router as intelligence_router  # noqa: E402
 from routes.settings import router as settings_router  # noqa: E402
 from routes.lab_scopes import router as lab_scopes_router  # noqa: E402
+from routes.contact_research import router as contact_research_router  # noqa: E402
 
 app.include_router(api_router)
 app.include_router(pipeline_router)
@@ -75,8 +76,10 @@ app.include_router(territory_router)
 app.include_router(intelligence_router)
 app.include_router(settings_router)
 app.include_router(lab_scopes_router)
+app.include_router(contact_research_router)
 
 
+@app.get("/api/health")
 @app.get("/health")
 async def health():
     return {"status": "healthy", "service": "oorja-sales-os", "version": app.version}

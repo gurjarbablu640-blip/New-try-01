@@ -4,10 +4,10 @@ Campaigns can be prepared and reviewed in the UI. No outbound message is
 sent by these endpoints; approval is required before a future sender worker
 may execute a campaign.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -88,6 +88,34 @@ def list_campaigns(status: Optional[str] = None):
         session.close()
 
 
+@router.get("/inbox/replies")
+def list_inbox_replies(limit: int = Query(default=20, ge=1, le=100)):
+    """Read recorded campaign replies only; never poll mail or trigger delivery."""
+    session = db()
+    try:
+        query = session.query(CampaignEvent, CampaignRecipient.company_id, Company.name).join(
+            CampaignRecipient, CampaignRecipient.id == CampaignEvent.recipient_id,
+        ).outerjoin(Company, Company.id == CampaignRecipient.company_id).filter(
+            CampaignEvent.event_type.in_(["reply", "replied"]),
+        )
+        total = query.count()
+        rows = query.order_by(CampaignEvent.occurred_at.desc(), CampaignEvent.id.desc()).limit(limit).all()
+        results = []
+        for event, company_id, company_name in rows:
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            results.append({
+                "id": event.id, "campaign_id": event.campaign_id,
+                "recipient_id": event.recipient_id, "company_id": company_id,
+                "company_name": company_name, "occurred_at": event.occurred_at,
+                "from_email": payload.get("from") or payload.get("from_email"),
+                "subject": payload.get("subject"),
+                "classification": payload.get("classification") if isinstance(payload.get("classification"), dict) else None,
+            })
+        return {"results": results, "total": total}
+    finally:
+        session.close()
+
+
 @router.post("")
 def create_campaign(payload: CampaignCreate):
     session = db()
@@ -137,8 +165,12 @@ def add_recipient(campaign_id: int, payload: RecipientCreate):
     try:
         if not session.query(Campaign.id).filter(Campaign.id == campaign_id).first():
             raise HTTPException(404, "Campaign not found")
-        if not session.query(Company.id).filter(Company.id == payload.company_id).first():
+        company = session.query(Company).filter(Company.id == payload.company_id).first()
+        if not company:
             raise HTTPException(404, "Company not found")
+        co_source = str(company.source or "").lower()
+        if co_source in {"mock", "demo", "test", "synthetic"} or "[mock]" in (company.name or "").lower():
+            raise HTTPException(400, f"Cannot enroll {co_source.upper()} company into production campaign")
         if payload.person_id and not session.query(Person.id).filter(Person.id == payload.person_id).first():
             raise HTTPException(404, "Person not found")
         existing = session.query(CampaignRecipient).filter(

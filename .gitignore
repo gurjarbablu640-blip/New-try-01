@@ -50,3 +50,6 @@ frontend/dist/
 
 # Alembic
 *.pyc
+
+# Saved contact research runs (contain business contact data)
+backend/data/contact_research_runs/

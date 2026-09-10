@@ -11,7 +11,7 @@ const api = axios.create({
 export const getHealth = () => api.get("/health");
 
 // Lead Factory & Discovery
-export const searchApolloLeads = (params) => api.get("/leads/apollo/search", { params });
+export const searchApolloLeads = (params) => api.post("/leads/apollo/search", params);
 export const enrichLeadContact = (data) => api.post("/leads/apollo/enrich", data);
 export const validateEmail = (email) => api.get("/leads/validate-email", { params: { email } });
 export const checkDeduplication = (params) => api.get("/leads/dedup-check", { params });
@@ -177,3 +177,9 @@ export const enrichDecisionMaker = (candidateId) => api.post(`/intelligence/deci
 export const getDecisionMakerResearchBrief = (companyId) => api.get(`/intelligence/decision-makers/research-brief/${companyId}`);
 
 export default api;
+
+// Explicit, bounded contact research
+export const getContactResearchStatus = () => api.get("/contact-research/status");
+export const getContactResearchRuns = () => api.get("/contact-research/runs");
+export const getContactResearchRun = (id) => api.get(`/contact-research/runs/${id}`);
+export const startContactResearchRun = (data) => api.post("/contact-research/runs", data);

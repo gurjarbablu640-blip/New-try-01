@@ -161,6 +161,7 @@ class ResearchProviderRouter:
         num_results: int = 5,
         company_id: Optional[int] = None,
         db: Optional[Session] = None,
+        free_only: bool = False,
     ) -> Dict[str, Any]:
         """Execute a search using the best available provider with automatic fallback.
 
@@ -178,7 +179,7 @@ class ResearchProviderRouter:
         # 1. Google Custom Search
         google_key = str(get_setting_value("GOOGLE_API_KEY", "")).strip()
         google_cx = str(get_setting_value("GOOGLE_SEARCH_CX", "")).strip()
-        if google_key and google_cx and not google_key.startswith("mock_") and not google_key.startswith("YOUR_"):
+        if not free_only and google_key and google_cx and not google_key.startswith("mock_") and not google_key.startswith("YOUR_"):
             results, status, error = self._search_google(query, num_results)
             if status == PROVIDER_LIVE:
                 used_provider = "google_custom_search"
@@ -186,7 +187,7 @@ class ResearchProviderRouter:
         # 2. Serper fallback
         if not results:
             serper_key = str(get_setting_value("SERPER_API_KEY", "")).strip()
-            if serper_key and not serper_key.startswith("mock_") and not serper_key.startswith("YOUR_"):
+            if not free_only and serper_key and not serper_key.startswith("mock_") and not serper_key.startswith("YOUR_"):
                 results, status, error = self._search_serper(query, num_results)
                 if status == PROVIDER_LIVE:
                     used_provider = "serper"
@@ -198,7 +199,7 @@ class ResearchProviderRouter:
                 used_provider = "searxng"
 
         # 4. Database Cache fallback
-        if not results and db:
+        if not results and db and not free_only:
             results, status, error = self._search_database_cache(query, db)
             if status == PROVIDER_LIVE:
                 used_provider = "database_cache"
@@ -246,7 +247,7 @@ class ResearchProviderRouter:
             "http://searxng:8080",
             "http://localhost:8080",
         ]
-        candidate_urls = [u for u in candidate_urls if u]
+        candidate_urls = list(dict.fromkeys(u for u in candidate_urls if u))
         for base in candidate_urls:
             url = f"{base}/search"
             params = {
@@ -256,7 +257,7 @@ class ResearchProviderRouter:
                 "language": "en-IN",
             }
             try:
-                resp = requests.get(url, params=params, timeout=10)
+                resp = requests.get(url, params=params, timeout=16)
                 if resp.status_code == 200:
                     data = resp.json()
                     raw_results = data.get("results", [])
@@ -271,10 +272,13 @@ class ResearchProviderRouter:
                         ))
                     if results:
                         return results, PROVIDER_LIVE, None
+                    if data.get("unresponsive_engines"):
+                        return [], PROVIDER_ERROR, "SearXNG search engines unavailable"
+                    return [], PROVIDER_EMPTY, "SearXNG returned no matching results"
             except Exception as e:
-                logger.debug("SearXNG candidate %s connection note: %s", base, e)
+                logger.debug("SearXNG connection failed: %s", type(e).__name__)
                 continue
-        return [], PROVIDER_EMPTY, "SearXNG returned no results"
+        return [], PROVIDER_ERROR, "SearXNG unavailable"
 
     def _search_google(
         self, query: str, num_results: int
