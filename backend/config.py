@@ -22,14 +22,42 @@ class Settings(BaseSettings):
     # Serper.dev Search API
     SERPER_API_KEY: str = ""
 
-    # OpenAI / ChatGPT
+    # Zero-Cost LLM Cost Policy & Account Verification
+    LLM_COST_POLICY: str = "ZERO_COST_ONLY"
+    ALLOW_PAID_LLM: bool = False
+
+    # Gemini Settings & Account Verification
+    GEMINI_ACCOUNT_MODE: str = "UNVERIFIED"  # Allowed: FREE_NO_BILLING, PAID, UNVERIFIED (Default: UNVERIFIED)
+    ORCHESTRATOR_GEMINI_MODEL: str = "gemini-3.7-flash"
+
+    # Groq Settings & Account Verification
+    GROQ_API_KEY: str = ""
+    GROQ_ACCOUNT_MODE: str = "UNVERIFIED"  # Allowed: FREE, PAID, UNVERIFIED (Default: UNVERIFIED)
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
+
+    # OpenRouter Settings & Account Verification
+    OPENROUTER_API_KEY: str = ""
+    OPENROUTER_ACCOUNT_MODE: str = "UNVERIFIED"  # Allowed: FREE, PAID, UNVERIFIED (Default: UNVERIFIED)
+    OPENROUTER_MODEL: str = "meta-llama/llama-3.3-70b-instruct:free"
+
+    # Cloudflare Settings & Account Verification
+    CLOUDFLARE_ACCOUNT_ID: str = ""
+    CLOUDFLARE_API_TOKEN: str = ""
+    CLOUDFLARE_ACCOUNT_MODE: str = "UNVERIFIED"  # Allowed: FREE, PAID, UNVERIFIED (Default: UNVERIFIED)
+    CLOUDFLARE_MODEL: str = "@cf/meta/llama-3.1-8b-instruct"
+
+    # LLM Reasoning Cache
+    LLM_CACHE_ENABLED: bool = True
+    LLM_CACHE_DIR: str = "data/llm_cache"
+    LLM_CACHE_TTL_DAYS: int = 30
+
+    # OpenAI / ChatGPT (Retained for manual/explicit use only; blocked when ALLOW_PAID_LLM=False)
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o"
 
-    # Orchestrator LLM Settings
+    # Orchestrator LLM Settings (Zero-Cost Safe)
     ORCHESTRATOR_PRIMARY_PROVIDER: str = "gemini"
-    ORCHESTRATOR_FALLBACK_PROVIDER: str = "openai"
-    ORCHESTRATOR_GEMINI_MODEL: str = "gemini-2.0-flash"
+    ORCHESTRATOR_FALLBACK_PROVIDER: str = "groq"
     ORCHESTRATOR_OPENAI_MODEL: str = "gpt-4o"
     ORCHESTRATOR_MAX_ITERATIONS: int = 6
     ORCHESTRATOR_TOKEN_BUDGET: int = 20000
