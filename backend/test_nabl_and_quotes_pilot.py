@@ -36,7 +36,7 @@ def run_nabl_and_quotes_pilot():
             {
                 "raw_text": """
                 Oorja Technical Services Calibration Laboratory Pune
-                Certificate No: CC-2841 | ISO/IEC 17025:2017 | Valid upto: 31-12-2027
+                Certificate No: CC-3963 | ISO/IEC 17025:2017 | Valid upto: 31-12-2027
                 State: Maharashtra | Location: Pune Industrial Zone
                 Page 1 of 4
                 Discipline: Mechanical

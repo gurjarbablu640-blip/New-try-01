@@ -121,7 +121,7 @@ def seed_default_knowledge():
 
         # 1. NABL Scope Document
         doc_nabl = KnowledgeDocument(
-            title="Oorja Technical Services — NABL Scope & Accreditation (CC-3498)",
+            title="Oorja Technical Services — NABL Scope & Accreditation (CC-3963)",
             document_type="nabl_scope",
             company="Oorja Technical Services",
             source_name="NABL Scope Directory 2026",

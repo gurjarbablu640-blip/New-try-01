@@ -258,7 +258,7 @@ def draft_followup_message_tool(db: Session, company_id: int) -> dict[str, Any]:
             f"{salutation}\n\n"
             f"I am writing from Oorja Technical Services regarding upcoming calibration requirements {plant_ref}. "
             f"We noticed that {count} critical instruments are currently approaching or past their calibration due date.\n\n"
-            f"Our NABL accredited laboratory (CC-3498) offers on-site testing for Pressure, Temperature, and Electro-Technical parameters "
+            f"Our NABL accredited laboratory (CC-3963) offers on-site testing for Pressure, Temperature, and Electro-Technical parameters "
             f"with standard 48-hour certificate turnaround.\n\n"
             f"Could we schedule a brief 5-minute call this week to review the master asset list?\n\n"
             f"Best regards,\nOorja Sales Team"

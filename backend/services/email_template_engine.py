@@ -36,7 +36,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
   <div class="container">
     <div class="header">
       <div class="header-logo">OORJA TECHNICAL SERVICES</div>
-      <div class="header-sub">ISO/IEC 17025:2017 NABL Accredited Calibration Laboratory (CC-3498)</div>
+      <div class="header-sub">ISO/IEC 17025:2017 NABL Accredited Calibration Laboratory (CC-3963)</div>
     </div>
     <div class="body-content">
       <p>Dear {{contact_name}},</p>

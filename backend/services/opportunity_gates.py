@@ -22,41 +22,16 @@ READY_FOR_EMAIL = "READY_FOR_EMAIL"
 HOT = "HOT"
 BLOCKED = "BLOCKED"
 
-# ── Oorja Certified Scope Constants ─────────────────────────────────────
-OORJA_CONFIRMED_SCOPE = {
-    "dimensional": {
-        "cmm", "coordinate measuring machine", "vernier caliper", "caliper",
-        "depth gauge", "micrometer", "internal micrometer", "external micrometer",
-        "dial indicator", "dial gauge", "plunger gauge", "height master",
-        "height gauge", "gauge block", "surface plate", "optical flat",
-        "pin gauge", "snap gauge", "plug gauge", "thread gauge"
-    },
-    "pressure_torque": {
-        "pressure gauge", "pressure transmitter", "pressure transducer",
-        "digital pressure gauge", "vacuum gauge", "dead weight tester",
-        "torque wrench", "torque transducer", "digital torque tester",
-        "analytical balance", "precision balance", "standard weights"
-    },
-    "thermal": {
-        "rtd", "rtd pt100", "pt100", "temperature sensor", "thermocouple",
-        "thermocouple j", "thermocouple k", "temperature calibrator bath",
-        "dry block calibrator", "environmental chamber", "test chamber",
-        "muffle furnace", "hot air oven", "incubator", "digital thermometer",
-        "glass thermometer", "hygrometer", "temperature datalogger"
-    },
-    "electro_technical": {
-        "digital multimeter", "multimeter", "voltmeter", "ammeter",
-        "process calibrator", "loop calibrator", "insulation tester",
-        "megohmmeter", "decade resistance box", "power meter", "clamp meter"
-    }
-}
-
-OORJA_OUT_OF_SCOPE = {
-    "metallurgical testing", "metallurgical", "spectrometer", "optical emission spectrometer",
-    "xrf", "x-ray fluorescence", "ultrasonic flaw detector", "flaw detector",
-    "tensile destruction testing", "destructive testing", "chemical assay",
-    "chromatography", "hplc testing", "gc testing", "radiation meter"
-}
+from services.oorja_capability_service import (
+    CONFIRMED_NABL_SCOPE,
+    KNOWN_OORJA_SERVICE_NON_SCOPE_VERIFIED,
+    OORJA_OFFICIAL_CERTIFICATE_NO,
+    OUT_OF_SCOPE,
+    POSSIBLE,
+    UNKNOWN,
+    classify_capability,
+    classify_technical_scope_batch,
+)
 
 
 @dataclass(frozen=True)
@@ -78,41 +53,22 @@ def _truth(value: Any) -> bool:
     )
 
 
-def classify_technical_scope(scope_items: list[str]) -> dict[str, Any]:
-    """Split requested instruments into Oorja certified scope vs out-of-scope."""
-    confirmed = []
-    out_of_scope = []
-    possible = []
-    unknown = []
-
-    for item in scope_items:
-        clean = str(item).lower().strip()
-        # Check out of scope first
-        if any(oos in clean for oos in OORJA_OUT_OF_SCOPE):
-            out_of_scope.append(item)
-            continue
-
-        # Check confirmed scope disciplines
-        is_confirmed = False
-        for disc, keywords in OORJA_CONFIRMED_SCOPE.items():
-            if any(kw in clean for kw in keywords):
-                confirmed.append(item)
-                is_confirmed = True
-                break
-        if is_confirmed:
-            continue
-
-        # Check possible general measurement words
-        if any(w in clean for w in ["gauge", "meter", "sensor", "transmitter", "calibrat"]):
-            possible.append(item)
-        else:
-            unknown.append(item)
-
+def classify_technical_scope(
+    scope_items: list[str],
+    certificate_no: str | None = OORJA_OFFICIAL_CERTIFICATE_NO,
+) -> dict[str, Any]:
+    """Strictly classify requested instruments against Oorja NABL schedule CC-3963."""
+    res = classify_technical_scope_batch(scope_items, certificate_no=certificate_no)
+    confirmed_items = [c["item"] for c in res["CONFIRMED_NABL_SCOPE"]]
     return {
-        "CONFIRMED_OORJA_SCOPE": confirmed,
-        "OUT_OF_SCOPE": out_of_scope,
-        "POSSIBLE_OORJA_SCOPE": possible,
-        "UNKNOWN": unknown,
+        "certificate_no": res["certificate_no"],
+        "CONFIRMED_NABL_SCOPE": res["CONFIRMED_NABL_SCOPE"],
+        "CONFIRMED_OORJA_SCOPE": confirmed_items,  # compatibility alias
+        "KNOWN_OORJA_SERVICE_NON_SCOPE_VERIFIED": res["KNOWN_OORJA_SERVICE_NON_SCOPE_VERIFIED"],
+        "POSSIBLE": res["POSSIBLE"],
+        "POSSIBLE_OORJA_SCOPE": res["POSSIBLE"],  # compatibility alias
+        "UNKNOWN": res["UNKNOWN"],
+        "OUT_OF_SCOPE": res["OUT_OF_SCOPE"],
     }
 
 
@@ -265,7 +221,7 @@ def _person_passes(value: Any) -> tuple[bool, str, dict[str, Any]]:
 
 
 def _technical_capability_passes(value: Any) -> tuple[bool, str, dict[str, Any]]:
-    """Enforce technical capability verification against confirmed Oorja NABL scope."""
+    """Enforce technical capability verification against confirmed Oorja CC-3963 NABL scope."""
     if not isinstance(value, Mapping):
         passed = _truth(value)
         return passed, ("Technical capability confirmed" if passed else "Technical capability missing"), {}
@@ -274,24 +230,195 @@ def _technical_capability_passes(value: Any) -> tuple[bool, str, dict[str, Any]]
     if isinstance(scope_items, str):
         scope_items = [s.strip() for s in scope_items.split(",") if s.strip()]
 
+    cert_no = str(value.get("certificate_no") or OORJA_OFFICIAL_CERTIFICATE_NO).strip()
+
     if not scope_items:
         passed = _truth(value.get("verified")) or _truth(value.get("capability_confirmed"))
         return passed, ("evidence present" if passed else "no instruments or calibration scope specified"), {}
 
-    analysis = classify_technical_scope(scope_items)
-    confirmed = analysis["CONFIRMED_OORJA_SCOPE"]
+    analysis = classify_technical_scope(scope_items, certificate_no=cert_no)
+    confirmed = analysis["CONFIRMED_NABL_SCOPE"]
     out_of_scope = analysis["OUT_OF_SCOPE"]
 
     if out_of_scope and not confirmed:
-        return False, f"Requested scope contains out-of-scope services ({', '.join(out_of_scope)}) not certified under Oorja NABL accreditation", analysis
+        return (
+            False,
+            f"Requested scope contains out-of-scope services ({', '.join(out_of_scope)}) not accredited under Oorja CC-3963",
+            analysis,
+        )
 
     if not confirmed:
-        return False, "None of the requested instruments match Oorja's certified NABL accreditation scope", analysis
+        return (
+            False,
+            f"None of the requested instruments match Oorja's verified NABL scope ({cert_no})",
+            analysis,
+        )
 
     if out_of_scope and confirmed:
-        return True, f"Technical capability confirmed for {len(confirmed)} instruments; {len(out_of_scope)} items are out-of-scope", analysis
+        return (
+            True,
+            f"Technical capability confirmed for {len(confirmed)} instruments; {len(out_of_scope)} items are out-of-scope",
+            analysis,
+        )
 
-    return True, f"All {len(confirmed)} instruments are within Oorja certified NABL scope", analysis
+    return (
+        True,
+        f"All {len(confirmed)} instruments verified under Oorja NABL certificate {cert_no}",
+        analysis,
+    )
+
+
+def _calibration_demand_passes(value: Any) -> tuple[bool, str, dict[str, Any]]:
+    """Enforce baseline calibration demand verification.
+
+    Baseline calibration demand can be established by:
+    - IATF 16949 / ISO 9001 / ISO 17025 compliance
+    - Precision manufacturing operations requiring periodic recalibration
+    - Documented customer assets requiring calibration
+    - Calibration management demand / annual budgeting / periodic calibration statements
+    """
+    if not isinstance(value, Mapping):
+        passed = _truth(value)
+        return (
+            passed,
+            ("Baseline calibration demand established" if passed else "Missing baseline calibration demand evidence"),
+            {"baseline_demand": passed},
+        )
+
+    basis = str(
+        value.get("demand_basis")
+        or value.get("reason")
+        or value.get("evidence")
+        or value.get("description")
+        or ""
+    ).strip()
+    verified = _truth(value.get("verified")) or _truth(value.get("demand_verified")) or bool(basis)
+
+    if verified:
+        return (
+            True,
+            f"Baseline calibration demand confirmed ({basis or 'compliance/periodic standard'})",
+            {"baseline_demand": True, "demand_basis": basis or "periodic recalibration requirement"},
+        )
+    return (
+        False,
+        "Missing or unverified baseline calibration demand",
+        {"baseline_demand": False, "demand_basis": ""},
+    )
+
+
+def _timing_passes(value: Any, evidence: Mapping[str, Any]) -> tuple[bool, str, dict[str, Any]]:
+    """Enforce current buying intent / timing window policy.
+
+    SEPARATE BASELINE_CALIBRATION_DEMAND from CURRENT_BUYING_INTENT / TIMING.
+
+    Generic recurring statements:
+      - 'annual calibration', 'periodic calibration', 'ISO requirement',
+      - 'regular budgeting', 'calendar cycle', 'recurring need'
+      establish baseline demand but MUST NOT automatically pass the timing gate!
+
+    Evidence that MAY pass timing:
+      - current expansion / plant startup / capacity addition
+      - commissioning / equipment installation
+      - QA/metrology hiring tied to active work
+      - specific audit/qualification window (dated/upcoming)
+      - active procurement / RFQ / tender
+      - scheduled plant shutdown / maintenance activity
+      - contract/vendor renewal evidence
+      - recent production ramp / new production line
+      - dated current activity
+    """
+    if value is None or value is False:
+        return False, "No current buying timing or procurement window evidence exists", {"current_timing_verified": False}
+
+    timing_text = ""
+    event_type = ""
+    is_active_window = False
+
+    if isinstance(value, Mapping):
+        timing_text = str(
+            value.get("buying_window")
+            or value.get("timing_evidence")
+            or value.get("event")
+            or value.get("reason")
+            or ""
+        ).strip().lower()
+        event_type = str(value.get("event_type") or value.get("type") or "").strip().lower()
+        is_active_window = bool(
+            value.get("active_buying_window")
+            or value.get("is_buying_window_active")
+            or value.get("current_timing_verified")
+            or value.get("active_rfq")
+            or value.get("upcoming_audit")
+            or value.get("current_expansion")
+            or value.get("active_commissioning")
+        )
+    elif isinstance(value, str):
+        timing_text = value.strip().lower()
+
+    generic_patterns = [
+        "annual calibration",
+        "periodic calibration",
+        "iso requirement",
+        "regular budgeting",
+        "budgeting cycle",
+        "calendar cycle",
+        "recurring need",
+        "standard requirement",
+        "periodic recalibration",
+        "annual cycle",
+        "general timing",
+        "recurring requirement",
+        "recurring calibration",
+        "standard recurring",
+        "regular calibration",
+    ]
+
+    # If only generic statement without active event flag:
+    if timing_text and any(gp in timing_text for gp in generic_patterns):
+        if not is_active_window and not any(
+            act in timing_text
+            for act in [
+                "rfq", "tender", "procurement", "audit scheduled", "audit due",
+                "commissioning", "installation", "expansion", "shutdown", "renewal", "ramp"
+            ]
+        ):
+            return (
+                False,
+                f"Generic recurring requirement ('{timing_text}') establishes baseline demand but does not prove a current buying window or active timing trigger",
+                {"current_timing_verified": False, "timing_evidence": timing_text, "is_generic_baseline_only": True},
+            )
+
+    active_triggers = [
+        "expansion", "commissioning", "installation", "startup", "plant startup",
+        "hiring", "qa hiring", "metrology hiring", "audit window", "audit due",
+        "rfq", "procurement", "tender", "shutdown", "maintenance shutdown",
+        "vendor renewal", "contract renewal", "production ramp", "active buying window",
+        "immediate_to_30_days", "immediate_to_60_days", "active", "urgent"
+    ]
+
+    has_active_signal = (
+        is_active_window
+        or any(at in timing_text for at in active_triggers)
+        or any(at in event_type for at in active_triggers)
+    )
+
+    if has_active_signal:
+        return (
+            True,
+            f"Current buying timing confirmed: {timing_text or event_type or 'active procurement window'}",
+            {"current_timing_verified": True, "timing_evidence": timing_text or event_type},
+        )
+
+    # If truthy boolean True was passed directly:
+    if value is True:
+        return True, "Current buying timing confirmed", {"current_timing_verified": True}
+
+    return (
+        False,
+        f"Missing dated buying-window evidence for timing (provided: '{timing_text}')",
+        {"current_timing_verified": False, "timing_evidence": timing_text},
+    )
 
 
 def _email_passes(value: Any) -> bool:
@@ -354,10 +481,14 @@ def evaluate_opportunity_gates(evidence: Mapping[str, Any], *, production: bool 
             passed, reason, meta = _trigger_passes(value)
         elif name == "exact_facility":
             passed, reason, meta = _facility_passes(value, evidence)
-        elif name == "correct_person":
-            passed, reason, meta = _person_passes(value)
+        elif name == "calibration_demand":
+            passed, reason, meta = _calibration_demand_passes(value)
         elif name == "technical_capability":
             passed, reason, meta = _technical_capability_passes(value)
+        elif name == "timing":
+            passed, reason, meta = _timing_passes(value, evidence)
+        elif name == "correct_person":
+            passed, reason, meta = _person_passes(value)
         elif name == "reachable_email":
             passed = _email_passes(value)
             reason = "evidence present" if passed else "missing or insufficient email verification"

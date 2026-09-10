@@ -129,7 +129,7 @@ def generate_role_specific_pitch(
             f"Dear {name},\n\n"
             f"As your quality and metrology team maintains precision standards at {c_name}, ensuring seamless audit compliance "
             f"and strict measurement traceability across {params_str} equipment is vital.\n\n"
-            f"Oorja Technical Services operates as an ISO/IEC 17025:2017 NABL accredited laboratory (CC-3498). We support high-precision "
+            f"Oorja Technical Services operates as an ISO/IEC 17025:2017 NABL accredited laboratory (CC-3963). We support high-precision "
             f"dimensional, thermal, electrical, and pressure calibration with documented measurement uncertainty budgets and fast turnaround, "
             f"giving your team complete audit confidence.\n\n"
             f"Would it be helpful to review our accredited scope and discuss your upcoming calibration schedule?"

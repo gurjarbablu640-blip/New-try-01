@@ -44,7 +44,7 @@ OBJECTION_PLAYBOOK = {
         "strategy": "Scope Discovery before pricing commit",
         "recommended_responses": [
             "Gladly. Because accredited calibration rates depend on instrument precision class and parameter range, could we quickly confirm your main instrument categories so we send you an exact, relevant scope?",
-            "I'll share our NABL accreditation scope (CC-3498) and standard rate card right away. Who from your Quality team should we include for technical parameter review?",
+            "I'll share our NABL accreditation scope (CC-3963) and standard rate card right away. Who from your Quality team should we include for technical parameter review?",
         ],
     },
 }
@@ -77,7 +77,7 @@ def generate_pre_call_brief(company: Company, db: Session, person_id: Optional[i
         things_to_avoid = "Do not debate technical measurement uncertainty; focus on consolidated billing and turnaround SLAs."
     else:  # Quality / Metrology / Plant
         call_objective = "Technical Discovery & Audit Traceability"
-        opening_script = f"Good morning {contact_name}, calling from Oorja Technical Services. We operate an ISO/IEC 17025 NABL accredited calibration laboratory (CC-3498) in Maharashtra. Reaching out regarding your {params_str} calibration schedule to understand your upcoming audit timeline."
+        opening_script = f"Good morning {contact_name}, calling from Oorja Technical Services. We operate an ISO/IEC 17025 NABL accredited calibration laboratory (CC-3963) in Maharashtra. Reaching out regarding your {params_str} calibration schedule to understand your upcoming audit timeline."
         things_to_avoid = "Do not immediately pitch heavy discounts; explore turnaround pain and audit inspection requirements first."
 
     return {
@@ -149,5 +149,5 @@ def analyze_call_transcript(transcript_text: str, company: Optional[Company] = N
         "buying_signals_detected": buying_signals,
         "objections_detected": objections,
         "playbook_coaching_advice": detected_playbook_advice,
-        "recommended_next_action": "Follow up with NABL scope (CC-3498) and schedule plant visit" if buying_signals else "Log call notes in CRM and schedule nurture follow-up",
+        "recommended_next_action": "Follow up with NABL scope (CC-3963) and schedule plant visit" if buying_signals else "Log call notes in CRM and schedule nurture follow-up",
     }

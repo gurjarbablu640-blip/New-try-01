@@ -31,7 +31,7 @@ DEFAULT_REGULATORY_NOTICES = [
             "calibration_requirement": "Mandatory NABL-accredited calibration certificates with documented measurement uncertainty (CMC).",
             "buying_window": "immediate_to_90_days",
             "sales_opportunity": "Consolidated calibration package for weighing & measuring instruments before audit deadline.",
-            "premium_justification": "Oorja NABL accreditation (CC-3498) provides guaranteed audit acceptance, eliminating regulatory penalty risk.",
+            "premium_justification": "Oorja NABL accreditation (CC-3963) provides guaranteed audit acceptance, eliminating regulatory penalty risk.",
         },
         "source_url": "https://consumeraffairs.nic.in/legal-metrology",
     },
