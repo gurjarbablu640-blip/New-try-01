@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # Search & Crawling
     SEARXNG_BASE_URL: str = "http://localhost:8080"
 
+    # DeerFlow Service Adapter (Isolated HTTP boundary)
+    DEERFLOW_BASE_URL: str = "http://localhost:8001"
+    DEERFLOW_ENABLED: bool = False
+    DEERFLOW_TIMEOUT_SECONDS: int = 30
+
     # App settings
     SECRET_KEY: str = "change-me-in-production"
     DEBUG: bool = True

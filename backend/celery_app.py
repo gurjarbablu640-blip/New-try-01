@@ -54,6 +54,11 @@ try:
         "icp-learning": {"task": EXPECTED_TASKS[7], "schedule": crontab(minute=0, hour=0, day_of_week=0)},
         "buying-window-calc": {"task": EXPECTED_TASKS[8], "schedule": crontab(minute=0, hour=5)},
         "ab-analysis": {"task": EXPECTED_TASKS[9], "schedule": crontab(minute=0, hour=0, day_of_week=1)},
+        # Local 24-Hour Autonomous Lifecycle
+        "autonomous-morning-discovery": {"task": "salesoorja.morning_discovery", "schedule": crontab(minute=0, hour=10)},
+        "autonomous-inbox-morning": {"task": "salesoorja.inbox_check_morning", "schedule": crontab(minute=30, hour=10)},
+        "autonomous-inbox-afternoon": {"task": "salesoorja.inbox_check_afternoon", "schedule": crontab(minute=0, hour=16)},
+        "autonomous-evening-cutoff": {"task": "salesoorja.evening_cutoff_and_report", "schedule": crontab(minute=0, hour=18)},
     }
     try:
         celery_app.loader.import_default_modules()
@@ -63,8 +68,29 @@ try:
     @celery_app.task(name="salesoorja.test_ping")
     def test_ping():
         """Harmless diagnostic task for runtime verification."""
-        from datetime import datetime
-        return {"status": "pong", "timestamp": datetime.utcnow().isoformat(), "safety": "verified"}
+        from datetime import datetime, timezone
+        return {"status": "pong", "timestamp": datetime.now(timezone.utc).isoformat(), "safety": "verified"}
+
+    @celery_app.task(name="salesoorja.morning_discovery")
+    def morning_discovery_task():
+        from services.autonomous_scheduler import autonomous_scheduler
+        return autonomous_scheduler.execute_morning_discovery()
+
+    @celery_app.task(name="salesoorja.inbox_check_morning")
+    def inbox_check_morning_task():
+        from services.autonomous_scheduler import autonomous_scheduler
+        return autonomous_scheduler.execute_inbox_check(slot="MORNING_1030")
+
+    @celery_app.task(name="salesoorja.inbox_check_afternoon")
+    def inbox_check_afternoon_task():
+        from services.autonomous_scheduler import autonomous_scheduler
+        return autonomous_scheduler.execute_inbox_check(slot="AFTERNOON_1600")
+
+    @celery_app.task(name="salesoorja.evening_cutoff_and_report")
+    def evening_cutoff_and_report_task():
+        from services.autonomous_scheduler import autonomous_scheduler
+        report = autonomous_scheduler.execute_evening_cutoff_and_report()
+        return report.to_dict()
 
     CELERY_AVAILABLE = True
 except Exception as exc:
