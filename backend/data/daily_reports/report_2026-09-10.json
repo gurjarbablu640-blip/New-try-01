@@ -1,0 +1,15 @@
+{
+  "report_id": "rep-2026-09-10-926e68",
+  "date_str": "2026-09-10",
+  "generated_at": "2026-09-10T12:50:32.405459+00:00",
+  "discovered_leads": 5,
+  "qualified_opportunities": 4,
+  "staged_ready_for_email": 4,
+  "phones_enriched": 3,
+  "apollo_credits_used": 0,
+  "replies_processed": 0,
+  "inbox_checks_count": 2,
+  "night_research_queued": 0,
+  "operating_mode": "TEST_MODE",
+  "status": "COMPLETED"
+}
