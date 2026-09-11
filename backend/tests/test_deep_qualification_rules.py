@@ -138,6 +138,57 @@ class TestDeepQualificationRules(unittest.TestCase):
         self.assertTrue(validate_person_name("M. Senthilkumar")["is_human_name"])
         self.assertTrue(validate_person_name("Rohit Chaubey")["is_human_name"])
 
+    def test_generic_plant_mailbox_cannot_masquerade_as_person_specific(self):
+        """Phase 3 & 14: Plant mailbox (e.g. pressplant5@) must classify as GENERIC_PLANT and reject production send."""
+        plant_email = "pressplant5@ramkrishnaforgings.com"
+        level = classify_contact_evidence_level(
+            email=plant_email,
+            origin="PUBLICLY_FOUND",
+            is_role_account=False,
+            apollo_verified=False,
+            authoritative=False,
+        )
+        self.assertEqual(level, "GENERIC_PLANT")
+        eligible, reason = is_production_send_eligible_contact(level, mailbox_verified=False)
+        self.assertFalse(eligible)
+        self.assertIn("plant mailbox cannot impersonate", reason.lower())
+
+        # Other plant & departmental variants
+        self.assertEqual(classify_contact_evidence_level("plant2@company.com"), "GENERIC_PLANT")
+        self.assertEqual(classify_contact_evidence_level("unit3@company.com"), "GENERIC_PLANT")
+        self.assertEqual(classify_contact_evidence_level("quality@company.com"), "GENERIC_DEPARTMENTAL")
+        self.assertEqual(classify_contact_evidence_level("info@company.com"), "CORPORATE_SWITCHBOARD_CONTACT")
+
+    def test_official_deerflow_status_and_custom_playwright_service(self):
+        """Phase 1 & 2: Custom Playwright service is distinct from official ByteDance DeerFlow."""
+        from services.browser_research_adapter import (
+            OFFICIAL_DEERFLOW_STATUS,
+            browser_research_adapter,
+        )
+        self.assertEqual(OFFICIAL_DEERFLOW_STATUS, "BLOCKED_BY_LLM_PROVIDER")
+        status = browser_research_adapter.get_status()
+        self.assertIn(status.get("service"), ("browser_research_service", "disabled", "unreachable"))
+        self.assertEqual(status.get("official_deerflow_status"), "BLOCKED_BY_LLM_PROVIDER")
+
+    def test_production_ready_vs_apollo_ready_semantics(self):
+        """Phase 4: Apollo-ready and research-qualified leads are NOT production-ready."""
+        candidate = {
+            "functional_ownership_score": 0.85,
+            "current_company_verified": True,
+        }
+        facility_info = {"linkage_confidence": "STRONG", "facility_verified": True}
+        trigger_info = {"valid_trigger": True, "title": "Facility Capex Expansion"}
+        contact_inferred = {"evidence_level": "INFERRED_PERSON_SPECIFIC", "mailbox_verified": False}
+
+        # Candidate is Apollo eligible
+        is_apollo, _ = is_apollo_eligible_lead(candidate, facility_info, trigger_info, contact_inferred)
+        self.assertTrue(is_apollo)
+
+        # But candidate is NOT production send eligible!
+        is_prod, _ = is_production_send_eligible_contact(contact_inferred["evidence_level"], mailbox_verified=False)
+        self.assertFalse(is_prod)
+        self.assertNotEqual(is_apollo, is_prod)
+
 
 if __name__ == "__main__":
     unittest.main()

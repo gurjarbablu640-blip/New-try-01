@@ -615,14 +615,36 @@ def enrich_free_candidate(candidate, company, public_evidence, known_contacts=()
     return result
 
 
-# ── Contact Evidence Policy Taxonomy (Phase 6) ──────────────────────────────
+# ── Contact Evidence Policy Taxonomy (Phase 3 & 6) ───────────────────────────
 CONTACT_EVIDENCE_LEVELS = {
-    "VERIFIED_PERSON_SPECIFIC",        # Level A: Authoritative source or Apollo verified
-    "PUBLICLY_FOUND_PERSON_SPECIFIC",  # Level B: Explicitly published on credible public web source
-    "INFERRED_PERSON_SPECIFIC",        # Level C: Domain pattern guess
-    "GENERIC_DEPARTMENTAL",            # Level D: info@, sales@, quality@
-    "NOT_FOUND",                       # Level E: Unresolved
+    "VERIFIED_PERSON_SPECIFIC",        # Level A: Authoritative source or Apollo verified named person
+    "PUBLICLY_FOUND_PERSON_SPECIFIC",  # Level B: Explicitly published named person email
+    "INFERRED_PERSON_SPECIFIC",        # Level C: Domain pattern guess (first.last@domain)
+    "GENERIC_DEPARTMENTAL",            # Level D: Departmental mailbox (quality@, qa@, metrology@)
+    "GENERIC_PLANT",                   # Level E: Physical plant / unit mailbox (pressplant5@, plant1@, unit2@)
+    "CORPORATE_SWITCHBOARD_CONTACT",   # Level F: General corporate / reception (info@, contact@, admin@)
+    "NOT_FOUND",                       # Level G: Unresolved
 }
+
+PLANT_MAILBOX_REGEX = re.compile(
+    r"^(?:pressplant|plant|unit|works|factory|shop|foundry|yard|facility|division|site|shed|line)[\d_-]*[a-zA-Z0-9]*$|"
+    r"^.*(?:pressplant|plant|unit|works|facility)[\d]+.*$",
+    re.I,
+)
+
+DEPARTMENTAL_MAILBOX_REGEX = re.compile(
+    r"^(?:quality|qa|qc|metrology|calibration|lab|laboratory|testing|inspection|"
+    r"maintenance|engg|engineering|production|purchase|procurement|stores|dispatch|"
+    r"despatch|marketing|sales|service|services|accounts|billing|finance|legal|"
+    r"compliance|secretarial|investor|investors|shareholder|shareholders|hr|careers|jobs|recruitment)[\d_-]*[a-zA-Z0-9]*$",
+    re.I,
+)
+
+SWITCHBOARD_MAILBOX_REGEX = re.compile(
+    r"^(?:info|contact|enquiry|inquiry|admin|office|mail|general|help|support|"
+    r"reception|frontdesk|switchboard|board|corporate|hello|reach|connect|press|media)[\d_-]*[a-zA-Z0-9]*$",
+    re.I,
+)
 
 
 def classify_contact_evidence_level(
@@ -632,17 +654,44 @@ def classify_contact_evidence_level(
     apollo_verified: bool = False,
     authoritative: bool = False,
 ) -> str:
-    """Classify email according to the 5-tier Contact Evidence Policy."""
+    """Classify email according to the 7-tier Contact Evidence Policy.
+
+    Explicitly separates plant and departmental mailboxes from person-specific contacts.
+    """
     if not email:
         return "NOT_FOUND"
+
+    clean = email.strip().lower()
+    local = clean.split("@")[0] if "@" in clean else clean
+
+    # Step 1: Detect generic plant mailboxes (e.g. pressplant5@, plant1@, unit2@)
+    if PLANT_MAILBOX_REGEX.match(local):
+        return "GENERIC_PLANT"
+
+    # Step 2: Detect departmental mailboxes (e.g. quality@, qa@, metrology@)
+    if DEPARTMENTAL_MAILBOX_REGEX.match(local):
+        return "GENERIC_DEPARTMENTAL"
+
+    # Step 3: Detect corporate switchboard mailboxes (e.g. info@, contact@, admin@)
+    if SWITCHBOARD_MAILBOX_REGEX.match(local):
+        return "CORPORATE_SWITCHBOARD_CONTACT"
+
+    # Step 4: Fallback role account check
     if is_role_account:
         return "GENERIC_DEPARTMENTAL"
+
+    # Step 5: Verified person-specific contacts
     if apollo_verified or authoritative:
         return "VERIFIED_PERSON_SPECIFIC"
-    if origin in ("PUBLICLY_FOUND", "VERIFIED") and not is_role_account:
+
+    # Step 6: Publicly found named person email
+    if origin in ("PUBLICLY_FOUND", "VERIFIED"):
         return "PUBLICLY_FOUND_PERSON_SPECIFIC"
+
+    # Step 7: Inferred pattern-based email
     if origin in ("INFERRED", "PROBABLE"):
         return "INFERRED_PERSON_SPECIFIC"
+
     return "INFERRED_PERSON_SPECIFIC"
 
 
@@ -656,7 +705,9 @@ def is_production_send_eligible_contact(
     - VERIFIED_PERSON_SPECIFIC: Eligible
     - PUBLICLY_FOUND_PERSON_SPECIFIC: Eligible (direct public source)
     - INFERRED_PERSON_SPECIFIC: NOT eligible unless mailbox_verified=True
-    - GENERIC_DEPARTMENTAL: NOT eligible for individual consultative outreach
+    - GENERIC_PLANT: NOT eligible for person-specific outreach (referral/fallback only)
+    - GENERIC_DEPARTMENTAL: NOT eligible for person-specific outreach
+    - CORPORATE_SWITCHBOARD_CONTACT: NOT eligible for person-specific outreach
     - NOT_FOUND: NOT eligible
     """
     if evidence_level == "VERIFIED_PERSON_SPECIFIC":
@@ -667,8 +718,12 @@ def is_production_send_eligible_contact(
         if mailbox_verified:
             return True, "Pattern-inferred contact verified via live mailbox verification"
         return False, "Pattern-inferred contact requires live mailbox verification before production send"
+    if evidence_level == "GENERIC_PLANT":
+        return False, "Generic plant mailbox cannot impersonate person-specific reachability"
     if evidence_level == "GENERIC_DEPARTMENTAL":
         return False, "Generic / departmental address is not eligible for person-specific outreach"
+    if evidence_level == "CORPORATE_SWITCHBOARD_CONTACT":
+        return False, "Corporate switchboard contact is not eligible for direct consultative outreach"
     return False, "No verified contact found"
 
 
