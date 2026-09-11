@@ -5,15 +5,34 @@ from services.opportunity_gates import BLOCKED, HOT, READY_FOR_EMAIL, evaluate_o
 
 def evidence(**overrides):
     value = {
-        "trigger_current": True,
-        "exact_facility": True,
+        "trigger_current": {
+            "verified": True,
+            "trigger_date": "2025-08-01",
+            "recency_days": 40,
+            "trigger_facility_confidence": "DIRECT",
+            "ongoing_activity_evidence": "Plant commissioning new manufacturing line",
+        },
+        "exact_facility": {
+            "verified": True,
+            "address": "MIDC Chakan, Pune, Maharashtra, India",
+            "address_precision": "INDUSTRIAL_AREA",
+            "trigger_facility_confidence": "DIRECT",
+            "trigger_facility_evidence": "Company commissioning at MIDC Chakan",
+        },
         "calibration_demand": True,
         "technical_capability": True,
-        "timing": True,
+        "timing": {
+            "is_active_window": True,
+            "timing_evidence": "Plant commissioning expansion at Chakan facility",
+            "event_type": "commissioning",
+            "trigger_date": "2025-08-01",
+        },
         "correct_person": {
+            "name": "Anil Patil",
             "employment_verified": True,
             "facility_verified": True,
             "duties_verified": True,
+            "facility_classification": "FACILITY_OWNER",
         },
         "reachable_email": {
             "address": "quality@example.test",

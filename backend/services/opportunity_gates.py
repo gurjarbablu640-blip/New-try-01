@@ -143,7 +143,18 @@ def _trigger_passes(value: Any, now_dt: datetime | None = None) -> tuple[bool, s
 
 
 def _facility_passes(value: Any, evidence: Mapping[str, Any]) -> tuple[bool, str, dict[str, Any]]:
-    """Enforce exact facility verification and trigger-facility alignment."""
+    """Enforce exact facility verification and trigger-facility alignment.
+
+    Address Precision Requirements:
+    - EXACT_STREET: always sufficient with DIRECT or STRONG linkage.
+    - INDUSTRIAL_AREA: sufficient with DIRECT or STRONG linkage when uniquely identified.
+    - CITY_ONLY: satisfies facility qualification ONLY when:
+      A. The trigger explicitly identifies the facility unambiguously (DIRECT linkage), AND
+      B. Independent evidence shows there is only one relevant company manufacturing facility
+         matching that location/context (single_manufacturing_site_in_city / unique_facility).
+      If company has multiple plants in the city, or if only generic presence exists, it FAILS.
+    - REGION_ONLY or UNKNOWN: always fails.
+    """
     basic_passed = _truth(value) if not isinstance(value, Mapping) else (
         _truth(value.get("verified")) or _truth(value.get("facility_verified")) or bool(str(value.get("address") or "").strip())
     )
@@ -152,24 +163,111 @@ def _facility_passes(value: Any, evidence: Mapping[str, Any]) -> tuple[bool, str
 
     tf_conf = "DIRECT"
     tf_evidence = ""
+    address_precision = "UNKNOWN"
+    generic_presence = False
+    multi_plant = False
+    single_facility = False
+    unambiguous_facility = True
+
     if isinstance(value, Mapping):
         tf_conf = str(value.get("trigger_facility_confidence") or value.get("linkage_confidence") or "DIRECT").upper()
         tf_evidence = str(value.get("trigger_facility_evidence") or value.get("linkage_evidence") or "")
+        raw_prec = value.get("address_precision")
+        if raw_prec:
+            address_precision = str(raw_prec).upper()
+        else:
+            addr_lower = str(value.get("address") or "").lower()
+            if any(k in addr_lower for k in ["plot", "sector", "gate", "street", "road", "survey no"]):
+                address_precision = "EXACT_STREET"
+            elif any(k in addr_lower for k in ["midc", "gidc", "riico", "sipcot", "imt", "sez", "industrial"]):
+                address_precision = "INDUSTRIAL_AREA"
+            elif addr_lower:
+                address_precision = "CITY_ONLY"
+            else:
+                address_precision = "UNKNOWN"
+        generic_presence = bool(value.get("generic_presence") or value.get("is_generic_presence"))
+        multi_plant = bool(value.get("multi_plant_in_city") or value.get("is_multi_plant") or value.get("multiple_plants"))
+        single_facility = bool(
+            value.get("single_manufacturing_site_in_city")
+            or value.get("is_unique_facility_in_city")
+            or value.get("unique_facility")
+            or value.get("is_unique_facility")
+            or value.get("single_plant_in_city")
+        )
+        unambiguous_facility = bool(value.get("trigger_unambiguous_facility", True) and value.get("unambiguous_facility", True))
     else:
         trig = evidence.get("trigger_current") or evidence.get("trigger")
         if isinstance(trig, Mapping):
             tf_conf = str(trig.get("trigger_facility_confidence") or "DIRECT").upper()
             tf_evidence = str(trig.get("trigger_facility_evidence") or "")
 
-    if tf_conf == "WEAK":
+    # Generic company presence in same city is never an exact manufacturing facility
+    if generic_presence:
+        return False, "Generic company presence in city is insufficient; physical manufacturing plant required", {
+            "trigger_facility_confidence": tf_conf,
+            "address_precision": address_precision,
+            "trigger_facility_evidence": tf_evidence,
+            "generic_presence": True,
+        }
+
+    if tf_conf in ("WEAK", "UNKNOWN"):
         return False, "Trigger-to-facility linkage is WEAK; corporate trigger is not proven to affect this specific facility", {
-            "trigger_facility_confidence": "WEAK",
+            "trigger_facility_confidence": tf_conf,
+            "address_precision": address_precision,
             "trigger_facility_evidence": tf_evidence or "Corporate announcement does not name this plant location",
         }
 
-    return True, f"Facility verified with {tf_conf} trigger linkage", {
+    # Region-only and Unknown precision always fail
+    if address_precision in ("REGION_ONLY", "UNKNOWN"):
+        return False, f"Address precision {address_precision} is insufficient for exact facility verification", {
+            "trigger_facility_confidence": tf_conf,
+            "address_precision": address_precision,
+            "trigger_facility_evidence": tf_evidence,
+        }
+
+    # City-only precision requirements:
+    # A. trigger explicitly identifies the facility unambiguously (tf_conf == "DIRECT" and unambiguous_facility)
+    # AND
+    # B. independent evidence shows only one relevant company manufacturing facility in that city/context
+    if address_precision == "CITY_ONLY":
+        if tf_conf != "DIRECT":
+            return False, (
+                f"Address precision is CITY_ONLY and trigger-facility confidence is {tf_conf}. "
+                "City-only facility evidence requires DIRECT trigger linkage."
+            ), {
+                "trigger_facility_confidence": tf_conf,
+                "address_precision": address_precision,
+                "trigger_facility_evidence": tf_evidence,
+            }
+
+        if multi_plant:
+            return False, (
+                "City-only precision is insufficient for multi-plant company in this city. "
+                "Exact plant/street or industrial area must be specified."
+            ), {
+                "trigger_facility_confidence": tf_conf,
+                "address_precision": address_precision,
+                "multi_plant_in_city": True,
+            }
+
+        if not single_facility or not unambiguous_facility:
+            return False, (
+                "City-only precision satisfies facility qualification only when the trigger explicitly "
+                "identifies the facility unambiguously AND independent evidence shows only one relevant "
+                "company manufacturing facility matching that location."
+            ), {
+                "trigger_facility_confidence": tf_conf,
+                "address_precision": address_precision,
+                "single_manufacturing_site_in_city": single_facility,
+                "trigger_unambiguous_facility": unambiguous_facility,
+            }
+
+    # Industrial area with unique plant and STRONG/DIRECT corroboration passes
+    return True, f"Facility verified with {tf_conf} trigger linkage (address precision: {address_precision})", {
         "trigger_facility_confidence": tf_conf,
+        "address_precision": address_precision,
         "trigger_facility_evidence": tf_evidence,
+        "single_manufacturing_site_in_city": single_facility,
     }
 
 
@@ -444,10 +542,9 @@ def _timing_passes(value: Any, evidence: Mapping[str, Any]) -> tuple[bool, str, 
             {"current_timing_verified": True, "timing_evidence": timing_text or event_type},
         )
 
-    # If truthy boolean True was passed directly:
-    if value is True:
-        return True, "Current buying timing confirmed", {"current_timing_verified": True}
-
+    # NOTE: Plain boolean True is NOT accepted here. Timing evidence must be a Mapping
+    # with actual keywords derived from the source (event_type, timing_evidence, etc.).
+    # Fabricated generic strings like "expansion capex plant commissioning" cannot pass.
     return (
         False,
         f"Missing dated buying-window evidence for timing (provided: '{timing_text}')",

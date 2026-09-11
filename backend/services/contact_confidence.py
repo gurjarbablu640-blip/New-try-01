@@ -153,7 +153,83 @@ ROLE_TERMS = {
 
 
 
-def validate_person_name(name_str):
+NON_HUMAN_NAME_TERMS = {
+    'solar', 'panel', 'panels', 'energy', 'mobility', 'transformer', 'transformers',
+    'switchgear', 'cable', 'cables', 'engine', 'engines', 'power', 'battery', 'batteries',
+    'lighting', 'electronics', 'electronic', 'forge', 'forgings', 'forging', 'casting',
+    'castings', 'machining', 'wire', 'wires', 'wiring', 'harness', 'harnesses', 'boiler',
+    'boilers', 'automotive', 'motor', 'motors', 'pump', 'pumps', 'valve', 'valves',
+    'bearing', 'bearings', 'industries', 'technologies', 'automation', 'enterprise',
+    'enterprises', 'global', 'top', 'best', 'leading', 'review', 'reviews', 'price',
+    'share', 'stock', 'investor', 'investors', 'annual', 'report', 'product', 'products',
+    'news', 'press', 'release', 'headquarters', 'branch', 'office', 'plant', 'factory',
+    'division', 'department', 'centre', 'center', 'services', 'solutions', 'laboratory',
+    'laboratories', 'committee', 'board', 'portal', 'website', 'page', 'home', 'overview',
+    'contact', 'about', 'group', 'limited', 'ltd', 'private', 'pvt', 'inc', 'corp', 'corporation',
+    'company', 'companies', 'manufacture', 'manufacturer', 'manufacturers', 'manufacturing',
+    'collection', 'bhakti', 'sangrah', 'devotional', 'song', 'songs', 'album', 'popular',
+    'playlist', 'video', 'videos', 'music', 'track', 'tracks', 'lyrics', 'volume', 'vol'
+}
+
+
+def is_human_person_candidate(name_str: str, company_name: str = "", title_or_context: str = "") -> tuple[bool, str]:
+    """Validates whether a candidate string represents a plausible human person.
+
+    Rejects candidate names resembling company names, product lines, SEO phrases,
+    article titles, or functional entity/department names. Preserves Indian name
+    structures including single-letter initials (e.g., 'K S Mohan', 'M Senthilkumar').
+    """
+    clean = (name_str or "").strip()
+    if not clean:
+        return False, "Candidate name is empty"
+
+    # 1. Reject if name is substantially identical or subset of company name
+    if company_name:
+        comp_tokens = [t.lower() for t in re.findall(r'[a-zA-Z]+', company_name)
+                       if t.lower() not in {'ltd', 'limited', 'pvt', 'private', 'india', 'the', 'and', 'co'}]
+        name_tokens = [t.lower() for t in re.findall(r'[a-zA-Z]+', clean)]
+        if comp_tokens and name_tokens:
+            matched = sum(1 for t in name_tokens if t in comp_tokens)
+            if matched >= len(name_tokens) or (len(name_tokens) >= 2 and matched >= 2):
+                return False, f"Candidate name '{clean}' matches company name '{company_name}' (non-human entity)"
+
+    # 2. Characters / symbols check
+    if re.search(r'[\d@:/\\_<>{}\[\]\*\+=#\$%^&~®™©|•!?;]', clean):
+        return False, "Contains digits, trademark symbols, or punctuation invalid for human names"
+
+    tokens = re.findall(r'[a-zA-Z]+', clean)
+    if not tokens:
+        return False, "No alphabetic tokens found"
+
+    # 3. Excessive length check
+    if len(tokens) > 4:
+        return False, f"Too many words ({len(tokens)}) for a human name; likely a phrase or title"
+
+    # 4. Non-human keywords
+    tokens_lower = [t.lower() for t in tokens]
+    non_human_matches = [t for t in tokens_lower if t in NON_HUMAN_NAME_TERMS]
+    if non_human_matches:
+        return False, f"Contains non-human/company/SEO term(s): {', '.join(non_human_matches)}"
+
+    # 5. Combined with title/context: check if candidate is phrased as a list/article
+    combined_ctx = f"{clean} {title_or_context}".lower()
+    seo_patterns = [
+        r'\btop\s+\d+', r'\bbest\s+\w+', r'companies\s+in\s+india', r'manufacturers\s+in',
+        r'share\s+price', r'market\s+cap', r'annual\s+report'
+    ]
+    for pat in seo_patterns:
+        if re.search(pat, combined_ctx):
+            return False, f"Matched SEO/article pattern in name or context"
+
+    # 6. Check ROLE_TERMS density
+    role_matches = [t for t in tokens_lower if t in ROLE_TERMS]
+    if len(role_matches) >= len(tokens) / 2:
+        return False, f"Name primarily consists of role, title, or functional department words: {', '.join(role_matches)}"
+
+    return True, "Valid human person candidate"
+
+
+def validate_person_name(name_str, company_name=""):
     """Validates whether a candidate string is a plausible human name or invalid role/functional text.
 
     Returns dictionary with:
@@ -168,28 +244,16 @@ def validate_person_name(name_str):
         return {'name': clean, 'person_name_validation': 'UNKNOWN', 'is_human_name': False,
                 'role_words': [], 'reason': 'Name is empty'}
 
-    # If contains digits, trademark symbols, or special punctuation
-    if re.search(r'[\d@:/\\_<>{}\[\]\*\+=#\$%^&~®™©|•!?;]', clean):
+    # Run strict human person validation
+    is_human, human_reason = is_human_person_candidate(clean, company_name=company_name)
+    if not is_human:
+        tokens = re.findall(r'[a-zA-Z]+', clean)
+        detected_roles = [t.lower() for t in tokens if t.lower() in ROLE_TERMS]
         return {'name': clean, 'person_name_validation': 'INVALID_ROLE_TEXT', 'is_human_name': False,
-                'role_words': [], 'reason': 'Contains digits, trademark symbols, or special characters'}
+                'role_words': detected_roles, 'reason': human_reason}
 
     tokens = re.findall(r'[a-zA-Z]+', clean)
-    if not tokens:
-        return {'name': clean, 'person_name_validation': 'UNKNOWN', 'is_human_name': False,
-                'role_words': [], 'reason': 'No alphabetic tokens found'}
-
-    # If excessively long (likely a sentence or multi-phrase title)
-    if len(tokens) > 5:
-        return {'name': clean, 'person_name_validation': 'INVALID_ROLE_TEXT', 'is_human_name': False,
-                'role_words': [], 'reason': f'Too many words ({len(tokens)}) for a human name'}
-
     detected_roles = [t.lower() for t in tokens if t.lower() in ROLE_TERMS]
-
-    # If 50% or more tokens are role words:
-    if len(detected_roles) >= len(tokens) / 2:
-        return {'name': clean, 'person_name_validation': 'INVALID_ROLE_TEXT', 'is_human_name': False,
-                'role_words': detected_roles,
-                'reason': f"Name primarily consists of role, title, or functional department words: {', '.join(detected_roles)}"}
 
     if len(tokens) == 1:
         return {'name': clean, 'person_name_validation': 'PROBABLE', 'is_human_name': True,

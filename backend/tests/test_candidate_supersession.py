@@ -47,15 +47,34 @@ class TestCandidateSupersession(unittest.TestCase):
             "icp_score": score,
             "provenance": "REAL",
             "evidence": {
-                "trigger_current": True,
-                "exact_facility": True,
+                "trigger_current": {
+                    "verified": True,
+                    "trigger_date": "2026-01-02",
+                    "recency_days": 10,
+                    "trigger_facility_confidence": "DIRECT",
+                    "ongoing_activity_evidence": "MoU with TN Government for Laptop Plant at Oragadam",
+                },
+                "exact_facility": {
+                    "verified": True,
+                    "address": "Oragadam Industrial Corridor, Near Chennai, Tamil Nadu, India",
+                    "address_precision": "INDUSTRIAL_AREA",
+                    "trigger_facility_confidence": "DIRECT",
+                    "trigger_facility_evidence": "MoU signing names Oragadam Industrial Corridor as site",
+                },
                 "calibration_demand": True,
                 "technical_capability": True,
-                "timing": True,
+                "timing": {
+                    "is_active_window": True,
+                    "timing_evidence": "Laptop plant commissioning at Oragadam per MoU",
+                    "event_type": "commissioning",
+                    "trigger_date": "2026-01-02",
+                },
                 "correct_person": {
+                    "name": person,
                     "employment_verified": True,
                     "facility_verified": True,
                     "duties_verified": True,
+                    "facility_classification": "FACILITY_OWNER",
                 },
                 "reachable_email": {
                     "status": "verified",

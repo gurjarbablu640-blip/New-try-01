@@ -33,15 +33,34 @@ class TestRediffBridge(unittest.TestCase):
             "icp_score": 96.5,
             "provenance": "REAL",
             "evidence": {
-                "trigger_current": True,
-                "exact_facility": True,
+                "trigger_current": {
+                    "verified": True,
+                    "trigger_date": "2026-08-15",
+                    "recency_days": 25,
+                    "trigger_facility_confidence": "DIRECT",
+                    "ongoing_activity_evidence": "New EV powertrain line commissioning at Sanand",
+                },
+                "exact_facility": {
+                    "verified": True,
+                    "address": "GIDC Sanand, Ahmedabad, Gujarat, India",
+                    "address_precision": "INDUSTRIAL_AREA",
+                    "trigger_facility_confidence": "DIRECT",
+                    "trigger_facility_evidence": "EV powertrain line commissioning at Sanand GIDC",
+                },
                 "calibration_demand": True,
                 "technical_capability": True,
-                "timing": True,
+                "timing": {
+                    "is_active_window": True,
+                    "timing_evidence": "New EV Powertrain Line commissioning at Sanand facility",
+                    "event_type": "commissioning",
+                    "trigger_date": "2026-08-15",
+                },
                 "correct_person": {
+                    "name": "Abhijit Biswal",
                     "employment_verified": True,
                     "facility_verified": True,
                     "duties_verified": True,
+                    "facility_classification": "FACILITY_OWNER",
                 },
                 "reachable_email": {
                     "status": "verified",

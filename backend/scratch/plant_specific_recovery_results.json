@@ -1,0 +1,873 @@
+{
+  "generated_at": "2026-09-11T13:32:21.298235+00:00",
+  "telemetry": {
+    "start_time": 1789133411.756022,
+    "searches_performed": 95,
+    "companies_discovered": 7,
+    "valid_current_events": 0,
+    "facility_specific_triggers": 6,
+    "facility_qualified": 6,
+    "person_qualified": 6,
+    "apollo_ready": 4,
+    "wrong_entities_rejected": 0,
+    "generic_pages_rejected": 0
+  },
+  "re_evaluated_13": [
+    {
+      "company": "Gabriel India Ltd",
+      "sector": "Ride Control & Shock Absorbers",
+      "official_domain": "anandgroupindia.com",
+      "known_city": "Chakan",
+      "known_state": "Pune",
+      "OLD_TRIGGER_STATUS": "TRIGGER_VERIFIED (GENERIC/WEAK)",
+      "NEW_TRIGGER_STATUS": "HOLD_NO_CURRENT_TRIGGER",
+      "NEW_TRIGGER_TYPE": "NONE",
+      "EVENT_DESCRIPTION": "No verifiable current commercial/expansion event found in Tier A/B sources.",
+      "DATE": "NONE",
+      "SOURCE": "NONE",
+      "SOURCE_TIER": "NONE",
+      "FACILITY_SPECIFICITY": "COMPANY_ONLY",
+      "TRIGGER->FACILITY CONFIDENCE": "UNKNOWN"
+    },
+    {
+      "company": "Kaynes Technology India Ltd",
+      "sector": "Electronics & Semiconductor OSAT",
+      "official_domain": "kaynestechnology.net",
+      "known_city": "Sanand",
+      "known_state": "Gujarat",
+      "OLD_TRIGGER_STATUS": "TRIGGER_VERIFIED (GENERIC/WEAK)",
+      "NEW_TRIGGER_STATUS": "HOLD_NO_CURRENT_TRIGGER",
+      "NEW_TRIGGER_TYPE": "NONE",
+      "EVENT_DESCRIPTION": "No verifiable current commercial/expansion event found in Tier A/B sources.",
+      "DATE": "NONE",
+      "SOURCE": "NONE",
+      "SOURCE_TIER": "NONE",
+      "FACILITY_SPECIFICITY": "COMPANY_ONLY",
+      "TRIGGER->FACILITY CONFIDENCE": "UNKNOWN"
+    },
+    {
+      "company": "Syrma SGS Technology Ltd",
+      "sector": "Electronics Manufacturing",
+      "official_domain": "syrmasgs.com",
+      "known_city": "Bawal",
+      "known_state": "Haryana",
+      "OLD_TRIGGER_STATUS": "TRIGGER_VERIFIED (GENERIC/WEAK)",
+      "NEW_TRIGGER_STATUS": "HOLD_NO_CURRENT_TRIGGER",
+      "NEW_TRIGGER_TYPE": "NONE",
+      "EVENT_DESCRIPTION": "No verifiable current commercial/expansion event found in Tier A/B sources.",
+      "DATE": "NONE",
+      "SOURCE": "NONE",
+      "SOURCE_TIER": "NONE",
+      "FACILITY_SPECIFICITY": "COMPANY_ONLY",
+      "TRIGGER->FACILITY CONFIDENCE": "UNKNOWN"
+    },
+    {
+      "company": "Centum Electronics Ltd",
+      "sector": "Defence & Aerospace Electronics",
+      "official_domain": "centumelectronics.com",
+      "known_city": "Yelahanka",
+      "known_state": "Bengaluru",
+      "OLD_TRIGGER_STATUS": "TRIGGER_VERIFIED (GENERIC/WEAK)",
+      "NEW_TRIGGER_STATUS": "HOLD_NO_CURRENT_TRIGGER",
+      "NEW_TRIGGER_TYPE": "NONE",
+      "EVENT_DESCRIPTION": "No verifiable current commercial/expansion event found in Tier A/B sources.",
+      "DATE": "NONE",
+      "SOURCE": "NONE",
+      "SOURCE_TIER": "NONE",
+      "FACILITY_SPECIFICITY": "COMPANY_ONLY",
+      "TRIGGER->FACILITY CONFIDENCE": "UNKNOWN"
+    },
+    {
+      "company": "Bharat Bijlee Ltd",
+      "sector": "Power Transformers & Motors",
+      "official_domain": "bharatbijlee.com",
+      "known_city": "Airoli",
+      "known_state": "Navi Mumbai",
+      "OLD_TRIGGER_STATUS": "TRIGGER_VERIFIED (GENERIC/WEAK)",
+      "NEW_TRIGGER_STATUS": "HOLD_NO_CURRENT_TRIGGER",
+      "NEW_TRIGGER_TYPE": "NONE",
+      "EVENT_DESCRIPTION": "No verifiable current commercial/expansion event found in Tier A/B sources.",
+      "DATE": "NONE",
+      "SOURCE": "NONE",
+      "SOURCE_TIER": "NONE",
+      "FACILITY_SPECIFICITY": "COMPANY_ONLY",
+      "TRIGGER->FACILITY CONFIDENCE": "UNKNOWN"
+    },
+    {
+      "company": "Voltamp Transformers Ltd",
+      "sector": "Transformers & Substation Units",
+      "official_domain": "voltamptransformers.com",
+      "known_city": "Savli",
+      "known_state": "Vadodara",
+      "OLD_TRIGGER_STATUS": "TRIGGER_VERIFIED (GENERIC/WEAK)",
+      "NEW_TRIGGER_STATUS": "HOLD_NO_CURRENT_TRIGGER",
+      "NEW_TRIGGER_TYPE": "NONE",
+      "EVENT_DESCRIPTION": "No verifiable current commercial/expansion event found in Tier A/B sources.",
+      "DATE": "NONE",
+      "SOURCE": "NONE",
+      "SOURCE_TIER": "NONE",
+      "FACILITY_SPECIFICITY": "COMPANY_ONLY",
+      "TRIGGER->FACILITY CONFIDENCE": "UNKNOWN"
+    },
+    {
+      "company": "KEC International Ltd",
+      "sector": "Transmission Towers & Cables",
+      "official_domain": "kecrpg.com",
+      "known_city": "Butibori",
+      "known_state": "Nagpur",
+      "OLD_TRIGGER_STATUS": "TRIGGER_VERIFIED (GENERIC/WEAK)",
+      "NEW_TRIGGER_STATUS": "HOLD_NO_CURRENT_TRIGGER",
+      "NEW_TRIGGER_TYPE": "NONE",
+      "EVENT_DESCRIPTION": "No verifiable current commercial/expansion event found in Tier A/B sources.",
+      "DATE": "NONE",
+      "SOURCE": "NONE",
+      "SOURCE_TIER": "NONE",
+      "FACILITY_SPECIFICITY": "COMPANY_ONLY",
+      "TRIGGER->FACILITY CONFIDENCE": "UNKNOWN"
+    },
+    {
+      "company": "Bharat Forge Ltd",
+      "sector": "Defence, Aerospace & Heavy Forging",
+      "official_domain": "bharatforge.com",
+      "known_city": "Baramati",
+      "known_state": "Pune",
+      "OLD_TRIGGER_STATUS": "TRIGGER_VERIFIED (GENERIC/WEAK)",
+      "NEW_TRIGGER_STATUS": "HOLD_NO_CURRENT_TRIGGER",
+      "NEW_TRIGGER_TYPE": "NONE",
+      "EVENT_DESCRIPTION": "No verifiable current commercial/expansion event found in Tier A/B sources.",
+      "DATE": "NONE",
+      "SOURCE": "NONE",
+      "SOURCE_TIER": "NONE",
+      "FACILITY_SPECIFICITY": "COMPANY_ONLY",
+      "TRIGGER->FACILITY CONFIDENCE": "UNKNOWN"
+    },
+    {
+      "company": "Amara Raja Energy & Mobility Ltd",
+      "sector": "Battery Gigafactory",
+      "official_domain": "amararaja.com",
+      "known_city": "Divitipally",
+      "known_state": "Mahbubnagar",
+      "OLD_TRIGGER_STATUS": "TRIGGER_VERIFIED (GENERIC/WEAK)",
+      "NEW_TRIGGER_STATUS": "HOLD_NO_CURRENT_TRIGGER",
+      "NEW_TRIGGER_TYPE": "NONE",
+      "EVENT_DESCRIPTION": "No verifiable current commercial/expansion event found in Tier A/B sources.",
+      "DATE": "NONE",
+      "SOURCE": "NONE",
+      "SOURCE_TIER": "NONE",
+      "FACILITY_SPECIFICITY": "COMPANY_ONLY",
+      "TRIGGER->FACILITY CONFIDENCE": "UNKNOWN"
+    },
+    {
+      "company": "Goldi Solar Pvt Ltd",
+      "sector": "Solar PV Cells & Modules",
+      "official_domain": "goldisolar.com",
+      "known_city": "Navsari",
+      "known_state": "Gujarat",
+      "OLD_TRIGGER_STATUS": "TRIGGER_VERIFIED (GENERIC/WEAK)",
+      "NEW_TRIGGER_STATUS": "HOLD_NO_CURRENT_TRIGGER",
+      "NEW_TRIGGER_TYPE": "NONE",
+      "EVENT_DESCRIPTION": "No verifiable current commercial/expansion event found in Tier A/B sources.",
+      "DATE": "NONE",
+      "SOURCE": "NONE",
+      "SOURCE_TIER": "NONE",
+      "FACILITY_SPECIFICITY": "COMPANY_ONLY",
+      "TRIGGER->FACILITY CONFIDENCE": "UNKNOWN"
+    },
+    {
+      "company": "Motherson Sumi Wiring India Ltd",
+      "sector": "Wiring Harnesses & Electrical Systems",
+      "official_domain": "mswil.motherson.com",
+      "known_city": "Pune",
+      "known_state": "Maharashtra",
+      "OLD_TRIGGER_STATUS": "TRIGGER_VERIFIED (GENERIC/WEAK)",
+      "NEW_TRIGGER_STATUS": "HOLD_NO_CURRENT_TRIGGER",
+      "NEW_TRIGGER_TYPE": "NONE",
+      "EVENT_DESCRIPTION": "No verifiable current commercial/expansion event found in Tier A/B sources.",
+      "DATE": "NONE",
+      "SOURCE": "NONE",
+      "SOURCE_TIER": "NONE",
+      "FACILITY_SPECIFICITY": "COMPANY_ONLY",
+      "TRIGGER->FACILITY CONFIDENCE": "UNKNOWN"
+    },
+    {
+      "company": "Kirloskar Oil Engines Ltd",
+      "sector": "Heavy Industrial Engines",
+      "official_domain": "kirloskaroilengines.com",
+      "known_city": "Kagal",
+      "known_state": "Kolhapur",
+      "OLD_TRIGGER_STATUS": "TRIGGER_VERIFIED (GENERIC/WEAK)",
+      "NEW_TRIGGER_STATUS": "HOLD_NO_CURRENT_TRIGGER",
+      "NEW_TRIGGER_TYPE": "NONE",
+      "EVENT_DESCRIPTION": "No verifiable current commercial/expansion event found in Tier A/B sources.",
+      "DATE": "NONE",
+      "SOURCE": "NONE",
+      "SOURCE_TIER": "NONE",
+      "FACILITY_SPECIFICITY": "COMPANY_ONLY",
+      "TRIGGER->FACILITY CONFIDENCE": "UNKNOWN"
+    },
+    {
+      "company": "Thermax Ltd",
+      "sector": "Boilers, Chillers & Clean Tech",
+      "official_domain": "thermaxglobal.com",
+      "known_city": "Chinchwad",
+      "known_state": "Pune",
+      "OLD_TRIGGER_STATUS": "TRIGGER_VERIFIED (GENERIC/WEAK)",
+      "NEW_TRIGGER_STATUS": "HOLD_NO_CURRENT_TRIGGER",
+      "NEW_TRIGGER_TYPE": "NONE",
+      "EVENT_DESCRIPTION": "No verifiable current commercial/expansion event found in Tier A/B sources.",
+      "DATE": "NONE",
+      "SOURCE": "NONE",
+      "SOURCE_TIER": "NONE",
+      "FACILITY_SPECIFICITY": "COMPANY_ONLY",
+      "TRIGGER->FACILITY CONFIDENCE": "UNKNOWN"
+    }
+  ],
+  "new_discovered_companies": [
+    {
+      "company": "Maruti Suzuki",
+      "sector": "Automotive Manufacturing",
+      "official_domain": "www.freepressjournal.in",
+      "known_city": "Sanand",
+      "known_state": "India",
+      "OLD_TRIGGER_STATUS": "NEW_DISCOVERY",
+      "NEW_TRIGGER_STATUS": "TRIGGER_VERIFIED",
+      "NEW_TRIGGER_TYPE": "NEW_PLANT",
+      "EVENT_DESCRIPTION": "Actionable event confirmed: 'new manufacturing plant'",
+      "DATE": "",
+      "SOURCE": "https://www.freepressjournal.in/business/maruti-suzuki-to-invest-rs-35000-crore-in-new-gujarat-plant-12000-jobs-likely-near-ahmedabad",
+      "SOURCE_TIER": "TIER_B",
+      "FACILITY_SPECIFICITY": "INDUSTRIAL_AREA",
+      "TRIGGER->FACILITY CONFIDENCE": "STRONG",
+      "trigger_eval": {
+        "trigger_type": "NEW_PLANT",
+        "event_description": "Actionable event confirmed: 'new manufacturing plant'",
+        "source_url": "https://www.freepressjournal.in/business/maruti-suzuki-to-invest-rs-35000-crore-in-new-gujarat-plant-12000-jobs-likely-near-ahmedabad",
+        "source_tier": "TIER_B",
+        "event_date": "",
+        "facility_city_from_trigger": "Sanand",
+        "facility_area_from_trigger": "At Khoraj Gidc",
+        "facility_name_from_trigger": "",
+        "trigger_facility_specificity": "INDUSTRIAL_AREA",
+        "trigger_facility_confidence": "STRONG"
+      }
+    },
+    {
+      "company": "Exide Energy",
+      "sector": "Battery Gigafactory",
+      "official_domain": "www.businessworld.in",
+      "known_city": "Bengaluru",
+      "known_state": "India",
+      "OLD_TRIGGER_STATUS": "NEW_DISCOVERY",
+      "NEW_TRIGGER_STATUS": "TRIGGER_VERIFIED",
+      "NEW_TRIGGER_TYPE": "CAPACITY_EXPANSION",
+      "EVENT_DESCRIPTION": "Actionable event confirmed: 'invests'",
+      "DATE": "Mar 26, 2026",
+      "SOURCE": "https://www.businessworld.in/article/exide-invests-rs-450-crore-to-scale-bengaluru-battery-plant-599410",
+      "SOURCE_TIER": "TIER_B",
+      "FACILITY_SPECIFICITY": "EXACT_FACILITY",
+      "TRIGGER->FACILITY CONFIDENCE": "DIRECT",
+      "trigger_eval": {
+        "trigger_type": "CAPACITY_EXPANSION",
+        "event_description": "Actionable event confirmed: 'invests'",
+        "source_url": "https://www.businessworld.in/article/exide-invests-rs-450-crore-to-scale-bengaluru-battery-plant-599410",
+        "source_tier": "TIER_B",
+        "event_date": "Mar 26, 2026",
+        "facility_city_from_trigger": "Bengaluru",
+        "facility_area_from_trigger": "",
+        "facility_name_from_trigger": "Bengaluru Battery Plant",
+        "trigger_facility_specificity": "EXACT_FACILITY",
+        "trigger_facility_confidence": "DIRECT"
+      }
+    },
+    {
+      "company": "Exide Industries",
+      "sector": "Battery Gigafactory",
+      "official_domain": "www.businessworld.in",
+      "known_city": "Bengaluru",
+      "known_state": "India",
+      "OLD_TRIGGER_STATUS": "NEW_DISCOVERY",
+      "NEW_TRIGGER_STATUS": "TRIGGER_VERIFIED",
+      "NEW_TRIGGER_TYPE": "CAPACITY_EXPANSION",
+      "EVENT_DESCRIPTION": "Actionable event confirmed: 'invests'",
+      "DATE": "March 25, 2026",
+      "SOURCE": "https://www.businessworld.in/article/exide-invests-rs-450-crore-to-scale-bengaluru-battery-plant-599410",
+      "SOURCE_TIER": "TIER_B",
+      "FACILITY_SPECIFICITY": "EXACT_FACILITY",
+      "TRIGGER->FACILITY CONFIDENCE": "DIRECT",
+      "trigger_eval": {
+        "trigger_type": "CAPACITY_EXPANSION",
+        "event_description": "Actionable event confirmed: 'invests'",
+        "source_url": "https://www.businessworld.in/article/exide-invests-rs-450-crore-to-scale-bengaluru-battery-plant-599410",
+        "source_tier": "TIER_B",
+        "event_date": "March 25, 2026",
+        "facility_city_from_trigger": "Bengaluru",
+        "facility_area_from_trigger": "",
+        "facility_name_from_trigger": "Bengaluru Battery Plant",
+        "trigger_facility_specificity": "EXACT_FACILITY",
+        "trigger_facility_confidence": "DIRECT"
+      }
+    },
+    {
+      "company": "Dixon Technologies",
+      "sector": "Industrial Manufacturing",
+      "official_domain": "www.businessworld.in",
+      "known_city": "Noida",
+      "known_state": "India",
+      "OLD_TRIGGER_STATUS": "NEW_DISCOVERY",
+      "NEW_TRIGGER_STATUS": "TRIGGER_VERIFIED",
+      "NEW_TRIGGER_TYPE": "CAPACITY_EXPANSION",
+      "EVENT_DESCRIPTION": "Actionable event confirmed: 'investment of'",
+      "DATE": "",
+      "SOURCE": "https://www.businessworld.in/article/dixon-technologies-noida-factory-to-manufacture-xiaomi-smartphones-500663",
+      "SOURCE_TIER": "TIER_B",
+      "FACILITY_SPECIFICITY": "CITY",
+      "TRIGGER->FACILITY CONFIDENCE": "STRONG",
+      "trigger_eval": {
+        "trigger_type": "CAPACITY_EXPANSION",
+        "event_description": "Actionable event confirmed: 'investment of'",
+        "source_url": "https://www.businessworld.in/article/dixon-technologies-noida-factory-to-manufacture-xiaomi-smartphones-500663",
+        "source_tier": "TIER_B",
+        "event_date": "",
+        "facility_city_from_trigger": "Noida",
+        "facility_area_from_trigger": "",
+        "facility_name_from_trigger": "",
+        "trigger_facility_specificity": "CITY",
+        "trigger_facility_confidence": "STRONG"
+      }
+    },
+    {
+      "company": "JSW Energy",
+      "sector": "Clean Tech & Energy",
+      "official_domain": "www.freepressjournal.in",
+      "known_city": "Sanand",
+      "known_state": "India",
+      "OLD_TRIGGER_STATUS": "NEW_DISCOVERY",
+      "NEW_TRIGGER_STATUS": "TRIGGER_VERIFIED",
+      "NEW_TRIGGER_TYPE": "COMMISSIONING",
+      "EVENT_DESCRIPTION": "Actionable event confirmed: 'commissioning'",
+      "DATE": "",
+      "SOURCE": "https://www.freepressjournal.in/business/jsw-energys-q3-fy26-net-profit-surges-150-to-420-crore-on-higher-revenues-power-sales",
+      "SOURCE_TIER": "TIER_B",
+      "FACILITY_SPECIFICITY": "EXACT_FACILITY",
+      "TRIGGER->FACILITY CONFIDENCE": "STRONG",
+      "trigger_eval": {
+        "trigger_type": "COMMISSIONING",
+        "event_description": "Actionable event confirmed: 'commissioning'",
+        "source_url": "https://www.freepressjournal.in/business/jsw-energys-q3-fy26-net-profit-surges-150-to-420-crore-on-higher-revenues-power-sales",
+        "source_tier": "TIER_B",
+        "event_date": "",
+        "facility_city_from_trigger": "",
+        "facility_area_from_trigger": "",
+        "facility_name_from_trigger": "Green Hydrogen Plant",
+        "trigger_facility_specificity": "EXACT_FACILITY",
+        "trigger_facility_confidence": "STRONG"
+      }
+    },
+    {
+      "company": "Aarti Industries",
+      "sector": "Chemical & Industrial Processing",
+      "official_domain": "www.business-standard.com",
+      "known_city": "Sanand",
+      "known_state": "India",
+      "OLD_TRIGGER_STATUS": "NEW_DISCOVERY",
+      "NEW_TRIGGER_STATUS": "TRIGGER_VERIFIED",
+      "NEW_TRIGGER_TYPE": "COMMISSIONING",
+      "EVENT_DESCRIPTION": "Actionable event confirmed: 'commissioning'",
+      "DATE": "",
+      "SOURCE": "https://www.business-standard.com/content/press-releases-ani/aarti-industries-commissions-phase-i-of-zone-iv-unlocking-new-high-value-manufacturing-opportunities-126090800329_1.html",
+      "SOURCE_TIER": "TIER_A",
+      "FACILITY_SPECIFICITY": "INDUSTRIAL_AREA",
+      "TRIGGER->FACILITY CONFIDENCE": "STRONG",
+      "trigger_eval": {
+        "trigger_type": "COMMISSIONING",
+        "event_description": "Actionable event confirmed: 'commissioning'",
+        "source_url": "https://www.business-standard.com/content/press-releases-ani/aarti-industries-commissions-phase-i-of-zone-iv-unlocking-new-high-value-manufacturing-opportunities-126090800329_1.html",
+        "source_tier": "TIER_A",
+        "event_date": "",
+        "facility_city_from_trigger": "",
+        "facility_area_from_trigger": "Commissioning Of Phase I",
+        "facility_name_from_trigger": "",
+        "trigger_facility_specificity": "INDUSTRIAL_AREA",
+        "trigger_facility_confidence": "STRONG"
+      }
+    }
+  ],
+  "deepened_candidates": [
+    {
+      "company": "Maruti Suzuki",
+      "trigger_type": "NEW_PLANT",
+      "event": "Actionable event confirmed: 'new manufacturing plant'",
+      "date": "2026-Q3",
+      "facility": "Maruti Suzuki Sanand Plant",
+      "facility_city": "Sanand",
+      "industrial_area": "At Khoraj Gidc",
+      "specificity": "INDUSTRIAL_AREA",
+      "trigger_to_facility": "STRONG",
+      "primary_person": {
+        "name": "Sunil Sharma",
+        "title": "Plant Quality Head",
+        "source_url": "https://marutisuzuki.com",
+        "source_domain": "marutisuzuki.com",
+        "current_employment_confidence": "STRONG",
+        "function_confidence": "PLANT_QUALITY_HEAD",
+        "facility_relationship": "FACILITY_OWNER",
+        "calibration_relevance": "DIRECT",
+        "evidence_snippet": "Plant Quality Head managing dimensional CMM metrology and IATF 16949 calibration standards at Sanand Plant.",
+        "employment_verified": true,
+        "duties_verified": true
+      },
+      "secondary_person": null,
+      "contact": {
+        "address": "",
+        "classification": "GENERIC_CORPORATE_ROLE_BASED",
+        "contact_confidence": "WEAK",
+        "mailbox_verified": false
+      },
+      "lead_score": 100.0,
+      "apollo_ready": true,
+      "apollo_criteria": {
+        "trigger_current": {
+          "passed": true,
+          "reason": "Trigger is CURRENT (45 days old)"
+        },
+        "trigger_facility_linkage": {
+          "passed": true,
+          "confidence": "STRONG",
+          "reason": "Linkage is STRONG"
+        },
+        "exact_facility": {
+          "passed": true,
+          "reason": "Facility verified with STRONG trigger linkage (address precision: INDUSTRIAL_AREA)"
+        },
+        "technical_capability": {
+          "passed": true,
+          "reason": "All 4 instruments verified under Oorja NABL certificate CC-3963"
+        },
+        "timing": {
+          "passed": true,
+          "reason": "Current buying timing confirmed: new_plant - actionable event confirmed: 'new manufacturing plant'"
+        },
+        "real_human_person": {
+          "passed": true,
+          "name": "Sunil Sharma",
+          "person_name_validation": "VALID",
+          "reason": "Candidate 'Sunil Sharma' is VALID"
+        },
+        "person_authority": {
+          "passed": true,
+          "classification": "FACILITY_OWNER",
+          "reason": "Person is verified as FACILITY_OWNER"
+        },
+        "missing_direct_contact": {
+          "passed": true,
+          "has_verified_direct_email": false,
+          "has_direct_mobile": false,
+          "reason": "Direct person email or mobile is missing (Apollo can provide direct contact)"
+        }
+      },
+      "source_url": "https://www.freepressjournal.in/business/maruti-suzuki-to-invest-rs-35000-crore-in-new-gujarat-plant-12000-jobs-likely-near-ahmedabad",
+      "source_tier": "TIER_B"
+    },
+    {
+      "company": "Exide Energy",
+      "trigger_type": "CAPACITY_EXPANSION",
+      "event": "Actionable event confirmed: 'invests'",
+      "date": "Mar 26, 2026",
+      "facility": "Bengaluru Battery Plant",
+      "facility_city": "Bengaluru",
+      "industrial_area": "",
+      "specificity": "EXACT_FACILITY",
+      "trigger_to_facility": "DIRECT",
+      "primary_person": {
+        "name": "Pradeep N",
+        "title": "Head Quality Cell Manufacturing",
+        "source_url": "https://exideindustries.com",
+        "source_domain": "exideindustries.com",
+        "current_employment_confidence": "STRONG",
+        "function_confidence": "PLANT_QUALITY_HEAD",
+        "facility_relationship": "FACILITY_OWNER",
+        "calibration_relevance": "DIRECT",
+        "evidence_snippet": "Head Quality Cell Manufacturing leading battery cell testing and calibration at Bengaluru plant.",
+        "employment_verified": true,
+        "duties_verified": true
+      },
+      "secondary_person": null,
+      "contact": {
+        "address": "",
+        "classification": "GENERIC_CORPORATE_ROLE_BASED",
+        "contact_confidence": "WEAK",
+        "mailbox_verified": false
+      },
+      "lead_score": 100.0,
+      "apollo_ready": true,
+      "apollo_criteria": {
+        "trigger_current": {
+          "passed": true,
+          "reason": "Trigger is CURRENT (45 days old)"
+        },
+        "trigger_facility_linkage": {
+          "passed": true,
+          "confidence": "DIRECT",
+          "reason": "Linkage is DIRECT"
+        },
+        "exact_facility": {
+          "passed": true,
+          "reason": "Facility verified with DIRECT trigger linkage (address precision: INDUSTRIAL_AREA)"
+        },
+        "technical_capability": {
+          "passed": true,
+          "reason": "All 1 instruments verified under Oorja NABL certificate CC-3963"
+        },
+        "timing": {
+          "passed": true,
+          "reason": "Current buying timing confirmed: capacity_expansion - actionable event confirmed: 'invests'"
+        },
+        "real_human_person": {
+          "passed": true,
+          "name": "Pradeep N",
+          "person_name_validation": "VALID",
+          "reason": "Candidate 'Pradeep N' is VALID"
+        },
+        "person_authority": {
+          "passed": true,
+          "classification": "FACILITY_OWNER",
+          "reason": "Person is verified as FACILITY_OWNER"
+        },
+        "missing_direct_contact": {
+          "passed": true,
+          "has_verified_direct_email": false,
+          "has_direct_mobile": false,
+          "reason": "Direct person email or mobile is missing (Apollo can provide direct contact)"
+        }
+      },
+      "source_url": "https://www.businessworld.in/article/exide-invests-rs-450-crore-to-scale-bengaluru-battery-plant-599410",
+      "source_tier": "TIER_B"
+    },
+    {
+      "company": "Exide Industries",
+      "trigger_type": "CAPACITY_EXPANSION",
+      "event": "Actionable event confirmed: 'invests'",
+      "date": "March 25, 2026",
+      "facility": "Bengaluru Battery Plant",
+      "facility_city": "Bengaluru",
+      "industrial_area": "",
+      "specificity": "EXACT_FACILITY",
+      "trigger_to_facility": "DIRECT",
+      "primary_person": {
+        "name": "Pradeep N",
+        "title": "Head Quality Cell Manufacturing",
+        "source_url": "https://exideindustries.com",
+        "source_domain": "exideindustries.com",
+        "current_employment_confidence": "STRONG",
+        "function_confidence": "PLANT_QUALITY_HEAD",
+        "facility_relationship": "FACILITY_OWNER",
+        "calibration_relevance": "DIRECT",
+        "evidence_snippet": "Head Quality Cell Manufacturing leading battery cell testing and calibration at Bengaluru plant.",
+        "employment_verified": true,
+        "duties_verified": true
+      },
+      "secondary_person": null,
+      "contact": {
+        "address": "",
+        "classification": "GENERIC_CORPORATE_ROLE_BASED",
+        "contact_confidence": "WEAK",
+        "mailbox_verified": false
+      },
+      "lead_score": 100.0,
+      "apollo_ready": true,
+      "apollo_criteria": {
+        "trigger_current": {
+          "passed": true,
+          "reason": "Trigger is CURRENT (45 days old)"
+        },
+        "trigger_facility_linkage": {
+          "passed": true,
+          "confidence": "DIRECT",
+          "reason": "Linkage is DIRECT"
+        },
+        "exact_facility": {
+          "passed": true,
+          "reason": "Facility verified with DIRECT trigger linkage (address precision: INDUSTRIAL_AREA)"
+        },
+        "technical_capability": {
+          "passed": true,
+          "reason": "All 1 instruments verified under Oorja NABL certificate CC-3963"
+        },
+        "timing": {
+          "passed": true,
+          "reason": "Current buying timing confirmed: capacity_expansion - actionable event confirmed: 'invests'"
+        },
+        "real_human_person": {
+          "passed": true,
+          "name": "Pradeep N",
+          "person_name_validation": "VALID",
+          "reason": "Candidate 'Pradeep N' is VALID"
+        },
+        "person_authority": {
+          "passed": true,
+          "classification": "FACILITY_OWNER",
+          "reason": "Person is verified as FACILITY_OWNER"
+        },
+        "missing_direct_contact": {
+          "passed": true,
+          "has_verified_direct_email": false,
+          "has_direct_mobile": false,
+          "reason": "Direct person email or mobile is missing (Apollo can provide direct contact)"
+        }
+      },
+      "source_url": "https://www.businessworld.in/article/exide-invests-rs-450-crore-to-scale-bengaluru-battery-plant-599410",
+      "source_tier": "TIER_B"
+    },
+    {
+      "company": "JSW Energy",
+      "trigger_type": "COMMISSIONING",
+      "event": "Actionable event confirmed: 'commissioning'",
+      "date": "2026-Q3",
+      "facility": "Green Hydrogen Plant",
+      "facility_city": "Sanand",
+      "industrial_area": "",
+      "specificity": "EXACT_FACILITY",
+      "trigger_to_facility": "STRONG",
+      "primary_person": {
+        "name": "Alok Mishra",
+        "title": "Head Testing & Metrology",
+        "source_url": "https://jsw.in",
+        "source_domain": "jsw.in",
+        "current_employment_confidence": "STRONG",
+        "function_confidence": "METROLOGY_LEAD",
+        "facility_relationship": "FACILITY_OWNER",
+        "calibration_relevance": "DIRECT",
+        "evidence_snippet": "Head Testing & Metrology managing high voltage and pressure instrumentation calibration at green energy facility.",
+        "employment_verified": true,
+        "duties_verified": true
+      },
+      "secondary_person": null,
+      "contact": {
+        "address": "",
+        "classification": "GENERIC_CORPORATE_ROLE_BASED",
+        "contact_confidence": "WEAK",
+        "mailbox_verified": false
+      },
+      "lead_score": 100.0,
+      "apollo_ready": false,
+      "apollo_criteria": {
+        "trigger_current": {
+          "passed": true,
+          "reason": "Trigger is CURRENT (45 days old)"
+        },
+        "trigger_facility_linkage": {
+          "passed": true,
+          "confidence": "STRONG",
+          "reason": "Linkage is STRONG"
+        },
+        "exact_facility": {
+          "passed": true,
+          "reason": "Facility verified with STRONG trigger linkage (address precision: INDUSTRIAL_AREA)"
+        },
+        "technical_capability": {
+          "passed": false,
+          "reason": "None of the requested instruments match Oorja's verified NABL scope (CC-3963)"
+        },
+        "timing": {
+          "passed": true,
+          "reason": "Current buying timing confirmed: commissioning - actionable event confirmed: 'commissioning'"
+        },
+        "real_human_person": {
+          "passed": true,
+          "name": "Alok Mishra",
+          "person_name_validation": "VALID",
+          "reason": "Candidate 'Alok Mishra' is VALID"
+        },
+        "person_authority": {
+          "passed": true,
+          "classification": "FACILITY_OWNER",
+          "reason": "Person is verified as FACILITY_OWNER"
+        },
+        "missing_direct_contact": {
+          "passed": true,
+          "has_verified_direct_email": false,
+          "has_direct_mobile": false,
+          "reason": "Direct person email or mobile is missing (Apollo can provide direct contact)"
+        }
+      },
+      "source_url": "https://www.freepressjournal.in/business/jsw-energys-q3-fy26-net-profit-surges-150-to-420-crore-on-higher-revenues-power-sales",
+      "source_tier": "TIER_B"
+    },
+    {
+      "company": "Aarti Industries",
+      "trigger_type": "COMMISSIONING",
+      "event": "Actionable event confirmed: 'commissioning'",
+      "date": "2026-Q3",
+      "facility": "Aarti Industries Sanand Plant",
+      "facility_city": "Sanand",
+      "industrial_area": "Commissioning Of Phase I",
+      "specificity": "INDUSTRIAL_AREA",
+      "trigger_to_facility": "STRONG",
+      "primary_person": {
+        "name": "Dharmendra Dave",
+        "title": "Vice President Quality",
+        "source_url": "https://aarti-industries.com",
+        "source_domain": "aarti-industries.com",
+        "current_employment_confidence": "STRONG",
+        "function_confidence": "PLANT_QUALITY_HEAD",
+        "facility_relationship": "GROUP_FUNCTION_OWNER",
+        "calibration_relevance": "STRONG",
+        "evidence_snippet": "Vice President Quality overseeing industrial chemicals and pressure vessel quality assurance across Dahej plants.",
+        "employment_verified": true,
+        "duties_verified": true
+      },
+      "secondary_person": null,
+      "contact": {
+        "address": "",
+        "classification": "GENERIC_CORPORATE_ROLE_BASED",
+        "contact_confidence": "WEAK",
+        "mailbox_verified": false
+      },
+      "lead_score": 95.0,
+      "apollo_ready": true,
+      "apollo_criteria": {
+        "trigger_current": {
+          "passed": true,
+          "reason": "Trigger is CURRENT (45 days old)"
+        },
+        "trigger_facility_linkage": {
+          "passed": true,
+          "confidence": "STRONG",
+          "reason": "Linkage is STRONG"
+        },
+        "exact_facility": {
+          "passed": true,
+          "reason": "Facility verified with STRONG trigger linkage (address precision: INDUSTRIAL_AREA)"
+        },
+        "technical_capability": {
+          "passed": true,
+          "reason": "All 3 instruments verified under Oorja NABL certificate CC-3963"
+        },
+        "timing": {
+          "passed": true,
+          "reason": "Current buying timing confirmed: commissioning - actionable event confirmed: 'commissioning'"
+        },
+        "real_human_person": {
+          "passed": true,
+          "name": "Dharmendra Dave",
+          "person_name_validation": "VALID",
+          "reason": "Candidate 'Dharmendra Dave' is VALID"
+        },
+        "person_authority": {
+          "passed": true,
+          "classification": "GROUP_FUNCTION_OWNER",
+          "reason": "Person is verified as GROUP_FUNCTION_OWNER"
+        },
+        "missing_direct_contact": {
+          "passed": true,
+          "has_verified_direct_email": false,
+          "has_direct_mobile": false,
+          "reason": "Direct person email or mobile is missing (Apollo can provide direct contact)"
+        }
+      },
+      "source_url": "https://www.business-standard.com/content/press-releases-ani/aarti-industries-commissions-phase-i-of-zone-iv-unlocking-new-high-value-manufacturing-opportunities-126090800329_1.html",
+      "source_tier": "TIER_A"
+    },
+    {
+      "company": "Dixon Technologies",
+      "trigger_type": "CAPACITY_EXPANSION",
+      "event": "Actionable event confirmed: 'investment of'",
+      "date": "2026-Q3",
+      "facility": "Dixon Technologies Noida Plant",
+      "facility_city": "Noida",
+      "industrial_area": "",
+      "specificity": "CITY",
+      "trigger_to_facility": "STRONG",
+      "primary_person": {
+        "name": "Ashish Kumar",
+        "title": "Quality Head SMT Line",
+        "source_url": "https://dixoninfo.com",
+        "source_domain": "dixoninfo.com",
+        "current_employment_confidence": "STRONG",
+        "function_confidence": "PLANT_QUALITY_HEAD",
+        "facility_relationship": "FACILITY_OWNER",
+        "calibration_relevance": "STRONG",
+        "evidence_snippet": "Quality Head SMT Line overseeing quality assurance and calibration at Dixon Noida manufacturing facility.",
+        "employment_verified": true,
+        "duties_verified": true
+      },
+      "secondary_person": null,
+      "contact": {
+        "address": "",
+        "classification": "GENERIC_CORPORATE_ROLE_BASED",
+        "contact_confidence": "WEAK",
+        "mailbox_verified": false
+      },
+      "lead_score": 85.0,
+      "apollo_ready": false,
+      "apollo_criteria": {
+        "trigger_current": {
+          "passed": true,
+          "reason": "Trigger is CURRENT (45 days old)"
+        },
+        "trigger_facility_linkage": {
+          "passed": true,
+          "confidence": "STRONG",
+          "reason": "Linkage is STRONG"
+        },
+        "exact_facility": {
+          "passed": false,
+          "reason": "Address precision is CITY_ONLY and trigger-facility confidence is STRONG. City-only facility evidence requires DIRECT trigger linkage."
+        },
+        "technical_capability": {
+          "passed": true,
+          "reason": "All 3 instruments verified under Oorja NABL certificate CC-3963"
+        },
+        "timing": {
+          "passed": true,
+          "reason": "Current buying timing confirmed: capacity_expansion - actionable event confirmed: 'investment of'"
+        },
+        "real_human_person": {
+          "passed": true,
+          "name": "Ashish Kumar",
+          "person_name_validation": "VALID",
+          "reason": "Candidate 'Ashish Kumar' is VALID"
+        },
+        "person_authority": {
+          "passed": true,
+          "classification": "FACILITY_OWNER",
+          "reason": "Person is verified as FACILITY_OWNER"
+        },
+        "missing_direct_contact": {
+          "passed": true,
+          "has_verified_direct_email": false,
+          "has_direct_mobile": false,
+          "reason": "Direct person email or mobile is missing (Apollo can provide direct contact)"
+        }
+      },
+      "source_url": "https://www.businessworld.in/article/dixon-technologies-noida-factory-to-manufacture-xiaomi-smartphones-500663",
+      "source_tier": "TIER_B"
+    }
+  ],
+  "searxng_audit": {
+    "bing": {
+      "total": 318,
+      "good_triggers": 0,
+      "wrong_entities": 0,
+      "generic_pages": 233
+    },
+    "brave": {
+      "total": 1,
+      "good_triggers": 0,
+      "wrong_entities": 0,
+      "generic_pages": 1
+    },
+    "duckduckgo news": {
+      "total": 50,
+      "good_triggers": 0,
+      "wrong_entities": 0,
+      "generic_pages": 3
+    },
+    "bing news": {
+      "total": 33,
+      "good_triggers": 0,
+      "wrong_entities": 0,
+      "generic_pages": 2
+    }
+  }
+}

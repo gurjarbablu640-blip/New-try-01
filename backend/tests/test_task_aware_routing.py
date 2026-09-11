@@ -269,6 +269,102 @@ class TestSourceVerificationAndCitations(unittest.TestCase):
         self.assertIsNotNone(res_ok["provenance_record"])
         self.assertEqual(res_ok["provenance_record"].source_domain, "dixoninfo.com")
 
+    def test_generic_encyclopedia_and_missing_company_rejected(self):
+        """Generic encyclopedias, dictionaries, and snippets without company mention must be rejected."""
+        pipeline = SourceVerificationPipeline()
+
+        # Case 1: Wikipedia / dictionary domain rejected
+        res_wiki = pipeline.verify_discovered_source(
+            company="Kaynes Technology",
+            claim_type="TRIGGER",
+            claim_text="Kaynes Technology plant expansion in Mysuru.",
+            source_url="https://en.wikipedia.org/wiki/Plant",
+            mock_fetch_success=True,
+        )
+        self.assertFalse(res_wiki["verified"])
+        self.assertEqual(res_wiki["status"], "UNVERIFIED")
+        self.assertEqual(res_wiki["source_role"], "UNTRUSTED")
+        self.assertIn("untrusted reference source", res_wiki["reason"])
+
+        # Case 2: Snippet does not mention target company
+        res_no_co = pipeline.verify_discovered_source(
+            company="Varroc Engineering",
+            claim_type="TRIGGER",
+            claim_text="Automotive component manufacturer announced 500 crore investment in Chakan.",
+            source_url="https://autocarpro.in/news/chakan-plant-update",
+            mock_fetch_success=True,
+        )
+        self.assertFalse(res_no_co["verified"])
+        self.assertEqual(res_no_co["status"], "UNVERIFIED")
+        self.assertIn("does not mention target company", res_no_co["reason"])
+
+    def test_linkedin_rejected_as_trigger_source(self):
+        """LinkedIn company profiles are NOT valid expansion trigger evidence."""
+        pipeline = SourceVerificationPipeline()
+        res = pipeline.verify_discovered_source(
+            company="Varroc Engineering",
+            claim_type="MANUFACTURING_TRIGGER",
+            claim_text="Varroc Group is a global tier-1 automotive component manufacturer.",
+            source_url="https://in.linkedin.com/company/varroc-global",
+            mock_fetch_success=True,
+        )
+        self.assertFalse(res["verified"])
+        self.assertEqual(res["status"], "UNVERIFIED")
+        self.assertEqual(res["source_role"], "DISCOVERY_ONLY")
+        self.assertIn("not acceptable for claim type", res["reason"])
+
+    def test_google_play_rejected_as_trigger_source(self):
+        """play.google.com is an app store — never a valid manufacturing trigger source."""
+        pipeline = SourceVerificationPipeline()
+        res = pipeline.verify_discovered_source(
+            company="Craftsman Automation",
+            claim_type="MANUFACTURING_TRIGGER",
+            claim_text="Craftsman: Building Craft — design houses and castles.",
+            source_url="https://play.google.com/store/apps/details?id=com.craftsman.go",
+            mock_fetch_success=True,
+        )
+        self.assertFalse(res["verified"])
+        self.assertEqual(res["status"], "UNVERIFIED")
+        self.assertEqual(res["source_role"], "IRRELEVANT")
+        self.assertIn("irrelevant", res["reason"])
+
+    def test_job_board_rejected_as_trigger_source(self):
+        """Job postings (naukri, indeed) are not primary manufacturing trigger evidence."""
+        pipeline = SourceVerificationPipeline()
+        for job_url in [
+            "https://www.naukri.com/job-listings-quality-manager-varroc",
+            "https://www.glassdoor.com/Jobs/Craftsman-quality",
+            "https://www.indeed.com/q-quality-engineer-varroc",
+        ]:
+            res = pipeline.verify_discovered_source(
+                company="Varroc Engineering",
+                claim_type="MANUFACTURING_TRIGGER",
+                claim_text="Varroc Engineering is hiring quality engineers at Chakan plant.",
+                source_url=job_url,
+                mock_fetch_success=True,
+            )
+            self.assertFalse(res["verified"], f"Job board URL should be rejected: {job_url}")
+            self.assertEqual(res["status"], "UNVERIFIED")
+
+    def test_company_directory_rejected_as_trigger_source(self):
+        """Screener/Tofler/Crunchbase are corporate directories, not primary trigger sources."""
+        pipeline = SourceVerificationPipeline()
+        for dir_url in [
+            "https://www.screener.in/company/VARROC/",
+            "https://www.tofler.in/varroc-engineering",
+            "https://www.crunchbase.com/organization/varroc",
+        ]:
+            res = pipeline.verify_discovered_source(
+                company="Varroc Engineering",
+                claim_type="MANUFACTURING_TRIGGER",
+                claim_text="Varroc Engineering Ltd annual revenue and financials.",
+                source_url=dir_url,
+                mock_fetch_success=True,
+            )
+            self.assertFalse(res["verified"], f"Company directory should be rejected: {dir_url}")
+            self.assertEqual(res["status"], "UNVERIFIED")
+
+
 
 class TestProviderModeAuditAndSafety(unittest.TestCase):
     """Audit provider modes and zero-cost billing invariants."""
