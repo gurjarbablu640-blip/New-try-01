@@ -1,4 +1,5 @@
 """Application configuration — loaded from environment variables."""
+import os
 from pydantic_settings import BaseSettings
 
 
@@ -89,9 +90,9 @@ class Settings(BaseSettings):
     SEARXNG_BASE_URL: str = "http://localhost:8080"
 
     # DeerFlow Service Adapter (Isolated HTTP boundary)
-    DEERFLOW_BASE_URL: str = "http://localhost:8001"
-    DEERFLOW_ENABLED: bool = False
-    DEERFLOW_TIMEOUT_SECONDS: int = 30
+    DEERFLOW_BASE_URL: str = os.getenv("DEERFLOW_BASE_URL", "http://deerflow:8001" if os.path.exists("/.dockerenv") else "http://localhost:8001")
+    DEERFLOW_ENABLED: bool = True
+    DEERFLOW_TIMEOUT_SECONDS: int = 60
 
     # App settings
     SECRET_KEY: str = "change-me-in-production"

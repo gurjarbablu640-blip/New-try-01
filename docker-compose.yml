@@ -73,6 +73,22 @@ services:
 
 
   # ============================================================
+  # DEERFLOW BROWSER HARNESS MICROSERVICE
+  # ============================================================
+
+  deerflow:
+    image: new-try-01-backend:latest
+    container_name: salesoorja-deerflow
+    restart: unless-stopped
+    command: uvicorn deerflow_service.server:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./deerflow_service:/app/deerflow_service
+
+  # ============================================================
   # FASTAPI BACKEND
   # ============================================================
 
@@ -104,6 +120,8 @@ services:
       APIFY_API_TOKEN: ${APIFY_API_TOKEN}
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY}
       SEARXNG_BASE_URL: http://searxng:8080
+      DEERFLOW_BASE_URL: http://deerflow:8001
+      DEERFLOW_ENABLED: "true"
 
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: ${DEBUG}
@@ -151,6 +169,8 @@ services:
       APIFY_API_TOKEN: ${APIFY_API_TOKEN}
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY}
       SEARXNG_BASE_URL: http://searxng:8080
+      DEERFLOW_BASE_URL: http://deerflow:8001
+      DEERFLOW_ENABLED: "true"
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: ${DEBUG}
     volumes:
