@@ -930,6 +930,18 @@ def enrich_candidate_via_apollo(
             "reason": f"Confidence {candidate_record.verification_confidence:.2f} below Apollo threshold {APOLLO_ELIGIBLE_THRESHOLD}",
         }
 
+    # Phase 8: Apollo Request Idempotency & Dedup Protection
+    if candidate_record.apollo_enrichment_status in ("ENRICHED", "NO_RESULT") and candidate_record.enriched_at:
+        age_hours = (datetime.utcnow() - candidate_record.enriched_at).total_seconds() / 3600.0
+        if age_hours < 720.0:  # 30-day protection window
+            return {
+                "status": "SKIPPED_DEDUPLICATED",
+                "reason": f"Candidate already enriched {age_hours:.1f}h ago (status: {candidate_record.apollo_enrichment_status}); credit protected by dedup window.",
+                "email": candidate_record.apollo_email,
+                "email_confidence": candidate_record.apollo_email_confidence,
+                "phone": candidate_record.apollo_phone,
+            }
+
     result = enrich_specific_person(
         person_name=candidate_record.candidate_name,
         company_name=company_name,
@@ -944,6 +956,7 @@ def enrich_candidate_via_apollo(
     candidate_record.apollo_response_json = result.get("raw_response")
     candidate_record.enriched_at = datetime.utcnow()
 
+    # Phase 7: Strict Post-Enrichment Gating (Apollo NEVER automatically grants production send)
     if result.get("status") == "ENRICHED" and result.get("email"):
         candidate_record.verification_status = "APOLLO_ENRICHED"
         candidate_record.email_status = "EMAIL_FOUND"

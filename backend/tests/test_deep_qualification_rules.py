@@ -165,10 +165,10 @@ class TestDeepQualificationRules(unittest.TestCase):
             OFFICIAL_DEERFLOW_STATUS,
             browser_research_adapter,
         )
-        self.assertEqual(OFFICIAL_DEERFLOW_STATUS, "BLOCKED_BY_LLM_PROVIDER")
+        self.assertEqual(OFFICIAL_DEERFLOW_STATUS, "WAITING_FOR_VERIFIED_ZERO_COST_MODEL")
         status = browser_research_adapter.get_status()
         self.assertIn(status.get("service"), ("browser_research_service", "disabled", "unreachable"))
-        self.assertEqual(status.get("official_deerflow_status"), "BLOCKED_BY_LLM_PROVIDER")
+        self.assertEqual(status.get("official_deerflow_status"), "WAITING_FOR_VERIFIED_ZERO_COST_MODEL")
 
     def test_production_ready_vs_apollo_ready_semantics(self):
         """Phase 4: Apollo-ready and research-qualified leads are NOT production-ready."""
@@ -188,6 +188,43 @@ class TestDeepQualificationRules(unittest.TestCase):
         is_prod, _ = is_production_send_eligible_contact(contact_inferred["evidence_level"], mailbox_verified=False)
         self.assertFalse(is_prod)
         self.assertNotEqual(is_apollo, is_prod)
+
+    def test_apollo_result_outcomes_and_production_protection(self):
+        """Phase 7 & 8: Apollo results are granularly classified and NEVER auto-grant production send."""
+        from unittest.mock import MagicMock, patch
+        from services.apollo_adapter import enrich_specific_person
+
+        # Mock successful Apollo response with verified email
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "person": {
+                "id": "12345",
+                "name": "Anil Patil",
+                "title": "Head Quality Plant",
+                "email": "anil.patil@varroc.com",
+                "email_status": "verified",
+                "phone_numbers": [{"sanitized_number": "+919822000000"}],
+                "organization": {"name": "Varroc Engineering Ltd"}
+            }
+        }
+
+        with patch("services.apollo_adapter.requests.post", return_value=mock_response), \
+             patch("services.apollo_adapter.settings") as mock_settings:
+            mock_settings.APOLLO_API_KEY = "test_key_live"
+            mock_settings.APOLLO_API_BASE_URL = "https://api.apollo.io/v1"
+
+            res = enrich_specific_person(
+                person_name="Anil Patil",
+                company_name="Varroc Engineering Ltd",
+                title="Head Quality Plant"
+            )
+
+            self.assertEqual(res["status"], "ENRICHED")
+            self.assertEqual(res["match_outcome"], "CONTACT_VERIFIED")
+            self.assertEqual(res["email"], "anil.patil@varroc.com")
+            # CRITICAL SAFETY INVARIANT: Apollo enrichment result NEVER automatically sets production_send_eligible=True
+            self.assertFalse(res.get("production_send_eligible", False))
 
 
 if __name__ == "__main__":

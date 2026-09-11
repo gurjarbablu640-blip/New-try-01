@@ -22,11 +22,12 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-OFFICIAL_DEERFLOW_STATUS = "BLOCKED_BY_LLM_PROVIDER"
+OFFICIAL_DEERFLOW_STATUS = "WAITING_FOR_VERIFIED_ZERO_COST_MODEL"
 OFFICIAL_DEERFLOW_BLOCKER = (
-    "Official ByteDance DeerFlow 2.x requires active LLM provider credentials and "
-    "sandboxed per-agent Docker containers. Under Salesoorja's zero-paid-LLM and "
-    "8GB host resource constraints, official DeerFlow is blocked. "
+    "Official ByteDance DeerFlow 2.x supports multiple LangChain-compatible model "
+    "provider classes. However, under Salesoorja's strict zero-paid-LLM policy "
+    "(LLM_COST_POLICY=ZERO_COST_ONLY, ALLOW_PAID_LLM=false), no zero-cost provider "
+    "endpoint is currently verified/configured for it on this host. "
     "Deterministic browser extraction is handled by BrowserResearchAdapter."
 )
 

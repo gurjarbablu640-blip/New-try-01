@@ -296,7 +296,7 @@ def health_check():
         "version": "1.0.0-playwright",
         "engine": "playwright-chromium-131.0",
         "official_bytedance_deerflow_installed": False,
-        "official_deerflow_status": "BLOCKED_BY_LLM_PROVIDER",
+        "official_deerflow_status": "WAITING_FOR_VERIFIED_ZERO_COST_MODEL",
         "capabilities": [
             "deterministic_browser",
             "js_hydration",

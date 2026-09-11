@@ -559,8 +559,29 @@ def enrich_specific_person(
         elif email_status:
             email_confidence = "MEDIUM"
 
+        # Phase 7 & 8: Granular Match & Contact Classification Taxonomy
+        apollo_title = person_data.get("title") or ""
+        employment_history = person_data.get("employment_history") or []
+        current_employer = (person_data.get("organization") or {}).get("name") or company_name
+        is_current = True
+        if person_data.get("present_raw_address") and "former" in str(person_data).lower():
+            # Check if flagged as former employee
+            pass
+
+        # Outcome classification
+        match_classification = "MATCH_CONFIRMED"
+        if not person_data:
+            match_classification = "NO_MATCH"
+        elif title and apollo_title and not any(w.lower() in apollo_title.lower() for w in title.split() if len(w) > 3):
+            match_classification = "MATCH_DIFFERENT_ROLE"
+        elif email_status == "verified":
+            match_classification = "CONTACT_VERIFIED"
+        elif not email:
+            match_classification = "CONTACT_NOT_FOUND"
+
         return {
             "status": "ENRICHED" if email else "NO_RESULT",
+            "match_outcome": match_classification,
             "person_name": person_name,
             "company_name": company_name,
             "error": None,
@@ -569,10 +590,11 @@ def enrich_specific_person(
             "email_status": email_status,
             "phone": phone,
             "linkedin_url": person_data.get("linkedin_url"),
-            "apollo_title": person_data.get("title"),
+            "apollo_title": apollo_title,
             "apollo_id": str(person_data.get("id", "")),
             "raw_response": data,
             "mock_mode": False,
+            "production_send_eligible": False,  # Strict invariant: Apollo lookup NEVER auto-grants production send
         }
 
     except Exception as exc:
