@@ -253,8 +253,8 @@ class ResearchProviderRouter:
             params = {
                 "q": query,
                 "format": "json",
-                "categories": "general",
-                "engines": "google,bing,brave",
+                "categories": "general,news",
+                "engines": "bing,bing news,reuters",
                 "language": "en-IN",
             }
             try:

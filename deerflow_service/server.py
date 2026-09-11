@@ -76,7 +76,7 @@ def detect_challenge(html: str, title: str) -> Optional[str]:
         return "CLOUDFLARE_CHALLENGE"
     if "g-recaptcha" in html_lower or "recaptcha" in html_lower and "captcha" in title_lower:
         return "RECAPTCHA_WALL"
-    if "hcaptcha" in html_lower:
+    if "h-captcha" in html_lower or ("hcaptcha" in html_lower and "captcha" in title_lower):
         return "HCAPTCHA_WALL"
     if "please verify you are a human" in html_lower or "security check" in title_lower:
         return "GENERIC_BOT_DETECTION"

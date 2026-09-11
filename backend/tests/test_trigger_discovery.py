@@ -37,6 +37,39 @@ class TestTriggerDiscoveryService(unittest.TestCase):
         val = validate_person_name("Top Solar Panel Companies")
         self.assertFalse(val["is_human_name"])
 
+    def test_slogan_marketing_terms_rejected(self):
+        """Marketing/slogan phrases like 'Trusted Partner', 'Solution Provider' must be rejected."""
+        for phrase in ["Trusted Partner", "Solution Provider", "Turnkey Specialist", "Global Expert"]:
+            is_human, reason = is_human_person_candidate(phrase)
+            self.assertFalse(is_human, f"Should reject non-human phrase: {phrase}")
+            val = validate_person_name(phrase)
+            self.assertFalse(val["is_human_name"], f"validate_person_name should reject: {phrase}")
+
+    def test_brand_division_names_rejected(self):
+        """Company brand combinations like 'Mahindra Auto', 'Hyundai Cars', 'Ola Cabs' must be rejected."""
+        test_cases = [
+            ("Mahindra Auto", "Mahindra & Mahindra Limited"),
+            ("Hyundai Cars", "Hyundai Motor India Limited"),
+            ("Ola Cabs", "Ola Electric Mobility Limited"),
+            ("Tata Motors", "Tata Motors Limited"),
+            ("SONA Digital Ecosystem", "Sona BLW Precision Forgings Ltd"),
+            ("I GOLDI", "Goldi Solar Private Limited"),
+            ("Microsoft Community", "Dynamatic Technologies Limited"),
+        ]
+        for name, comp in test_cases:
+            is_human, reason = is_human_person_candidate(name, company_name=comp)
+            self.assertFalse(is_human, f"Should reject brand division: {name}")
+            val = validate_person_name(name, company_name=comp)
+            self.assertFalse(val["is_human_name"], f"validate_person_name should reject: {name}")
+
+    def test_crore_plant_mother_plant_rejected_as_facility_names(self):
+        """Quantifier or generic phrases like '320 crore plant' or 'its mother plant' must not become facility names."""
+        res1 = extract_trigger_facility_link("Approved Rs 320 crore plant to enter passenger vehicle seating systems business.")
+        self.assertNotEqual(res1.get("facility_name_from_trigger"), "Crore Plant")
+
+        res2 = extract_trigger_facility_link("Expanded its mother plant in Mysore with new SMT line.")
+        self.assertNotEqual(res2.get("facility_name_from_trigger"), "Its Mother Plant")
+
     def test_indian_names_with_initials_accepted(self):
         """Indian naming structures with single initials must be accepted."""
         for name in ["K S Mohan", "A K Banerjee", "M Senthilkumar", "Anil Patil", "Rohit Chaubey"]:

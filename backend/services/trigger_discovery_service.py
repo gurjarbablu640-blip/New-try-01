@@ -275,10 +275,23 @@ def extract_trigger_facility_link(
     # Plant naming regex e.g. "Chakan plant", "Sanand facility", "Unit 2", "Plant II"
     if not fac_name_from_trigger:
         plant_match = re.search(r"\b([A-Za-z]+(?:\s+[A-Za-z]+)?\s+(?:plant|facility|works|unit\s+\d+|unit\s+[IVX]+))\b", text_lower)
-        if plant_match and not any(w in plant_match.group(1) for w in ["power", "solar", "steel", "chemical", "manufacturing"]):
-            fac_name_from_trigger = plant_match.group(1).title()
-            if specificity != "EXACT_FACILITY":
-                specificity = "EXACT_FACILITY"
+        if plant_match:
+            candidate_plant = plant_match.group(1).strip()
+            invalid_plant_terms = {
+                "power", "solar", "steel", "chemical", "manufacturing", "crore",
+                "mother", "new", "existing", "proposed", "mega", "upcoming",
+                "second", "third", "first", "the", "a", "an", "its", "our",
+                "this", "each", "every", "that", "their", "current", "assembly",
+                "integrated", "dedicated", "advanced", "modern", "latest"
+            }
+            valid_words = [
+                w for w in candidate_plant.split()
+                if w.lower() not in invalid_plant_terms and w.lower() not in {"plant", "facility", "works"}
+            ]
+            if valid_words:
+                fac_name_from_trigger = candidate_plant.title()
+                if specificity != "EXACT_FACILITY":
+                    specificity = "EXACT_FACILITY"
 
     # 2. Industrial area matching
     if known_industrial_area and known_industrial_area.lower() in text_lower:

@@ -3,7 +3,7 @@ general:
   debug: false
   instance_name: "Salesoorja Private Search"
 search:
-  safe_search: 0
+  safe_search: 1
   autocomplete: ""
   formats:
     - html
@@ -19,12 +19,19 @@ outgoing:
 
 engines:
   - name: duckduckgo
-    disabled: true
+    disabled: false
   - name: google
     disabled: false
   - name: google cse
     disabled: true
   - name: bing
     disabled: false
+  - name: bing news
+    disabled: false
+  - name: reuters
+    disabled: false
   - name: qwant
     disabled: false
+  - name: brave
+    disabled: false
+

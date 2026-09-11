@@ -163,12 +163,21 @@ NON_HUMAN_NAME_TERMS = {
     'enterprises', 'global', 'top', 'best', 'leading', 'review', 'reviews', 'price',
     'share', 'stock', 'investor', 'investors', 'annual', 'report', 'product', 'products',
     'news', 'press', 'release', 'headquarters', 'branch', 'office', 'plant', 'factory',
-    'division', 'department', 'centre', 'center', 'services', 'solutions', 'laboratory',
-    'laboratories', 'committee', 'board', 'portal', 'website', 'page', 'home', 'overview',
-    'contact', 'about', 'group', 'limited', 'ltd', 'private', 'pvt', 'inc', 'corp', 'corporation',
-    'company', 'companies', 'manufacture', 'manufacturer', 'manufacturers', 'manufacturing',
-    'collection', 'bhakti', 'sangrah', 'devotional', 'song', 'songs', 'album', 'popular',
-    'playlist', 'video', 'videos', 'music', 'track', 'tracks', 'lyrics', 'volume', 'vol'
+    'division', 'department', 'centre', 'center', 'services', 'solutions', 'solution',
+    'laboratory', 'laboratories', 'committee', 'board', 'portal', 'website', 'page', 'home',
+    'overview', 'contact', 'about', 'group', 'limited', 'ltd', 'private', 'pvt', 'inc', 'corp',
+    'corporation', 'company', 'companies', 'manufacture', 'manufacturer', 'manufacturers',
+    'manufacturing', 'collection', 'bhakti', 'sangrah', 'devotional', 'song', 'songs',
+    'album', 'popular', 'playlist', 'video', 'videos', 'music', 'track', 'tracks', 'lyrics',
+    'volume', 'vol', 'trusted', 'partner', 'partners', 'expert', 'experts', 'specialist',
+    'specialists', 'provider', 'providers', 'turnkey', 'customized', 'system', 'systems',
+    'equipment', 'instrument', 'instruments', 'calibration', 'testing', 'facility', 'unit',
+    'auto', 'automobile', 'automobiles', 'cars', 'car', 'cabs', 'cab', 'vehicle', 'vehicles',
+    'wheels', 'wheel', 'bikes', 'bike', 'truck', 'trucks', 'bus', 'buses', 'mother', 'crore',
+    'digital', 'ecosystem', 'community', 'society', 'foundation', 'trust', 'network', 'club',
+    'team', 'associates', 'association', 'consortium', 'forum', 'group', 'channel', 'brand',
+    'brands', 'initiative', 'venture', 'ventures', 'hub', 'cluster', 'mission', 'vision',
+    'platform', 'portal'
 }
 
 
@@ -183,15 +192,30 @@ def is_human_person_candidate(name_str: str, company_name: str = "", title_or_co
     if not clean:
         return False, "Candidate name is empty"
 
+    tokens = re.findall(r'[a-zA-Z]+', clean)
+    if not tokens:
+        return False, "No alphabetic tokens found"
+
+    # Pronoun / conversational token rejection
+    pronoun_tokens = {'i', 'we', 'you', 'he', 'she', 'it', 'they', 'my', 'our', 'your', 'me', 'us', 'him', 'her', 'them'}
+    if any(t.lower() in pronoun_tokens for t in tokens):
+        return False, "Candidate name contains pronoun or non-name word"
+
     # 1. Reject if name is substantially identical or subset of company name
     if company_name:
         comp_tokens = [t.lower() for t in re.findall(r'[a-zA-Z]+', company_name)
                        if t.lower() not in {'ltd', 'limited', 'pvt', 'private', 'india', 'the', 'and', 'co'}]
-        name_tokens = [t.lower() for t in re.findall(r'[a-zA-Z]+', clean)]
+        name_tokens = [t.lower() for t in tokens]
         if comp_tokens and name_tokens:
             matched = sum(1 for t in name_tokens if t in comp_tokens)
             if matched >= len(name_tokens) or (len(name_tokens) >= 2 and matched >= 2):
                 return False, f"Candidate name '{clean}' matches company name '{company_name}' (non-human entity)"
+            if matched >= 1 and len(name_tokens) <= 2:
+                return False, f"Candidate name '{clean}' is a company/brand token combination"
+            if matched >= 1:
+                other_tokens = [t for t in name_tokens if t not in comp_tokens]
+                if any(t in NON_HUMAN_NAME_TERMS or t in ROLE_TERMS for t in other_tokens):
+                    return False, f"Candidate name '{clean}' contains company token and non-human term(s)"
 
     # 2. Characters / symbols check
     if re.search(r'[\d@:/\\_<>{}\[\]\*\+=#\$%^&~®™©|•!?;]', clean):

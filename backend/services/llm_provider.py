@@ -353,6 +353,10 @@ class LLMResponse:
     citations: Optional[list[Any]] = None
     rate_limit_headers: dict[str, str] = field(default_factory=dict)
 
+    @property
+    def content(self) -> str:
+        return self.text
+
     def parse_json(self) -> Optional[dict[str, Any]]:
         """Safely parse JSON response from LLM text."""
         raw = self.text.strip()
@@ -653,20 +657,20 @@ class GeminiProvider(LLMProvider):
                         quota=quota_tracker.get_quota("gemini"),
                     )
                 elif resp.status_code == 429:
-                    self._status = LLM_STATUS_RATE_LIMITED
                     retry_header = resp.headers.get("Retry-After")
                     retry_seconds = int(retry_header) if retry_header and retry_header.isdigit() else 60
-                    self._retry_after_until = time.time() + retry_seconds
-                    raise QuotaExhaustedError(f"Gemini quota exhausted (HTTP 429): {resp.text}", retry_after=retry_seconds)
+                    last_err = f"HTTP 429 on model {m}: {resp.text}"
+                    logger.warning("Gemini model %s hit rate limit (HTTP 429). Trying fallback candidate if available...", m)
+                    continue
                 else:
                     last_err = f"HTTP {resp.status_code}: {resp.text}"
-            except QuotaExhaustedError:
-                raise
             except Exception as e:
                 last_err = str(e)
 
         gemini_rate_limiter.record_outcome(success=False)
-        raise RuntimeError(f"Gemini API request failed: {last_err}")
+        self._status = LLM_STATUS_RATE_LIMITED
+        self._retry_after_until = time.time() + 30.0
+        raise QuotaExhaustedError(f"All Gemini models exhausted or failed: {last_err}", retry_after=30)
 
 
 # ── 2. Groq Cloud Free Tier Provider ────────────────────────────────────────
