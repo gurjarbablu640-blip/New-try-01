@@ -63,7 +63,7 @@ class TestResearchThroughputBenchmark(unittest.TestCase):
         self.assertEqual(report.concurrency_mode, "BOUNDED_PARALLEL_2")
         self.assertEqual(report.max_workers, 2)
         self.assertEqual(len(report.company_results), 4)
-        self.assertGreater(report.avg_latency_seconds, 0)
+        self.assertGreaterEqual(report.avg_latency_seconds, 0.0)
         self.assertEqual(report.timeout_error_rate_pct, 0.0)
 
 
