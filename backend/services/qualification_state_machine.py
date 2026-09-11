@@ -386,3 +386,75 @@ def validate_transition(
             return False, "Cannot transition to READY_FOR_PRODUCTION_SEND: OUTBOUND_TEST_MODE is True"
 
     return True, f"Transition from {current_state.value} to {target_state.value} is valid"
+
+
+@dataclass(frozen=True)
+class PersonChangeInvalidation:
+    """Result of evaluating person-change impact on staged/active records."""
+    old_person: str
+    new_person: str
+    company: str
+    must_invalidate_contact: bool
+    must_invalidate_score: bool
+    must_invalidate_staging: bool
+    must_invalidate_outreach: bool
+    old_state: Optional[QualificationState]
+    new_state: QualificationState
+    reason: str
+
+
+def invalidate_for_person_change(
+    company: str,
+    old_person: str,
+    new_person: str,
+    old_evidence: Optional[Dict[str, Any]] = None,
+    reason: str = "Forensic audit selected different candidate",
+) -> PersonChangeInvalidation:
+    """Determine what must be invalidated when a candidate is replaced.
+
+    INVARIANTS:
+    1. Old person's contact (email, phone) MUST NOT carry over to new person.
+    2. Old person's functional ownership score MUST NOT carry over.
+    3. Old person's send readiness / staging status MUST be revoked.
+    4. Old person's personalized outreach copy MUST be invalidated.
+    5. New person MUST independently pass all gates from scratch.
+
+    This function does NOT perform the invalidation — it returns a decision
+    object that callers use to coordinate state, staging, and evidence cleanup.
+    """
+    if not old_person or not new_person:
+        return PersonChangeInvalidation(
+            old_person=old_person or "",
+            new_person=new_person or "",
+            company=company,
+            must_invalidate_contact=False,
+            must_invalidate_score=False,
+            must_invalidate_staging=False,
+            must_invalidate_outreach=False,
+            old_state=None,
+            new_state=QualificationState.RESEARCHING,
+            reason="Missing person name; no invalidation required",
+        )
+
+    # Old person's state from evidence (if available)
+    old_state = None
+    if old_evidence:
+        try:
+            result = determine_qualification_state(old_evidence)
+            old_state = result.state
+        except Exception:
+            pass
+
+    # A person change ALWAYS invalidates person-specific fields
+    return PersonChangeInvalidation(
+        old_person=old_person,
+        new_person=new_person,
+        company=company,
+        must_invalidate_contact=True,    # Different person = different email/phone
+        must_invalidate_score=True,      # Different person = different functional ownership
+        must_invalidate_staging=True,    # Old staging entry cannot be sent
+        must_invalidate_outreach=True,   # Old personalized copy is wrong
+        old_state=old_state,
+        new_state=QualificationState.REJECTED,  # Old candidate gets REJECTED (superseded)
+        reason=reason,
+    )

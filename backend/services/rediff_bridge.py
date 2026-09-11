@@ -57,7 +57,7 @@ class RediffHandoffRecord:
     notes: str = ""
     record_id: str = field(default_factory=lambda: f"rediff-hnd-{uuid.uuid4().hex[:12]}")
     staged_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    staging_status: str = "STAGED"  # STAGED, EXPORTED, REJECTED, TEST_MOCKED
+    staging_status: str = "STAGED"  # STAGED, EXPORTED, REJECTED, SUPERSEDED, TEST_MOCKED
     test_mode: bool = field(default_factory=lambda: bool(settings.OUTBOUND_TEST_MODE))
     provenance: str = "REAL"
 
@@ -279,6 +279,66 @@ class RediffBridge:
             "record": record.to_dict(),
         }
 
+    def supersede_candidate(
+        self,
+        company: str,
+        old_person: str,
+        new_person: str,
+        reason: str,
+        facility: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Supersede a previously staged candidate when new evidence selects a different person.
+
+        Marks old records as SUPERSEDED with audit trail.
+        Does NOT delete — preserves historical audit evidence.
+        Ensures superseded records cannot be exported or sent.
+
+        Returns summary of affected records.
+        """
+        queue = self._load_queue()
+        superseded_ids = []
+        for record in queue:
+            rec_company = (record.get("company") or record.get("COMPANY") or "").strip().lower()
+            rec_person = (record.get("person") or record.get("CONTACT_NAME") or "").strip().lower()
+            target_company = company.strip().lower()
+            target_person = old_person.strip().lower()
+
+            # Match by company + person (optionally also facility)
+            if rec_company == target_company and rec_person == target_person:
+                if facility:
+                    rec_facility = (record.get("facility") or record.get("FACILITY") or "").strip().lower()
+                    if facility.strip().lower() not in rec_facility and rec_facility not in facility.strip().lower():
+                        continue
+
+                # Only supersede if not already terminal
+                current_status = record.get("staging_status", "")
+                if current_status in ("SUPERSEDED", "EXPORTED", "SENT"):
+                    continue
+
+                record["staging_status"] = "SUPERSEDED"
+                record["ready_for_email"] = "NO"
+                record["READY_FOR_EMAIL"] = "NO"
+                record["superseded_at"] = datetime.now(timezone.utc).isoformat()
+                record["superseded_by"] = new_person
+                record["supersession_reason"] = reason
+                superseded_ids.append(record.get("record_id", "unknown"))
+                logger.info(
+                    "SUPERSEDED staging record %s: %s at %s (replaced by %s — %s)",
+                    record.get("record_id"), old_person, company, new_person, reason,
+                )
+
+        if superseded_ids:
+            self._save_queue(queue)
+
+        return {
+            "superseded_count": len(superseded_ids),
+            "superseded_record_ids": superseded_ids,
+            "old_person": old_person,
+            "new_person": new_person,
+            "company": company,
+            "reason": reason,
+        }
+
     def list_staged(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
         """List staged records in the queue."""
         records = self._load_queue()
@@ -295,10 +355,12 @@ class RediffBridge:
     ) -> Dict[str, Any]:
         """Export a batch of staged records for Rediff_Email_System."""
         records = self._load_queue()
+        # Never export SUPERSEDED records
+        non_superseded = [r for r in records if r.get("staging_status") != "SUPERSEDED"]
         if record_ids:
-            target_records = [r for r in records if r.get("record_id") in record_ids]
+            target_records = [r for r in non_superseded if r.get("record_id") in record_ids]
         else:
-            target_records = [r for r in records if r.get("staging_status") in ("STAGED", "STAGED_TEST", "READY_FOR_PRODUCTION_SEND")]
+            target_records = [r for r in non_superseded if r.get("staging_status") in ("STAGED", "STAGED_TEST", "READY_FOR_PRODUCTION_SEND")]
 
         if not target_records:
             return {
