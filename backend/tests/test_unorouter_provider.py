@@ -40,6 +40,10 @@ class TestUnoRouterProvider(unittest.TestCase):
 
     def setUp(self):
         llm_reasoning_cache.clear()
+        UnoRouterProvider.reset_rate_limit_state()
+
+    def tearDown(self):
+        UnoRouterProvider.reset_rate_limit_state()
 
     # 1. Free-model allowlist
     def test_free_model_allowlist(self):
@@ -275,7 +279,7 @@ class TestUnoRouterProvider(unittest.TestCase):
             model="glm-5.3-search:free",
         )
 
-        router = ZeroCostRouter()
+        router = ZeroCostRouter(task_type="PUBLIC_WEB_RESEARCH")
         resp = router.complete(system_prompt="S", messages=[{"role": "user", "content": "U"}])
         self.assertEqual(resp.provider, "unorouter")
         mock_uno_complete.assert_called_once()

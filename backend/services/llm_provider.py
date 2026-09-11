@@ -47,16 +47,40 @@ PROVIDER_ACCOUNT_MODE_PAID_BLOCKED = "PROVIDER_ACCOUNT_MODE_PAID_BLOCKED"
 
 
 # ── Allowed & Disallowed Task Scopes ────────────────────────────────────────
-ALLOWED_LLM_TASKS = {
+# ── Task Routing Categories ────────────────────────────────────────────────
+TASK_CATEGORY_PUBLIC_WEB_RESEARCH = {
+    "PUBLIC_WEB_RESEARCH",
+    "CURRENT_TRIGGER_RESEARCH",
+    "SOURCE_DISCOVERY",
+    "RECENT_COMPANY_RESEARCH",
+}
+
+TASK_CATEGORY_REASONING = {
+    "GENERAL_REASONING",
     "TRIGGER_INTERPRETATION",
     "FACILITY_LINK_REASONING",
     "CALIBRATION_CONSEQUENCE_REASONING",
     "PERSON_COMPARISON",
+    "PERSON_RANKING",
+    "FACILITY_CLASSIFICATION",
     "CONTRADICTORY_EVIDENCE",
     "HIGH_VALUE_LEAD_REVIEW",
+    "SUMMARIZATION",
+    "COPY_REVIEW",
 }
 
-DISALLOWED_LLM_TASKS = {
+TASK_CATEGORY_TOOL_EXECUTION = {
+    "TOOL_CALL_REQUIRED",
+    "AGENT_LOOP",
+    "STRUCTURED_TOOL_EXECUTION",
+}
+
+TASK_CATEGORY_DETERMINISTIC_ONLY = {
+    "DETERMINISTIC_GATE",
+    "CONTACT_CLASSIFICATION",
+    "QUALIFICATION_STATE",
+    "SCHEDULER",
+    "DUPLICATE_CHECK",
     "DATE_COMPARISON",
     "PHONE_VALIDATION",
     "EMAIL_TYPE_CLASSIFICATION",
@@ -65,6 +89,14 @@ DISALLOWED_LLM_TASKS = {
     "APOLLO_CREDIT_GATE",
     "ARITHMETIC",
 }
+
+ALLOWED_LLM_TASKS = (
+    TASK_CATEGORY_PUBLIC_WEB_RESEARCH
+    | TASK_CATEGORY_REASONING
+    | TASK_CATEGORY_TOOL_EXECUTION
+)
+
+DISALLOWED_LLM_TASKS = TASK_CATEGORY_DETERMINISTIC_ONLY
 
 
 # ── Retired Models (Explicitly Disallowed & Quarantined) ────────────────────
@@ -871,7 +903,14 @@ class UnoRouterProvider(LLMProvider):
     - Zero cost only: paid fallback is strictly disabled.
     - Header tracking for rate limits (x-ratelimit-*, retry-after).
     - Secret redaction: UNOROUTER_API_KEY is never printed or logged.
+    - Non-blocking 1-RPM rate-limit awareness (skips/fails over without worker sleep).
     """
+
+    # Class-level rate-limit state persistence (1 RPM free tier rule):
+    _last_request_at: Optional[float] = None
+    _next_allowed_at: Optional[float] = None
+    _retry_after: Optional[int] = None
+    _count_429: int = 0
 
     def __init__(
         self,
@@ -903,6 +942,9 @@ class UnoRouterProvider(LLMProvider):
         if not bool(get_setting_value("UNOROUTER_ENABLED", True)):
             return False
         if not is_cost_allowed("unorouter", self.model_name):
+            return False
+        # Non-blocking 1-RPM check: if in cooldown window, immediately mark unavailable so router fails over
+        if self._next_allowed_at and time.time() < self._next_allowed_at:
             return False
         if self._retry_after_until and time.time() < self._retry_after_until:
             return False
@@ -942,6 +984,13 @@ class UnoRouterProvider(LLMProvider):
                 f"Must end with ':free' and be in verified free model allowlist."
             )
 
+        if self._next_allowed_at and time.time() < self._next_allowed_at:
+            wait_rem = int(self._next_allowed_at - time.time())
+            raise QuotaExhaustedError(
+                f"UnoRouterProvider cooling down (1 RPM limit). Next request allowed in {wait_rem}s.",
+                retry_after=wait_rem,
+            )
+
         if not self.is_available():
             if self._retry_after_until and time.time() < self._retry_after_until:
                 raise QuotaExhaustedError(
@@ -975,7 +1024,7 @@ class UnoRouterProvider(LLMProvider):
         }
 
         start_time = time.time()
-        timeout_seconds = int(get_setting_value("UNOROUTER_TIMEOUT", 60))
+        timeout_seconds = int(get_setting_value("UNOROUTER_TIMEOUT", 90))
         try:
             resp = requests.post(endpoint, json=payload, headers=headers, timeout=timeout_seconds)
             latency_ms = (time.time() - start_time) * 1000.0
@@ -1008,6 +1057,9 @@ class UnoRouterProvider(LLMProvider):
                 output_tokens = usage.get("completion_tokens", 0)
                 total_tokens = usage.get("total_tokens", input_tokens + output_tokens)
 
+                # Track rate limit state for 1-RPM free tier window (60s cooldown)
+                UnoRouterProvider._last_request_at = time.time()
+                UnoRouterProvider._next_allowed_at = UnoRouterProvider._last_request_at + 60.0
                 self._status = LLM_STATUS_AVAILABLE
                 self._retry_after_until = None
 
@@ -1039,10 +1091,13 @@ class UnoRouterProvider(LLMProvider):
                     f"Provider BLOCKED immediately under ZERO_COST_ONLY policy."
                 )
             elif resp.status_code == 429:
+                UnoRouterProvider._count_429 += 1
                 self._status = LLM_STATUS_RATE_LIMITED
                 retry_header = resp.headers.get("Retry-After")
-                retry_seconds = int(retry_header) if retry_header and retry_header.isdigit() else 30
-                self._retry_after_until = time.time() + retry_seconds
+                retry_seconds = int(retry_header) if retry_header and retry_header.isdigit() else 35
+                UnoRouterProvider._retry_after = retry_seconds
+                UnoRouterProvider._next_allowed_at = time.time() + retry_seconds
+                self._retry_after_until = UnoRouterProvider._next_allowed_at
                 raise QuotaExhaustedError(
                     f"UnoRouter quota/rate limit exhausted (HTTP 429): {resp.text[:200]}",
                     retry_after=retry_seconds,
@@ -1061,6 +1116,28 @@ class UnoRouterProvider(LLMProvider):
             if "UnoRouter" in str(e):
                 raise
             raise RuntimeError(f"UnoRouter connection error: {e}")
+
+    @classmethod
+    def get_rate_limit_state(cls) -> dict[str, Any]:
+        """Returns persisted rate-limit and health state for UnoRouter."""
+        now = time.time()
+        cooldown = max(0.0, (cls._next_allowed_at or 0.0) - now)
+        return {
+            "last_request_at": cls._last_request_at,
+            "next_allowed_at": cls._next_allowed_at,
+            "retry_after": cls._retry_after,
+            "count_429": cls._count_429,
+            "is_cooling_down": cooldown > 0,
+            "cooldown_remaining_seconds": round(cooldown, 1),
+        }
+
+    @classmethod
+    def reset_rate_limit_state(cls):
+        """Reset cooldown timestamps (used in unit test fixtures)."""
+        cls._last_request_at = None
+        cls._next_allowed_at = None
+        cls._retry_after = None
+        cls._count_429 = 0
 
 
 # ── 6. OpenAI Provider (Retained for Manual Use; Blocked under Zero-Cost) ───
@@ -1295,6 +1372,74 @@ class LLMReasoningCache:
         }
         self._save_cache()
 
+    @staticmethod
+    def normalize_search_query(query: str) -> str:
+        """Normalize whitespace and lower-case search query for maximum cache hits."""
+        return re.sub(r"\s+", " ", (query or "").lower().strip())
+
+    @staticmethod
+    def compute_search_cache_key(
+        provider: str,
+        model: str,
+        normalized_query: str,
+        freshness_context: str = "",
+    ) -> str:
+        raw = f"SEARCH:{provider.lower().strip()}:{model.strip()}:{normalized_query.strip()}:{freshness_context.strip()}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def get_search_cache(
+        self,
+        provider: str,
+        model: str,
+        query: str,
+        freshness_context: str = "",
+        max_age_seconds: Optional[float] = None,
+    ) -> Optional[dict[str, Any]]:
+        if not self.enabled:
+            return None
+        norm_query = self.normalize_search_query(query)
+        key = self.compute_search_cache_key(provider, model, norm_query, freshness_context)
+        entry = self._memory_cache.get(key)
+        if not entry:
+            return None
+        created_at = entry.get("timestamp")
+        if created_at:
+            try:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(created_at)).total_seconds()
+                ttl = max_age_seconds if max_age_seconds is not None else (self.ttl_days * 86400)
+                if age > ttl:
+                    del self._memory_cache[key]
+                    return None
+            except Exception:
+                pass
+        return entry
+
+    def set_search_cache(
+        self,
+        provider: str,
+        model: str,
+        query: str,
+        output: Any,
+        freshness_context: str = "",
+        citations: Optional[list[dict[str, Any]]] = None,
+    ):
+        if not self.enabled:
+            return
+        norm_query = self.normalize_search_query(query)
+        key = self.compute_search_cache_key(provider, model, norm_query, freshness_context)
+        self._memory_cache[key] = {
+            "type": "SEARCH_RESPONSE",
+            "provider": provider,
+            "model": model,
+            "normalized_query": norm_query,
+            "freshness_context": freshness_context,
+            "output": output,
+            "citations": citations or [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "status": "CACHED",
+        }
+        self._save_cache()
+
     def clear(self):
         self._memory_cache.clear()
         if os.path.exists(self._cache_file):
@@ -1354,24 +1499,99 @@ class FallbackLLMProvider(LLMProvider):
 
 
 class ZeroCostRouter(FallbackLLMProvider):
-    """Default Salesoorja Zero-Cost Provider Router.
-    Prioritizes:
-    1. UnoRouter Free (glm-5.3-search:free)
-    2. Gemini Free (gemini-3.7-flash, non-billing account)
-    3. Groq Free (openai/gpt-oss-20b, free plan)
-    4. Cloudflare Free (@cf/meta/llama-3.1-8b-instruct, free plan)
-    5. OpenRouter Free (:free models only)
+    """Task-aware Salesoorja Zero-Cost Provider Router.
+
+    Routes according to operational characteristics:
+    - PUBLIC_WEB_RESEARCH / CURRENT_TRIGGER_RESEARCH / SOURCE_DISCOVERY / RECENT_COMPANY_RESEARCH:
+      UnoRouter (glm-5.3-search:free) preferred first for web search & freshness.
+    - GENERAL_REASONING / PERSON_RANKING / FACILITY_CLASSIFICATION / SUMMARIZATION / COPY_REVIEW:
+      Fast verified zero-cost reasoning providers first (Gemini, Groq, Cloudflare, OpenRouter);
+      UnoRouter only as last fallback to protect 1-RPM quota and avoid 35s latency.
+    - TOOL_CALL_REQUIRED / AGENT_LOOP / STRUCTURED_TOOL_EXECUTION:
+      Strictly EXCLUDES UnoRouter (tool calling unsupported).
+    - DETERMINISTIC_GATE / CONTACT_CLASSIFICATION / QUALIFICATION_STATE / SCHEDULER / DUPLICATE_CHECK:
+      Strictly NO LLM (empty provider chain; complete() raises LLMProviderNotAllowedError).
     """
 
-    def __init__(self):
-        free_chain: list[LLMProvider] = [
-            UnoRouterProvider(),
+    def __init__(self, task_type: str = "GENERAL_REASONING"):
+        self.task_type = (task_type or "GENERAL_REASONING").upper().strip()
+        providers = self._build_chain_for_task(self.task_type)
+        super().__init__(providers=providers)
+
+    @classmethod
+    def _build_chain_for_task(cls, task_type: str) -> list[LLMProvider]:
+        t = (task_type or "").upper().strip()
+
+        # Hard deterministic gates: strictly NO LLM
+        if t in TASK_CATEGORY_DETERMINISTIC_ONLY:
+            return []
+
+        # Tool calling / agent execution: strictly EXCLUDE UnoRouter (tool calling unsupported)
+        if t in TASK_CATEGORY_TOOL_EXECUTION:
+            return [
+                GeminiProvider(),
+                GroqProvider(),
+                CloudflareProvider(),
+                OpenRouterProvider(),
+            ]
+
+        # Web / Trigger / Source research: PREFER UnoRouter search route first
+        if t in TASK_CATEGORY_PUBLIC_WEB_RESEARCH:
+            return [
+                UnoRouterProvider(),
+                GeminiProvider(),
+                GroqProvider(),
+                CloudflareProvider(),
+                OpenRouterProvider(),
+            ]
+
+        # General reasoning & analysis: use verified zero-cost reasoning providers only.
+        # UnoRouter (glm-5.3-search:free) is strictly excluded from general reasoning
+        # to protect the 1-RPM quota, avoid ~35s latency, and keep search model focused.
+        return [
             GeminiProvider(),
             GroqProvider(),
             CloudflareProvider(),
             OpenRouterProvider(),
         ]
-        super().__init__(providers=free_chain)
+
+    def complete(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.2,
+        max_tokens: int = 1500,
+        response_format: Optional[str] = None,
+        task_type: Optional[str] = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        active_task = (task_type or self.task_type or "GENERAL_REASONING").upper().strip()
+        if active_task in TASK_CATEGORY_DETERMINISTIC_ONLY or not evaluate_llm_task_allowed(active_task):
+            raise LLMProviderNotAllowedError(
+                f"Task '{active_task}' is deterministic and strictly prohibited from invoking an LLM."
+            )
+
+        # If call specifies a different task type, dynamically adapt active provider chain
+        if task_type and active_task != self.task_type:
+            task_chain = self._build_chain_for_task(active_task)
+            temp_router = FallbackLLMProvider(providers=task_chain)
+            return temp_router.complete(
+                system_prompt=system_prompt,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                **kwargs,
+            )
+
+        return super().complete(
+            system_prompt=system_prompt,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            **kwargs,
+        )
 
 
 # ── 8. Factory Functions ───────────────────────────────────────────────────
@@ -1393,17 +1613,23 @@ def get_provider(provider_name: str) -> LLMProvider:
     raise ValueError(f"Unknown LLM provider: {provider_name}")
 
 
-def get_orchestrator_provider() -> Optional[LLMProvider]:
+def get_orchestrator_provider(task_type: str = "GENERAL_REASONING") -> Optional[LLMProvider]:
     """Returns the configured zero-cost orchestrator LLM provider with failover.
+    When task_type is in TASK_CATEGORY_DETERMINISTIC_ONLY, returns None so
+    deterministic gates never invoke an LLM.
     When ALLOW_PAID_LLM=False, OpenAI is strictly omitted from the chain.
     If no free provider API keys are configured or account mode is UNVERIFIED,
     returns None so callers can fall back to deterministic logic without crashing.
     """
+    t = (task_type or "GENERAL_REASONING").upper().strip()
+    if t in TASK_CATEGORY_DETERMINISTIC_ONLY or not evaluate_llm_task_allowed(t):
+        return None
+
     allow_paid = bool(get_setting_value("ALLOW_PAID_LLM", False))
     cost_policy = str(get_setting_value("LLM_COST_POLICY", LLM_COST_POLICY_ZERO_COST)).strip()
 
     if not allow_paid or cost_policy == LLM_COST_POLICY_ZERO_COST:
-        router = ZeroCostRouter()
+        router = ZeroCostRouter(task_type=t)
         if router.is_available():
             return router
         return None
@@ -1469,7 +1695,7 @@ def run_analyst_verifier_protocol(
         }
 
     # Obtain providers
-    analyst = analyst_provider or get_orchestrator_provider()
+    analyst = analyst_provider or get_orchestrator_provider(task_type=task_type)
     if not analyst or not analyst.is_available():
         return {
             "decision": "HOLD",
