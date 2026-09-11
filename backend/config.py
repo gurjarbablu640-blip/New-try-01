@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     ALLOW_PAID_LLM: bool = False
 
     # Gemini Settings & Account Verification
-    GEMINI_ACCOUNT_MODE: str = "UNVERIFIED"  # Allowed: FREE_NO_BILLING, PAID, UNVERIFIED (Default: UNVERIFIED)
-    ORCHESTRATOR_GEMINI_MODEL: str = "gemini-3.7-flash"
+    GEMINI_ACCOUNT_MODE: str = "FREE_NO_BILLING"  # Allowed: FREE_NO_BILLING, PAID, UNVERIFIED (Default: FREE_NO_BILLING)
+    ORCHESTRATOR_GEMINI_MODEL: str = "gemini-3.1-flash-lite"
 
     # Groq Settings & Account Verification
     GROQ_API_KEY: str = ""

@@ -259,7 +259,7 @@ def draft_followup_message_tool(db: Session, company_id: int) -> dict[str, Any]:
             f"I am writing from Oorja Technical Services regarding upcoming calibration requirements {plant_ref}. "
             f"We noticed that {count} critical instruments are currently approaching or past their calibration due date.\n\n"
             f"Our NABL accredited laboratory (CC-3963) offers on-site testing for Pressure, Temperature, and Electro-Technical parameters "
-            f"with standard 48-hour certificate turnaround.\n\n"
+            f"with prompt certificate delivery and documented measurement uncertainty budgets.\n\n"
             f"Could we schedule a brief 5-minute call this week to review the master asset list?\n\n"
             f"Best regards,\nOorja Sales Team"
         )
@@ -468,7 +468,7 @@ def _legacy_keyword_routing(query: str, db: Session) -> dict[str, Any]:
             answer = (
                 f"Regional Calibration Competitor Intelligence:\n\n"
                 + "\n".join(comp_facts)
-                + "\n\nOorja Differentiator: 48-hour certificate turnaround, direct NABL accreditation, and emergency on-site dispatch."
+                + "\n\nOorja Differentiator: Direct ISO/IEC 17025 (NABL CC-3963) accreditation, certified technical calibration teams, and rapid on-site dispatch."
             )
             return {
                 "query": query,

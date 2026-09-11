@@ -55,12 +55,26 @@ APOLLO_LOG_FILE = os.path.join(
     "apollo_query_log.json",
 )
 
+APOLLO_PENDING_QUEUE_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "data",
+    "runtime_state",
+    "apollo_pending_queue.json",
+)
+
 CONTACT_CACHE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
     "data",
     "runtime_state",
     "contact_waterfall_cache.json",
 )
+
+# Apollo night mode toggle: False prevents consuming expired credits
+APOLLO_ENABLED_FOR_LIVE_LOOKUP = False
+
+# Status classifications
+STATUS_DEFERRED_APOLLO_SUBSCRIPTION_INACTIVE = "DEFERRED_APOLLO_SUBSCRIPTION_INACTIVE"
+STATUS_PENDING_APOLLO_RENEWAL = "PENDING_APOLLO_RENEWAL"
 
 # Match classifications
 MATCH_CONFIRMED = "MATCH_CONFIRMED"
@@ -79,13 +93,16 @@ class FastContactWaterfallService:
         self,
         apollo_log_file: Optional[str] = None,
         contact_cache_file: Optional[str] = None,
+        pending_queue_file: Optional[str] = None,
         max_free_search_seconds: float = 60.0,
     ):
         self.apollo_log_file = apollo_log_file or APOLLO_LOG_FILE
         self.contact_cache_file = contact_cache_file or CONTACT_CACHE_FILE
+        self.pending_queue_file = pending_queue_file or APOLLO_PENDING_QUEUE_FILE
         self.max_free_search_seconds = max_free_search_seconds
         self._apollo_log = self._load_json(self.apollo_log_file, default_factory=list)
         self._contact_cache = self._load_json(self.contact_cache_file, default_factory=dict)
+        self._pending_queue = self._load_json(self.pending_queue_file, default_factory=list)
 
     def _load_json(self, path: str, default_factory: Any) -> Any:
         if os.path.exists(path):
@@ -95,6 +112,14 @@ class FastContactWaterfallService:
             except Exception as e:
                 logger.warning("Failed to load JSON file '%s': %s", path, e)
         return default_factory() if callable(default_factory) else default_factory
+
+    def _save_pending_queue(self):
+        try:
+            os.makedirs(os.path.dirname(self.pending_queue_file), exist_ok=True)
+            with open(self.pending_queue_file, "w", encoding="utf-8") as f:
+                json.dump(self._pending_queue, f, indent=2)
+        except Exception as e:
+            logger.warning("Failed to save Apollo pending queue: %s", e)
 
     def _save_apollo_log(self):
         try:
@@ -262,6 +287,60 @@ class FastContactWaterfallService:
         person_norm = re.sub(r"[^a-z0-9]", "", person_name.lower())
         dedup_key = f"{company_norm}:{person_norm}"
 
+        # Phase 18: Apollo Night Mode Check (Subscription expired today; user renewal tomorrow)
+        live_lookup_enabled = bool(get_setting_value("APOLLO_ENABLED_FOR_LIVE_LOOKUP", APOLLO_ENABLED_FOR_LIVE_LOOKUP))
+        if not live_lookup_enabled:
+            authority = person.get("authority_classification") or person.get("classification") or ""
+            score = float(candidate_record.get("lead_score", 0) or 0)
+            priority = "P1" if (score >= 95 and authority in ("DIRECT_CALIBRATION_OWNER", "METROLOGY_OWNER", "STRONG_PLANT_QUALITY_OWNER")) else "P2"
+
+            queue_item = {
+                "company": company,
+                "legal_company_name": candidate_record.get("legal_company_name") or company,
+                "domain": candidate_record.get("official_domain") or candidate_record.get("domain") or "",
+                "facility": candidate_record.get("facility") or candidate_record.get("facility_city") or "",
+                "city": candidate_record.get("facility_city") or candidate_record.get("city") or "",
+                "state": candidate_record.get("facility_state") or candidate_record.get("state") or "",
+                "person_name": person_name,
+                "person_title": title,
+                "linkedin_url": person.get("linkedin_url") or "",
+                "authority_class": authority,
+                "trigger_type": candidate_record.get("trigger_type") or candidate_record.get("event") or "",
+                "trigger_date": candidate_record.get("trigger_date") or "",
+                "lead_score": score or 90.0,
+                "why_qualified": reason,
+                "lookup_priority": priority,
+                "dedup_key": dedup_key,
+                "queued_at": datetime.now(timezone.utc).isoformat(),
+                "status": STATUS_PENDING_APOLLO_RENEWAL,
+            }
+            # Deduplicate in pending queue
+            existing_idx = next((i for i, item in enumerate(self._pending_queue) if item.get("dedup_key") == dedup_key), None)
+            if existing_idx is not None:
+                self._pending_queue[existing_idx] = queue_item
+            else:
+                self._pending_queue.append(queue_item)
+            self._save_pending_queue()
+
+            logger.info("Apollo Night Mode active: deferred live lookup for %s at %s into renewal queue (priority: %s)", person_name, company, priority)
+            return {
+                "status": STATUS_DEFERRED_APOLLO_SUBSCRIPTION_INACTIVE,
+                "contact_enrichment_status": STATUS_DEFERRED_APOLLO_SUBSCRIPTION_INACTIVE,
+                "company": company,
+                "person": person_name,
+                "title": title,
+                "match_classification": STATUS_DEFERRED_APOLLO_SUBSCRIPTION_INACTIVE,
+                "email": None,
+                "email_status": None,
+                "phone": None,
+                "contact_verified": False,
+                "apollo_live_calls_made": 0,
+                "credits_consumed": 0,
+                "lookup_priority": priority,
+                "ready_for_email": False,
+                "queue_status": STATUS_PENDING_APOLLO_RENEWAL,
+            }
+
         logger.info("Executing Apollo enrichment for qualified decision maker: %s (%s) at %s", person_name, title, company)
         apollo_res = enrich_specific_person(
             person_name=person_name,
@@ -333,7 +412,13 @@ class FastContactWaterfallService:
         candidate_record: Dict[str, Any],
         contact_info: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Generate non-sending personalized email preview (Test Mode Only)."""
+        """Generate non-sending personalized email preview (Test Mode Only).
+
+        Enforces Phase 17 Claim Hygiene:
+        - No unsupported 48-hour turnaround claims
+        - No mischaracterization of customer duties as 'NABL CC-3963 standards'
+        - Anchors strictly to ISO/IEC 17025:2017 (NABL Certificate CC-3963)
+        """
         company = candidate_record.get("company", "")
         person = candidate_record.get("primary_person") or {}
         person_name = person.get("name") or "Quality Leader"
@@ -344,13 +429,12 @@ class FastContactWaterfallService:
         subject = f"Calibration compliance & metrology support for {company}'s {facility}"
         body = (
             f"Dear {first_name},\n\n"
-            f"I noticed {company}'s {event} at {facility}. With the rigorous quality and IATF/NABL "
-            f"precision standards required for your operations, calibration cycle-times and traceability "
-            f"are critical to preventing downtime.\n\n"
-            f"Oorja Technical Services (NABL Accredited Lab CC-3963) provides precision calibration across "
-            f"Electro-Technical, Thermal, Mechanical, and Pressure instrumentation with rapid 48-hour turnarounds "
-            f"and on-site mobile calibration teams across India.\n\n"
-            f"Would you be open to a brief 5-minute introductory call this week to review your equipment calibration schedule?\n\n"
+            f"Regarding operations at {company}'s {facility}: "
+            f"Oorja Technical Services operates an ISO/IEC 17025:2017 accredited calibration laboratory "
+            f"(NABL Certificate No. CC-3963) providing certified calibration across "
+            f"Electro-Technical, Thermal, Mechanical, and Pressure instrumentation "
+            f"aligned with your quality compliance schedules and on-site mobile calibration teams across India.\n\n"
+            f"Would your team be open to an introductory technical review regarding your calibration and metrology requirements for {facility}?\n\n"
             f"If you are not the direct coordinator for plant calibration and testing audits, could you kindly point me "
             f"to the right member of your quality or metrology team?\n\n"
             f"Best regards,\n"
@@ -366,6 +450,28 @@ class FastContactWaterfallService:
             "body": body,
             "outbound_sent": False,
             "safety_enforced": "OUTBOUND_TEST_MODE=true; REAL EMAILS SENT: 0",
+        }
+
+    def process_pending_apollo_queue(self, db_session: Any = None) -> Dict[str, Any]:
+        """Tomorrow's resume workflow: executes deterministic enrichment once subscription renewed."""
+        pending_items = [item for item in self._pending_queue if item.get("status") == STATUS_PENDING_APOLLO_RENEWAL]
+        results = []
+        for item in pending_items:
+            comp = item.get("company")
+            p_name = item.get("person_name")
+            p_title = item.get("person_title")
+            logger.info("Resuming Apollo queue enrichment for %s at %s", p_name, comp)
+            # When renewed tomorrow, APOLLO_ENABLED_FOR_LIVE_LOOKUP will be toggled True
+            res = enrich_specific_person(person_name=p_name, company_name=comp, title=p_title)
+            results.append({
+                "company": comp,
+                "person": p_name,
+                "status": res.get("status"),
+                "email": res.get("email"),
+            })
+        return {
+            "resumed_count": len(pending_items),
+            "results": results,
         }
 
 

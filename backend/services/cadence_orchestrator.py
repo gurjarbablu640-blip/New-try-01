@@ -84,7 +84,7 @@ def evaluate_non_response_cadence(
         target_role = "Quality Manager"
         reasoning = (
             f"Quality stakeholder has not engaged after {days_since_outbound} days. "
-            f"Provide high-utility technical content: 48-hour emergency calibration turnaround SLA."
+            f"Provide high-utility technical content: ISO/IEC 17025 accredited on-site calibration scope."
         )
         call_brief = None
         next_step = "Send Follow-up #2 with On-site Calibration SLA & Uncertainty Budget specimen."

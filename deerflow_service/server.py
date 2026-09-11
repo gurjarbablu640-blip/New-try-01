@@ -192,7 +192,8 @@ def execute_browser_job(payload: Dict[str, Any]) -> Dict[str, Any]:
                         json.dump(challenge_record, f, indent=2)
 
                     context.close()
-                    browser.close()
+                    if browser:
+                        browser.close()
                     elapsed = time.perf_counter() - start_time
                     return {
                         "task_id": task_id,

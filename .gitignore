@@ -53,3 +53,10 @@ frontend/dist/
 
 # Saved contact research runs (contain business contact data)
 backend/data/contact_research_runs/
+
+# Browser profiles and challenges
+deerflow_service/browser_profiles/
+deerflow_service/challenges/
+
+# Scratch directory
+backend/scratch/

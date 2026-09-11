@@ -55,6 +55,8 @@ def get_setting_value(key: str, default: Any = None) -> Any:
     overrides = load_runtime_overrides()
     if key in overrides and overrides[key] is not None and overrides[key] != "":
         return overrides[key]
+    if key in os.environ and os.environ[key] is not None and os.environ[key] != "":
+        return os.environ[key]
     return getattr(settings, key, default)
 
 

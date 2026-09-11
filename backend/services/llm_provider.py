@@ -410,13 +410,102 @@ class LLMProvider(ABC):
 
 
 # ── 1. Google Gemini Developer API Free Tier ────────────────────────────────
+import threading
+
+
+class GeminiRateLimiter:
+    """Enforces user-confirmed AI Studio quota ceiling: 60 RPM, 100,000 input TPM.
+
+    Includes safety margins to prevent hitting quota ceilings.
+    """
+    RPM_CEILING: int = 60
+    INPUT_TPM_CEILING: int = 100000
+    SAFETY_RPM: int = 50
+    SAFETY_INPUT_TPM: int = 90000
+
+    _lock = threading.Lock()
+    _request_timestamps: list[float] = []
+    _input_token_history: list[tuple[float, int]] = []
+    _total_requests: int = 0
+    _successful_requests: int = 0
+    _failed_requests: int = 0
+
+    @classmethod
+    def estimate_input_tokens(cls, contents: list[dict[str, Any]], system_prompt: str = "") -> int:
+        total_chars = len(system_prompt or "")
+        for c in contents:
+            for p in c.get("parts", []):
+                total_chars += len(p.get("text", "") or "")
+        return max(5, total_chars // 4)
+
+    @classmethod
+    def check_and_acquire(cls, estimated_input_tokens: int) -> bool:
+        with cls._lock:
+            now = time.time()
+            cutoff = now - 60.0
+            cls._request_timestamps = [ts for ts in cls._request_timestamps if ts > cutoff]
+            cls._input_token_history = [(ts, tok) for ts, tok in cls._input_token_history if ts > cutoff]
+
+            current_rpm = len(cls._request_timestamps)
+            current_tpm = sum(tok for _, tok in cls._input_token_history)
+
+            if current_rpm >= cls.SAFETY_RPM or (current_tpm + estimated_input_tokens) > cls.SAFETY_INPUT_TPM:
+                return False
+
+            cls._request_timestamps.append(now)
+            cls._input_token_history.append((now, estimated_input_tokens))
+            cls._total_requests += 1
+            return True
+
+    @classmethod
+    def record_outcome(cls, success: bool, actual_input_tokens: Optional[int] = None):
+        with cls._lock:
+            if success:
+                cls._successful_requests += 1
+            else:
+                cls._failed_requests += 1
+
+    @classmethod
+    def get_stats(cls) -> dict[str, Any]:
+        with cls._lock:
+            now = time.time()
+            cutoff = now - 60.0
+            rolling_requests = len([ts for ts in cls._request_timestamps if ts > cutoff])
+            rolling_tokens = sum(tok for ts, tok in cls._input_token_history if ts > cutoff)
+            return {
+                "rpm_ceiling": cls.RPM_CEILING,
+                "input_tpm_ceiling": cls.INPUT_TPM_CEILING,
+                "safety_rpm": cls.SAFETY_RPM,
+                "safety_input_tpm": cls.SAFETY_INPUT_TPM,
+                "rolling_rpm": rolling_requests,
+                "rolling_input_tpm": rolling_tokens,
+                "total_requests": cls._total_requests,
+                "successful_requests": cls._successful_requests,
+                "failed_requests": cls._failed_requests,
+            }
+
+    @classmethod
+    def reset_for_tests(cls):
+        with cls._lock:
+            cls._request_timestamps.clear()
+            cls._input_token_history.clear()
+            cls._total_requests = 0
+            cls._successful_requests = 0
+            cls._failed_requests = 0
+
+
+gemini_rate_limiter = GeminiRateLimiter()
+
+
 def _normalize_gemini_model(model_name: Optional[str]) -> str:
     """Normalize model names to active 2026 Gemini Flash API identifiers."""
     if not model_name:
-        return "gemini-3.7-flash"
+        return "gemini-3.1-flash-lite"
     m = model_name.strip().lower()
-    if "2.0" in m or "2" in m:
+    if "2.0" in m:
         return "gemini-2.0-flash"  # Will be rejected by retired check
+    if "3.1" in m:
+        return "gemini-3.1-flash-lite"
     if "3.8" in m:
         return "gemini-3.8-flash"
     if "3.7" in m:
@@ -427,16 +516,19 @@ def _normalize_gemini_model(model_name: Optional[str]) -> str:
         return "gemini-3.5-flash"
     if "gemini" in m:
         return model_name.strip()
-    return "gemini-3.7-flash"
+    return "gemini-3.1-flash-lite"
 
 
 class GeminiProvider(LLMProvider):
+    supports_tool_calling: bool = True
+    supports_structured_json: bool = True
+
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
         if api_key is not None:
             self.api_key = api_key
         else:
             self.api_key = str(get_setting_value("GOOGLE_API_KEY", "")).strip() or str(get_setting_value("GEMINI_API_KEY", "")).strip()
-        raw_model = model_name or str(get_setting_value("ORCHESTRATOR_GEMINI_MODEL", "")).strip() or "gemini-3.7-flash"
+        raw_model = model_name or str(get_setting_value("ORCHESTRATOR_GEMINI_MODEL", "")).strip() or "gemini-3.1-flash-lite"
         self.model_name = _normalize_gemini_model(raw_model)
         self._status = LLM_STATUS_AVAILABLE
         self._retry_after_until: Optional[float] = None
@@ -444,6 +536,9 @@ class GeminiProvider(LLMProvider):
     def is_available(self) -> bool:
         if self.model_name in RETIRED_MODELS:
             self._status = LLM_STATUS_MODEL_REMOVED
+            return False
+        account_verified, _ = verify_provider_billing_mode("gemini")
+        if not account_verified:
             return False
         if not is_cost_allowed("gemini", self.model_name):
             return False
@@ -493,6 +588,16 @@ class GeminiProvider(LLMProvider):
         if not contents:
             contents = [{"role": "user", "parts": [{"text": "Hello"}]}]
 
+        # Phase 9: Enforce 60 RPM and 100k input TPM ceiling with safety margin
+        estimated_input_tokens = gemini_rate_limiter.estimate_input_tokens(contents, system_prompt=system_prompt)
+        if not gemini_rate_limiter.check_and_acquire(estimated_input_tokens):
+            self._status = LLM_STATUS_RATE_LIMITED
+            self._retry_after_until = time.time() + 5.0
+            raise QuotaExhaustedError(
+                "Gemini local rate limiter ceiling reached (60 RPM / 100k TPM ceiling). "
+                "Non-blocking pause engaged to protect AI Studio quota."
+            )
+
         payload: dict[str, Any] = {
             "contents": contents,
             "generationConfig": {
@@ -506,7 +611,7 @@ class GeminiProvider(LLMProvider):
             payload["generationConfig"]["responseMimeType"] = "application/json"
 
         models_to_try = [self.model_name]
-        for fallback_m in ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]:
+        for fallback_m in ["gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash"]:
             if fallback_m not in models_to_try and is_cost_allowed("gemini", fallback_m):
                 models_to_try.append(fallback_m)
 
@@ -518,6 +623,7 @@ class GeminiProvider(LLMProvider):
                 quota_tracker.update_from_headers("gemini", dict(resp.headers))
 
                 if resp.status_code == 200:
+                    gemini_rate_limiter.record_outcome(success=True, actual_input_tokens=estimated_input_tokens)
                     data = resp.json()
                     candidates = data.get("candidates", [])
                     text = ""
@@ -559,6 +665,7 @@ class GeminiProvider(LLMProvider):
             except Exception as e:
                 last_err = str(e)
 
+        gemini_rate_limiter.record_outcome(success=False)
         raise RuntimeError(f"Gemini API request failed: {last_err}")
 
 

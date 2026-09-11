@@ -57,8 +57,8 @@ PROHIBITED_FACILITY_PATTERNS = [
 
 PROHIBITED_SLA_PATTERNS = [
     (
-        r"\b(?:48[-–\s]*(?:to\s*)?72[-–\s]*(?:hour|hr|hours|hrs)|24[-–\s]*(?:hour|hr|hours|hrs))\s+(?:expedited\s+)?turnaround\b",
-        "Invented turnaround SLA: Specific 48-72h turnaround commitment lacks user-approved commercial authorization",
+        r"\b(?:48[-–\s]*(?:to\s*)?72[-–\s]*(?:hour|hr|hours|hrs)|24[-–\s]*(?:hour|hr|hours|hrs)|48[-–\s]*(?:hour|hr|hours|hrs))\s+(?:expedited\s+)?(?:turnaround|dispatch|sla|certificate)\b",
+        "Invented turnaround SLA: 48-hour turnaround commitment lacks user-approved commercial authorization",
     ),
     (
         r"\bguaranteed\s+(?:\d+[-–\s]*(?:hour|hr|day|days))\s+turnaround\b",
@@ -67,6 +67,17 @@ PROHIBITED_SLA_PATTERNS = [
     (
         r"\bcertified\s+48-to-72-hour\s+expedited\s+turnaround\b",
         "Invented certified SLA timeframe",
+    ),
+]
+
+PROHIBITED_STANDARD_SEMANTIC_PATTERNS = [
+    (
+        r"(?:(?:customer(?:'s)?|client(?:'s)?)\s+)?(?:NABL\s+)?CC-3963\s+standards?\b",
+        "Semantic violation: CC-3963 is Oorja's lab accreditation certificate number, NOT a customer compliance standard",
+    ),
+    (
+        r"\bstandards?\s+of\s+CC-3963\b",
+        "Semantic violation: CC-3963 is an accreditation certificate number, not an industrial compliance standard",
     ),
 ]
 
@@ -207,6 +218,19 @@ class OutreachClaimGuard:
                     )
                 )
 
+        # 6. Check Semantic Standards Confusion (CC-3963 is Oorja's lab accreditation cert, not customer compliance standard)
+        for pattern, desc in PROHIBITED_STANDARD_SEMANTIC_PATTERNS:
+            matches = re.findall(pattern, text_lower, re.IGNORECASE)
+            for m in matches:
+                violations.append(
+                    ClaimViolation(
+                        category="MISCHARACTERIZED_STANDARD",
+                        matched_text=m if isinstance(m, str) else str(m),
+                        rule_description=desc,
+                        severity="HIGH",
+                    )
+                )
+
         sanitized = self.sanitize_text(text)
         is_clean = len(violations) == 0
 
@@ -277,6 +301,14 @@ class OutreachClaimGuard:
         sanitized = re.sub(
             r"\b(?:free|complimentary|zero[- ]cost)\s+uncertainty\s+review\b",
             "CMC measurement uncertainty evaluation",
+            sanitized,
+            flags=re.IGNORECASE,
+        )
+
+        # 4. Correct CC-3963 described as a customer compliance standard
+        sanitized = re.sub(
+            r"\b(?:NABL\s+)?CC-3963\s+standards?\b",
+            "ISO/IEC 17025:2017 (NABL CC-3963) accredited scope",
             sanitized,
             flags=re.IGNORECASE,
         )

@@ -129,7 +129,7 @@ def render_html_email(
             "windows, eliminating the need to ship critical equipment off-site."
         )
         supporting = (
-            "We offer 48-hour emergency dispatch for production-critical gauges and sensors. "
+            "Our certified metrology teams support production-critical gauges and sensors with prompt on-site scheduling. "
             "Would you like to explore scheduling an on-site calibration audit?"
         )
 
