@@ -36,8 +36,16 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
+OFFICIAL_DEERFLOW_STATUS = "BLOCKED_BY_LLM_PROVIDER"
+OFFICIAL_DEERFLOW_BLOCKER = (
+    "Official ByteDance DeerFlow 2.x requires active LLM API credentials and "
+    "multi-agent Docker sandboxes. Under zero-paid-LLM and 8GB laptop constraints, "
+    "official DeerFlow is blocked. Salesoorja uses BrowserResearchAdapter for Playwright jobs."
+)
+
+
 class DeerFlowAdapter:
-    """HTTP Client and boundary adapter for DeerFlow service."""
+    """HTTP Client and boundary adapter for DeerFlow / Browser research service."""
 
     def __init__(
         self,
@@ -50,13 +58,14 @@ class DeerFlowAdapter:
         self.timeout = timeout_seconds or settings.DEERFLOW_TIMEOUT_SECONDS
 
     def get_status(self) -> Dict[str, Any]:
-        """Check reachability and health of DeerFlow service."""
+        """Check reachability and health of the browser service and report official DeerFlow status."""
         if not self.enabled:
             return {
                 "status": "disabled",
-                "service": "deerflow",
+                "service": "deerflow_adapter",
                 "base_url": self.base_url,
                 "reachable": False,
+                "official_deerflow_status": OFFICIAL_DEERFLOW_STATUS,
                 "message": "DeerFlow adapter is disabled in configuration. Using local Salesoorja pipelines.",
             }
 
@@ -71,18 +80,22 @@ class DeerFlowAdapter:
                 data = json.loads(resp.read().decode("utf-8"))
                 return {
                     "status": "healthy",
-                    "service": "deerflow",
+                    "service": data.get("service", "browser_research_service"),
                     "base_url": self.base_url,
                     "reachable": True,
-                    "version": data.get("version", "unknown"),
+                    "version": data.get("version", "1.0.0-playwright"),
+                    "engine": data.get("engine", "playwright-chromium"),
+                    "official_bytedance_deerflow_installed": False,
+                    "official_deerflow_status": OFFICIAL_DEERFLOW_STATUS,
                     "capabilities": data.get("capabilities", ["browser", "subagent", "persistent_research"]),
                 }
         except Exception as exc:
             return {
                 "status": "unreachable",
-                "service": "deerflow",
+                "service": "deerflow_adapter",
                 "base_url": self.base_url,
                 "reachable": False,
+                "official_deerflow_status": OFFICIAL_DEERFLOW_STATUS,
                 "error": f"{type(exc).__name__}: {exc}",
                 "fallback_active": True,
             }

@@ -1,11 +1,16 @@
-"""DeerFlow Isolated Browser Research Service.
+"""Salesoorja Browser Research Service (Playwright Chromium Engine).
 
-Lightweight, resource-conscious execution harness using Playwright Chromium.
-Exposes standard HTTP endpoints for Salesoorja DeerFlowAdapter:
+Lightweight, deterministic browser automation and DOM extraction harness.
+NOTE: This is Salesoorja's custom Playwright research worker, NOT official ByteDance DeerFlow 2.x.
+Official ByteDance DeerFlow is blocked by active LLM provider requirements:
+OFFICIAL_DEERFLOW_STATUS = BLOCKED_BY_LLM_PROVIDER.
+
+Exposes standard HTTP endpoints:
 - GET  /health
 - POST /api/tasks
 - GET  /api/tasks/{task_id}
 - POST /api/browser/navigate
+- GET  /api/challenges
 """
 from __future__ import annotations
 
@@ -23,9 +28,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-logger = logging.getLogger("deerflow-service")
+logger = logging.getLogger("browser-research-service")
 
-app = FastAPI(title="DeerFlow Browser Harness", version="0.4.1")
+app = FastAPI(title="Salesoorja Browser Research Service", version="1.0.0-playwright")
 
 # In-memory storage for tasks and challenges
 TASKS_STORE: Dict[str, Dict[str, Any]] = {}
@@ -271,7 +276,7 @@ def execute_browser_job(payload: Dict[str, Any]) -> Dict[str, Any]:
         "task_id": task_id,
         "status": "completed",
         "company": company,
-        "provider": "deerflow",
+        "provider": "browser_research_service",
         "browser_launched": True,
         "browser_start_time": start_iso,
         "browser_end_time": end_iso,
@@ -284,14 +289,17 @@ def execute_browser_job(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @app.get("/health")
 def health_check():
-    """Health check validating Playwright readiness and DeerFlow version."""
+    """Health check validating Playwright browser service readiness."""
     return {
         "status": "healthy",
-        "service": "deerflow",
-        "version": "0.4.1-browser-harness",
+        "service": "browser_research_service",
+        "version": "1.0.0-playwright",
+        "engine": "playwright-chromium-131.0",
+        "official_bytedance_deerflow_installed": False,
+        "official_deerflow_status": "BLOCKED_BY_LLM_PROVIDER",
         "capabilities": [
-            "browser",
-            "subagent",
+            "deterministic_browser",
+            "js_hydration",
             "multi_step_navigation",
             "challenge_detection",
             "manual_handoff",
