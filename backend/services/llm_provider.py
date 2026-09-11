@@ -101,6 +101,9 @@ VERIFIED_FREE_MODELS: dict[str, dict[str, Any]] = {
     "openrouter": {
         # Dynamically validated: any model ending with ":free" or "openrouter/free"
     },
+    "unorouter": {
+        "glm-5.3-search:free": {"free_allowed": True, "structured": True, "context": 131072},
+    },
 }
 
 
@@ -167,6 +170,14 @@ def verify_provider_billing_mode(provider_name: str) -> tuple[bool, str]:
             return False, PROVIDER_ACCOUNT_MODE_PAID_BLOCKED
         return False, PROVIDER_BILLING_STATUS_UNVERIFIED
 
+    if p in ("unorouter", "uno"):
+        mode = str(get_setting_value("UNOROUTER_ACCOUNT_MODE", "FREE")).strip().upper()
+        if mode == "FREE":
+            return True, "FREE"
+        elif mode == "PAID":
+            return False, PROVIDER_ACCOUNT_MODE_PAID_BLOCKED
+        return False, PROVIDER_BILLING_STATUS_UNVERIFIED
+
     return False, "UNKNOWN_PROVIDER"
 
 
@@ -206,6 +217,12 @@ def is_cost_allowed(provider_name: str, model_name: str) -> bool:
 
     if p == "openrouter":
         return m.endswith(":free") or m == "openrouter/free"
+
+    if p in ("unorouter", "uno"):
+        return m.endswith(":free") and (
+            m in VERIFIED_FREE_MODELS.get("unorouter", {})
+            or m == "glm-5.3-search:free"
+        )
 
     return False
 
@@ -262,17 +279,18 @@ class DynamicQuotaTracker:
         found = False
         for k, v in headers.items():
             k_lower = k.lower()
-            if "remaining-requests" in k_lower and v.isdigit():
-                info.remaining_requests = int(v)
+            v_str = str(v).strip()
+            if ("remaining-requests" in k_lower or k_lower == "x-ratelimit-remaining") and v_str.isdigit():
+                info.remaining_requests = int(v_str)
                 found = True
-            elif "remaining-tokens" in k_lower and v.isdigit():
-                info.remaining_tokens = int(v)
+            elif ("remaining-tokens" in k_lower) and v_str.isdigit():
+                info.remaining_tokens = int(v_str)
                 found = True
-            elif "limit-requests" in k_lower and v.isdigit():
-                info.rpd = int(v)
+            elif ("limit-requests" in k_lower or k_lower == "x-ratelimit-limit") and v_str.isdigit():
+                info.rpd = int(v_str)
                 found = True
-            elif "reset" in k_lower:
-                info.reset_time = str(v)
+            elif "reset" in k_lower or k_lower == "retry-after":
+                info.reset_time = v_str
                 found = True
         if found:
             info.source = "RESPONSE_HEADERS"
@@ -295,6 +313,10 @@ class LLMResponse:
     cache_hit: bool = False
     status: str = LLM_STATUS_AVAILABLE
     quota: Optional[ProviderQuotaInfo] = None
+    tool_calls: Optional[list[dict[str, Any]]] = None
+    latency_ms: float = 0.0
+    citations: Optional[list[Any]] = None
+    rate_limit_headers: dict[str, str] = field(default_factory=dict)
 
     def parse_json(self) -> Optional[dict[str, Any]]:
         """Safely parse JSON response from LLM text."""
@@ -337,6 +359,7 @@ class LLMProvider(ABC):
         temperature: float = 0.2,
         max_tokens: int = 1500,
         response_format: Optional[str] = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         """Execute a chat completion request."""
         pass
@@ -837,7 +860,210 @@ class CloudflareProvider(LLMProvider):
             raise RuntimeError(f"Cloudflare API call error: {e}")
 
 
-# ── 5. OpenAI Provider (Retained for Manual Use; Blocked under Zero-Cost) ───
+# ── 5. UnoRouter Free Tier Provider (OpenAI-Compatible Zero-Cost) ──────────
+class UnoRouterProvider(LLMProvider):
+    """UnoRouter zero-cost OpenAI-compatible LLM provider adapter.
+
+    Enforces:
+    - Model route must be explicitly verified as free (suffix ':free').
+    - UNOROUTER_ACCOUNT_MODE must be FREE.
+    - On 402/payment required, provider is blocked immediately.
+    - Zero cost only: paid fallback is strictly disabled.
+    - Header tracking for rate limits (x-ratelimit-*, retry-after).
+    - Secret redaction: UNOROUTER_API_KEY is never printed or logged.
+    """
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model_name: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
+        if api_key is not None:
+            self.api_key = api_key
+        else:
+            self.api_key = str(get_setting_value("UNOROUTER_API_KEY", "")).strip()
+        self.model_name = (
+            model_name
+            or str(get_setting_value("UNOROUTER_MODEL", "glm-5.3-search:free")).strip()
+            or "glm-5.3-search:free"
+        )
+        self.base_url = (
+            base_url
+            or str(get_setting_value("UNOROUTER_BASE_URL", "https://api.unorouter.com/v1")).strip()
+            or "https://api.unorouter.com/v1"
+        )
+        self._status = LLM_STATUS_AVAILABLE
+        self._retry_after_until: Optional[float] = None
+        self._blocked = False
+
+    def is_available(self) -> bool:
+        if self._blocked:
+            return False
+        if not bool(get_setting_value("UNOROUTER_ENABLED", True)):
+            return False
+        if not is_cost_allowed("unorouter", self.model_name):
+            return False
+        if self._retry_after_until and time.time() < self._retry_after_until:
+            return False
+        return bool(
+            self.api_key
+            and not self.api_key.startswith("mock_")
+            and not self.api_key.startswith("YOUR_")
+            and len(self.api_key) > 10
+        )
+
+    def complete(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.2,
+        max_tokens: int = 1500,
+        response_format: Optional[str] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        if self._blocked:
+            raise LLMProviderNotAllowedError(
+                "LLM_PROVIDER_NOT_ALLOWED: UnoRouter is blocked due to a payment/billing signal."
+            )
+
+        account_verified, reason = verify_provider_billing_mode("unorouter")
+        if not account_verified:
+            raise LLMProviderNotAllowedError(
+                f"{reason}: UnoRouter account mode is '{get_setting_value('UNOROUTER_ACCOUNT_MODE', 'UNVERIFIED')}'. "
+                f"Requires explicit 'UNOROUTER_ACCOUNT_MODE=FREE' under ZERO_COST_ONLY."
+            )
+
+        if not is_cost_allowed("unorouter", self.model_name):
+            raise LLMProviderNotAllowedError(
+                f"LLM_PROVIDER_NOT_ALLOWED: Model '{self.model_name}' on UnoRouter is not an approved free route. "
+                f"Must end with ':free' and be in verified free model allowlist."
+            )
+
+        if not self.is_available():
+            if self._retry_after_until and time.time() < self._retry_after_until:
+                raise QuotaExhaustedError(
+                    f"UnoRouterProvider is rate-limited until {self._retry_after_until}"
+                )
+            raise RuntimeError("UnoRouterProvider is not available (UNOROUTER_API_KEY missing or disabled).")
+
+        formatted_messages = []
+        if system_prompt:
+            formatted_messages.append({"role": "system", "content": system_prompt})
+        for msg in messages:
+            formatted_messages.append({"role": msg["role"], "content": msg["content"]})
+
+        payload: dict[str, Any] = {
+            "model": self.model_name,
+            "messages": formatted_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if response_format == "json":
+            payload["response_format"] = {"type": "json_object"}
+        if tools:
+            payload["tools"] = tools
+            if tool_choice:
+                payload["tool_choice"] = tool_choice
+
+        endpoint = f"{self.base_url.rstrip('/')}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        start_time = time.time()
+        timeout_seconds = int(get_setting_value("UNOROUTER_TIMEOUT", 60))
+        try:
+            resp = requests.post(endpoint, json=payload, headers=headers, timeout=timeout_seconds)
+            latency_ms = (time.time() - start_time) * 1000.0
+
+            # Filter rate limit headers
+            rate_headers = {
+                k.lower(): v
+                for k, v in resp.headers.items()
+                if "ratelimit" in k.lower() or "retry-after" in k.lower()
+            }
+            quota_tracker.update_from_headers("unorouter", dict(resp.headers))
+
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                except Exception as e:
+                    raise RuntimeError(f"UnoRouter returned malformed JSON response: {e}")
+
+                choices = data.get("choices", [])
+                message_obj = choices[0].get("message", {}) if choices else {}
+                text = message_obj.get("content", "") or ""
+                tool_calls = message_obj.get("tool_calls")
+                returned_model = data.get("model", self.model_name)
+
+                # Capture citations if returned
+                citations = data.get("citations") or message_obj.get("citations") or []
+
+                usage = data.get("usage", {})
+                input_tokens = usage.get("prompt_tokens", 0)
+                output_tokens = usage.get("completion_tokens", 0)
+                total_tokens = usage.get("total_tokens", input_tokens + output_tokens)
+
+                self._status = LLM_STATUS_AVAILABLE
+                self._retry_after_until = None
+
+                return LLMResponse(
+                    text=text,
+                    usage={
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": total_tokens,
+                    },
+                    provider="unorouter",
+                    model=returned_model,
+                    raw_response=data,
+                    status=LLM_STATUS_AVAILABLE,
+                    quota=quota_tracker.get_quota("unorouter"),
+                    tool_calls=tool_calls,
+                    latency_ms=latency_ms,
+                    citations=citations if citations else None,
+                    rate_limit_headers=rate_headers,
+                )
+            elif resp.status_code == 401:
+                self._status = LLM_STATUS_UNAVAILABLE
+                raise RuntimeError("UnoRouter authentication failed (HTTP 401): Invalid or unauthorized API key.")
+            elif resp.status_code in (402, 403) or "payment" in resp.text.lower() or "billing" in resp.text.lower():
+                self._blocked = True
+                self._status = LLM_PROVIDER_NOT_ALLOWED
+                raise LLMProviderNotAllowedError(
+                    f"UnoRouter payment/billing required (HTTP {resp.status_code}): {resp.text[:200]}. "
+                    f"Provider BLOCKED immediately under ZERO_COST_ONLY policy."
+                )
+            elif resp.status_code == 429:
+                self._status = LLM_STATUS_RATE_LIMITED
+                retry_header = resp.headers.get("Retry-After")
+                retry_seconds = int(retry_header) if retry_header and retry_header.isdigit() else 30
+                self._retry_after_until = time.time() + retry_seconds
+                raise QuotaExhaustedError(
+                    f"UnoRouter quota/rate limit exhausted (HTTP 429): {resp.text[:200]}",
+                    retry_after=retry_seconds,
+                )
+            elif resp.status_code >= 500:
+                self._status = LLM_STATUS_UNAVAILABLE
+                raise RuntimeError(f"UnoRouter provider server failure (HTTP {resp.status_code}): {resp.text[:200]}")
+            else:
+                raise RuntimeError(f"UnoRouter API error (HTTP {resp.status_code}): {resp.text[:200]}")
+        except requests.exceptions.Timeout:
+            self._status = LLM_STATUS_UNAVAILABLE
+            raise RuntimeError(f"UnoRouter request timed out after {timeout_seconds}s")
+        except (QuotaExhaustedError, LLMProviderNotAllowedError):
+            raise
+        except Exception as e:
+            if "UnoRouter" in str(e):
+                raise
+            raise RuntimeError(f"UnoRouter connection error: {e}")
+
+
+# ── 6. OpenAI Provider (Retained for Manual Use; Blocked under Zero-Cost) ───
 class OpenAIProvider(LLMProvider):
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
         if api_key is not None:
@@ -1008,6 +1234,67 @@ class LLMReasoningCache:
         }
         self._save_cache()
 
+    @staticmethod
+    def compute_prompt_key(
+        provider: str,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        params: Optional[dict[str, Any]] = None,
+    ) -> str:
+        """Hash: provider, model, system prompt, user prompt, relevant parameters."""
+        canonical_params = json.dumps(params or {}, sort_keys=True, default=str)
+        raw = f"{provider.lower().strip()}:{model.strip()}:{system_prompt.strip()}:{user_prompt.strip()}:{canonical_params}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def get_prompt_response(
+        self,
+        provider: str,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        params: Optional[dict[str, Any]] = None,
+    ) -> Optional[dict[str, Any]]:
+        if not self.enabled:
+            return None
+        key = self.compute_prompt_key(provider, model, system_prompt, user_prompt, params)
+        entry = self._memory_cache.get(key)
+        if not entry:
+            return None
+        created_at = entry.get("timestamp")
+        if created_at:
+            try:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(created_at)).total_seconds()
+                if age > self.ttl_days * 86400:
+                    del self._memory_cache[key]
+                    return None
+            except Exception:
+                pass
+        return entry
+
+    def set_prompt_response(
+        self,
+        provider: str,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        output: Any,
+        params: Optional[dict[str, Any]] = None,
+        tokens_used: Optional[dict[str, int]] = None,
+    ):
+        if not self.enabled:
+            return
+        key = self.compute_prompt_key(provider, model, system_prompt, user_prompt, params)
+        self._memory_cache[key] = {
+            "provider": provider,
+            "model": model,
+            "output": output,
+            "tokens_used": tokens_used or {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "status": "CACHED",
+        }
+        self._save_cache()
+
     def clear(self):
         self._memory_cache.clear()
         if os.path.exists(self._cache_file):
@@ -1040,6 +1327,7 @@ class FallbackLLMProvider(LLMProvider):
         temperature: float = 0.2,
         max_tokens: int = 1500,
         response_format: Optional[str] = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         errors = []
         for p in self.providers:
@@ -1052,6 +1340,7 @@ class FallbackLLMProvider(LLMProvider):
                     temperature=temperature,
                     max_tokens=max_tokens,
                     response_format=response_format,
+                    **kwargs,
                 )
             except (QuotaExhaustedError, LLMProviderNotAllowedError) as e:
                 logger.warning("Provider %s rate-limited/disallowed: %s. Failing over to next free provider.", p.__class__.__name__, e)
@@ -1067,14 +1356,16 @@ class FallbackLLMProvider(LLMProvider):
 class ZeroCostRouter(FallbackLLMProvider):
     """Default Salesoorja Zero-Cost Provider Router.
     Prioritizes:
-    1. Gemini Free (gemini-3.7-flash, non-billing account)
-    2. Groq Free (openai/gpt-oss-20b, free plan)
-    3. Cloudflare Free (@cf/meta/llama-3.1-8b-instruct, free plan)
-    4. OpenRouter Free (:free models only)
+    1. UnoRouter Free (glm-5.3-search:free)
+    2. Gemini Free (gemini-3.7-flash, non-billing account)
+    3. Groq Free (openai/gpt-oss-20b, free plan)
+    4. Cloudflare Free (@cf/meta/llama-3.1-8b-instruct, free plan)
+    5. OpenRouter Free (:free models only)
     """
 
     def __init__(self):
         free_chain: list[LLMProvider] = [
+            UnoRouterProvider(),
             GeminiProvider(),
             GroqProvider(),
             CloudflareProvider(),
@@ -1087,6 +1378,8 @@ class ZeroCostRouter(FallbackLLMProvider):
 def get_provider(provider_name: str) -> LLMProvider:
     """Factory to get an LLM provider by name."""
     name = (provider_name or "").lower().strip()
+    if name in ["unorouter", "uno"]:
+        return UnoRouterProvider()
     if name in ["gemini", "google"]:
         return GeminiProvider()
     if name in ["groq"]:

@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     CLOUDFLARE_ACCOUNT_MODE: str = "UNVERIFIED"  # Allowed: FREE, PAID, UNVERIFIED (Default: UNVERIFIED)
     CLOUDFLARE_MODEL: str = "@cf/meta/llama-3.1-8b-instruct"
 
+    # UnoRouter Settings & Zero-Cost Route
+    UNOROUTER_API_KEY: str = ""
+    UNOROUTER_ENABLED: bool = True
+    UNOROUTER_BASE_URL: str = "https://api.unorouter.com/v1"
+    UNOROUTER_MODEL: str = "glm-5.3-search:free"
+    UNOROUTER_ACCOUNT_MODE: str = "FREE"  # Allowed: FREE, PAID, UNVERIFIED (Default: FREE for approved zero-cost routes)
+    UNOROUTER_TIMEOUT: int = 90
+
     # LLM Reasoning Cache
     LLM_CACHE_ENABLED: bool = True
     LLM_CACHE_DIR: str = "data/llm_cache"

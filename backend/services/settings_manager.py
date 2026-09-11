@@ -80,6 +80,13 @@ def get_masked_settings_status() -> Dict[str, Any]:
                 "model": get_setting_value("ORCHESTRATOR_GEMINI_MODEL", "gemini-2.0-flash"),
                 "masked_key": _mask_secret(gemini_key),
             },
+            "unorouter": {
+                "configured": bool(get_setting_value("UNOROUTER_API_KEY", "")),
+                "model": get_setting_value("UNOROUTER_MODEL", "glm-5.3-search:free"),
+                "masked_key": _mask_secret(get_setting_value("UNOROUTER_API_KEY", "")),
+                "enabled": bool(get_setting_value("UNOROUTER_ENABLED", True)),
+                "account_mode": get_setting_value("UNOROUTER_ACCOUNT_MODE", "FREE"),
+            },
         },
         "apollo": {
             "configured": bool(apollo_key),
