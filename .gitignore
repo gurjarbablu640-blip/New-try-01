@@ -60,3 +60,13 @@ deerflow_service/challenges/
 
 # Scratch directory
 backend/scratch/
+
+# Tooling Binaries
+scripts/coderabbit/*.exe
+
+# Privacy, Keys and Credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.cert

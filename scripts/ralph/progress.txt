@@ -1,0 +1,11 @@
+# Ralph Progress Log - Salesoorja
+
+## Codebase Patterns
+- Test execution: `docker exec -e PYTHONPATH=. salesoorja-backend pytest tests/ -q`
+- Primary AI: Google Gemini (`gemini-3.1-flash-lite`, Free tier, 60 RPM / 100k TPM rate limited)
+- Outreach Claim Guard: CC-3963 is Oorja's lab accreditation certificate, never a customer standard; 48h turnaround prohibited.
+- Apollo Waterfall: Night mode active (`APOLLO_ENABLED_FOR_LIVE_LOOKUP = False`); candidates staged in `backend/data/runtime_state/apollo_pending_queue.json`.
+
+---
+Started: 2026-09-11
+Status: Tooling initialized; bounded template created; autonomous loop idle.

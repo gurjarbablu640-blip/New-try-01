@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "project": "Salesoorja",
+  "branchName": "feature/bounded-workflow-task",
+  "description": "Template for safe, bounded, non-destructive agent tasks in Salesoorja",
+  "maxIterations": 5,
+  "testCommand": "docker exec -e PYTHONPATH=. salesoorja-backend pytest tests/ -q",
+  "allowedFiles": [
+    "backend/services/",
+    "backend/tests/",
+    "docs/"
+  ],
+  "stopConditions": [
+    "All acceptanceCriteria passed",
+    "Test suite exits with code 0 (all tests pass)",
+    "Max iterations reached",
+    "Any security or prohibited action triggered"
+  ],
+  "prohibitedActions": [
+    "NO real email sending (OUTBOUND_TEST_MODE must remain True)",
+    "NO live Apollo API calls or credit consumption",
+    "NO modifying credentials or printing raw API keys",
+    "NO paid LLM activation or enabling paid billing",
+    "NO database deletions (DROP TABLE, alembic downgrade -1, TRUNCATE)",
+    "NO git reset --hard or git push --force",
+    "NO CAPTCHA bypass or automated anti-bot evasion",
+    "NO live LinkedIn messaging or unapproved automation",
+    "NO autonomous production deployment"
+  ],
+  "userStories": [
+    {
+      "id": "US-TEMPLATE-001",
+      "title": "[Example Task Title]",
+      "description": "As an engineer, I want [bounded capability] so that [business value]",
+      "acceptanceCriteria": [
+        "Implementation matches bounded specification",
+        "Unit tests added and passing",
+        "Full test suite passes (390+ tests PASS)",
+        "Zero prohibited actions violated"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "Must respect Salesoorja outreach claim guard and security baseline."
+    }
+  ]
+}

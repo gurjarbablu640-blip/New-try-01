@@ -1,0 +1,13 @@
+{
+  "name": "Salesoorja",
+  "version": "1.0.0",
+  "spec_format": "spec-driven-v2",
+  "test_command": "docker exec -e PYTHONPATH=. salesoorja-backend pytest tests/ -q",
+  "planning_dir": ".gsd",
+  "milestones_dir": ".gsd/milestones",
+  "safety_guards": {
+    "prohibit_real_email": true,
+    "prohibit_apollo_credits": true,
+    "prohibit_paid_llm": true
+  }
+}
