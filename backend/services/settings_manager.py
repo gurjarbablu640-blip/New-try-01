@@ -197,7 +197,10 @@ def test_apollo_connection() -> Dict[str, Any]:
         headers = {"Content-Type": "application/json", "Cache-Control": "no-cache", "X-Api-Key": api_key}
         res = requests.get("https://api.apollo.io/api/v1/auth/health", headers=headers, timeout=10)
         if res.status_code == 200:
-            return {"status": "CONNECTED", "message": "Apollo API connection verified. Pilot safety limit (<= 6 contacts) enforced."}
+            data = res.json() if res.content else {}
+            if data.get("is_logged_in") is True:
+                return {"status": "CONNECTED", "message": "Apollo API connection verified. Pilot safety limit (<= 6 contacts) enforced."}
+            return {"status": "AUTHENTICATION_FAILED", "message": "Apollo API key rejected (is_logged_in=false)."}
         return {"status": "AUTHENTICATION_FAILED", "message": f"Apollo returned HTTP {res.status_code}: {res.text[:150]}"}
     except Exception as err:
         return {"status": "SERVER_ERROR", "message": str(err)}

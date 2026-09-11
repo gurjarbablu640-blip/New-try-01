@@ -1,0 +1,82 @@
+{
+  "maruti suzuki:sanand:maruti suzuki sanand plant": {
+    "company_name": "Maruti Suzuki",
+    "facility_name": "Maruti Suzuki Sanand Plant",
+    "plant_city": "Sanand",
+    "LINKEDIN_INTELLIGENCE_ATTEMPTED": true,
+    "candidates_found_count": 0,
+    "primary_person": null,
+    "secondary_person": null,
+    "ranked_candidates": [],
+    "browser_verification": {
+      "status": "NOT_NEEDED"
+    },
+    "manual_action_required": false,
+    "timestamp": "2026-09-11T15:44:18.229962+00:00",
+    "cache_hit": false
+  },
+  "exide energy:bengaluru:bengaluru battery plant": {
+    "company_name": "Exide Energy",
+    "facility_name": "Bengaluru Battery Plant",
+    "plant_city": "Bengaluru",
+    "LINKEDIN_INTELLIGENCE_ATTEMPTED": true,
+    "candidates_found_count": 0,
+    "primary_person": null,
+    "secondary_person": null,
+    "ranked_candidates": [],
+    "browser_verification": {
+      "status": "NOT_NEEDED"
+    },
+    "manual_action_required": false,
+    "timestamp": "2026-09-11T15:44:39.633008+00:00",
+    "cache_hit": false
+  },
+  "jsw energy:sanand:green hydrogen plant": {
+    "company_name": "JSW Energy",
+    "facility_name": "Green Hydrogen Plant",
+    "plant_city": "Sanand",
+    "LINKEDIN_INTELLIGENCE_ATTEMPTED": true,
+    "candidates_found_count": 0,
+    "primary_person": null,
+    "secondary_person": null,
+    "ranked_candidates": [],
+    "browser_verification": {
+      "status": "NOT_NEEDED"
+    },
+    "manual_action_required": false,
+    "timestamp": "2026-09-11T15:44:56.620812+00:00",
+    "cache_hit": false
+  },
+  "aarti industries:sanand:aarti industries sanand plant": {
+    "company_name": "Aarti Industries",
+    "facility_name": "Aarti Industries Sanand Plant",
+    "plant_city": "Sanand",
+    "LINKEDIN_INTELLIGENCE_ATTEMPTED": true,
+    "candidates_found_count": 0,
+    "primary_person": null,
+    "secondary_person": null,
+    "ranked_candidates": [],
+    "browser_verification": {
+      "status": "NOT_NEEDED"
+    },
+    "manual_action_required": false,
+    "timestamp": "2026-09-11T15:45:15.780366+00:00",
+    "cache_hit": false
+  },
+  "dixon technologies:noida:dixon technologies noida plant": {
+    "company_name": "Dixon Technologies",
+    "facility_name": "Dixon Technologies Noida Plant",
+    "plant_city": "Noida",
+    "LINKEDIN_INTELLIGENCE_ATTEMPTED": true,
+    "candidates_found_count": 0,
+    "primary_person": null,
+    "secondary_person": null,
+    "ranked_candidates": [],
+    "browser_verification": {
+      "status": "NOT_NEEDED"
+    },
+    "manual_action_required": false,
+    "timestamp": "2026-09-11T15:45:33.713237+00:00",
+    "cache_hit": false
+  }
+}

@@ -340,8 +340,19 @@ def _person_passes(value: Any) -> tuple[bool, str, dict[str, Any]]:
             "classification": classification,
             "person_name_validation": val_status or "VALID",
         }
-    elif classification in ("FACILITY_OWNER", "GROUP_FUNCTION_OWNER"):
+    elif classification in (
+        "FACILITY_OWNER",
+        "GROUP_FUNCTION_OWNER",
+        "DIRECT_CALIBRATION_OWNER",
+        "METROLOGY_OWNER",
+        "STRONG_PLANT_QUALITY_OWNER",
+    ):
         return True, f"Person verified as {classification}", {
+            "classification": classification,
+            "person_name_validation": val_status or "VALID",
+        }
+    elif classification == "GENERAL_QUALITY":
+        return False, "Generic Quality Engineer at unknown site (GENERAL_QUALITY / HOLD)", {
             "classification": classification,
             "person_name_validation": val_status or "VALID",
         }
@@ -583,7 +594,7 @@ def _evidence_value(evidence: Mapping[str, Any], name: str) -> Any:
         "calibration_demand": ("calibration_demand", "demand", "calibration_need"),
         "technical_capability": ("technical_capability", "capability", "technical_fit"),
         "timing": ("timing", "buying_window", "timing_current"),
-        "correct_person": ("correct_person", "person_verified", "decision_maker"),
+        "correct_person": ("correct_person", "person_verified", "decision_maker", "person"),
         "reachable_email": ("reachable_email", "email_reachable", "email"),
     }
     for key in aliases[name]:

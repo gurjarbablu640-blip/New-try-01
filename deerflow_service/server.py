@@ -48,6 +48,7 @@ class TaskPayload(BaseModel):
     focus_areas: Optional[List[str]] = Field(default_factory=lambda: ["expansion", "qa_hiring", "facility"])
     facility: Optional[str] = ""
     multi_step: bool = True
+    browser_profile: Optional[str] = "default"
     created_at: Optional[str] = None
 
 
@@ -56,7 +57,12 @@ class DirectNavigatePayload(BaseModel):
     company_name: Optional[str] = ""
     follow_links: bool = True
     link_keywords: Optional[List[str]] = Field(default_factory=lambda: ["facility", "plant", "location", "quality", "about"])
+    browser_profile: Optional[str] = "default"
     max_wait_ms: int = 15000
+
+
+PROFILES_BASE_DIR = os.path.join(os.path.dirname(__file__), "browser_profiles")
+os.makedirs(PROFILES_BASE_DIR, exist_ok=True)
 
 
 def detect_challenge(html: str, title: str) -> Optional[str]:
@@ -76,6 +82,13 @@ def detect_challenge(html: str, title: str) -> Optional[str]:
         return "GENERIC_BOT_DETECTION"
     if "otp" in title_lower or "two-factor" in title_lower or "2fa" in title_lower:
         return "TWO_FACTOR_AUTH"
+    if "linkedin" in title_lower or "linkedin" in html_lower or "authwall" in html_lower:
+        if any(w in title_lower for w in ["sign in", "log in", "authwall", "security verification"]):
+            return "LINKEDIN_LOGIN_REQUIRED"
+        if "checkpoint" in html_lower or ("challenge" in html_lower and "security" in html_lower):
+            return "LINKEDIN_SECURITY_CHALLENGE"
+        if "join linkedin" in title_lower or "join | linkedin" in title_lower:
+            return "LINKEDIN_AUTH_WALL"
     return None
 
 
@@ -89,6 +102,7 @@ def execute_browser_job(payload: Dict[str, Any]) -> Dict[str, Any]:
     focus_areas = payload.get("focus_areas") or []
     facility = payload.get("facility") or ""
     multi_step = payload.get("multi_step", True)
+    profile_req = str(payload.get("browser_profile") or "default").lower().replace(" ", "_")
 
     if not target_urls:
         if payload.get("domain"):
@@ -110,20 +124,37 @@ def execute_browser_job(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         with sync_playwright() as p:
-            # Conservative launch args for older 8GB i5 laptop
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                ],
-            )
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                viewport={"width": 1280, "height": 720},
-            )
+            browser = None
+            if "linkedin" in profile_req:
+                user_data_dir = os.path.join(PROFILES_BASE_DIR, "salesoorja_linkedin")
+                os.makedirs(user_data_dir, exist_ok=True)
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=user_data_dir,
+                    headless=True,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                    ],
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    viewport={"width": 1280, "height": 720},
+                )
+                actions_performed.append("launched persistent browser context (Salesoorja LinkedIn)")
+            else:
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                    ],
+                )
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    viewport={"width": 1280, "height": 720},
+                )
             page = context.new_page()
             page.set_default_timeout(15000)
 
@@ -254,7 +285,8 @@ def execute_browser_job(payload: Dict[str, Any]) -> Dict[str, Any]:
                 results.append(page_record)
 
             context.close()
-            browser.close()
+            if browser:
+                browser.close()
 
     except Exception as exc:
         logger.exception("[%s] Browser execution error: %s", task_id, exc)
@@ -296,13 +328,16 @@ def health_check():
         "version": "1.0.0-playwright",
         "engine": "playwright-chromium-131.0",
         "official_bytedance_deerflow_installed": False,
+        "custom_browser_service": "installed/running",
         "official_deerflow_status": "WAITING_FOR_VERIFIED_ZERO_COST_MODEL",
+        "browser_profiles": ["default", "Salesoorja LinkedIn"],
         "capabilities": [
             "deterministic_browser",
             "js_hydration",
             "multi_step_navigation",
             "challenge_detection",
             "manual_handoff",
+            "persistent_profile_isolation",
         ],
         "browser_running": True,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -341,6 +376,7 @@ def direct_navigate(payload: DirectNavigatePayload):
         "target_urls": [payload.url],
         "multi_step": payload.follow_links,
         "focus_areas": payload.link_keywords or [],
+        "browser_profile": payload.browser_profile or "default",
     }
     return execute_browser_job(job_payload)
 

@@ -1,0 +1,62 @@
+[
+  {
+    "timestamp": "2026-09-11T15:44:20.575910+00:00",
+    "company": "Maruti Suzuki",
+    "person": "Sunil Sharma",
+    "title": "Plant Quality Head",
+    "dedup_key": "marutisuzuki:sunilsharma",
+    "reason": "Qualified lead direct contact missing",
+    "status": "APOLLO_BLOCKED",
+    "match_class": "APOLLO_BLOCKED",
+    "email_found": false,
+    "phone_found": false
+  },
+  {
+    "timestamp": "2026-09-11T15:44:41.776439+00:00",
+    "company": "Exide Energy",
+    "person": "Pradeep N",
+    "title": "Head Quality Cell Manufacturing",
+    "dedup_key": "exideenergy:pradeepn",
+    "reason": "Qualified lead direct contact missing",
+    "status": "APOLLO_BLOCKED",
+    "match_class": "APOLLO_BLOCKED",
+    "email_found": false,
+    "phone_found": false
+  },
+  {
+    "timestamp": "2026-09-11T15:44:59.705322+00:00",
+    "company": "JSW Energy",
+    "person": "Alok Mishra",
+    "title": "Head Testing & Metrology",
+    "dedup_key": "jswenergy:alokmishra",
+    "reason": "Qualified lead direct contact missing",
+    "status": "APOLLO_BLOCKED",
+    "match_class": "APOLLO_BLOCKED",
+    "email_found": false,
+    "phone_found": false
+  },
+  {
+    "timestamp": "2026-09-11T15:45:18.402168+00:00",
+    "company": "Aarti Industries",
+    "person": "Dharmendra Dave",
+    "title": "Vice President Quality",
+    "dedup_key": "aartiindustries:dharmendradave",
+    "reason": "Qualified lead direct contact missing",
+    "status": "APOLLO_BLOCKED",
+    "match_class": "APOLLO_BLOCKED",
+    "email_found": false,
+    "phone_found": false
+  },
+  {
+    "timestamp": "2026-09-11T15:45:36.510444+00:00",
+    "company": "Dixon Technologies",
+    "person": "Ashish Kumar",
+    "title": "Quality Head SMT Line",
+    "dedup_key": "dixontechnologies:ashishkumar",
+    "reason": "Qualified lead direct contact missing",
+    "status": "APOLLO_BLOCKED",
+    "match_class": "APOLLO_BLOCKED",
+    "email_found": false,
+    "phone_found": false
+  }
+]
