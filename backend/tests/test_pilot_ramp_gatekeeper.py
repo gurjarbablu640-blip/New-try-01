@@ -119,6 +119,25 @@ class TestPilotRampGatekeeper(unittest.TestCase):
         self.assertIsNone(eval_res.target_tier)
         self.assertIn("MAX_CAPACITY_REACHED", eval_res.recommendation)
 
+    def test_block_when_superseded_contact_staged(self):
+        bad_lead = self._valid_candidate(company="Dixon Technologies")
+        bad_lead["staging_status"] = "SUPERSEDED"
+        bad_lead["READY_FOR_EMAIL"] = "YES"
+        eval_res = self.gatekeeper.evaluate_ramp_gate(current_tier=1, candidates=[bad_lead])
+
+        self.assertFalse(eval_res.passed)
+        super_check = next(c for c in eval_res.conditions if c.condition_id == "NO_SUPERSEDED_CONTACTS")
+        self.assertFalse(super_check.passed)
+
+    def test_block_when_missing_provenance(self):
+        bad_lead = self._valid_candidate(company="Dixon Technologies")
+        bad_lead["provenance"] = None
+        eval_res = self.gatekeeper.evaluate_ramp_gate(current_tier=1, candidates=[bad_lead])
+
+        self.assertFalse(eval_res.passed)
+        prov_check = next(c for c in eval_res.conditions if c.condition_id == "PROVENANCE_INTEGRITY_VERIFIED")
+        self.assertFalse(prov_check.passed)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -240,11 +240,47 @@ class PilotRampGatekeeper:
             details={"missing_fields": missing_fields_leads},
         ))
 
+        # 10. Stale / Superseded Contacts Blocked
+        superseded_leads = []
+        for c in candidates:
+            status = str(c.get("staging_status") or "").upper()
+            is_super = bool(c.get("is_superseded") or c.get("superseded", False))
+            ready_email = str(c.get("READY_FOR_EMAIL") or "").upper()
+            if (status == "SUPERSEDED" or is_super) and ready_email == "YES":
+                superseded_leads.append(c.get("CONTACT_NAME") or c.get("person") or c.get("COMPANY"))
+        pass_superseded = len(superseded_leads) == 0
+        if not pass_superseded:
+            blocked_reasons.append(f"Gate 10 Failed: Superseded contacts staged for outreach ({superseded_leads}).")
+        conditions.append(RampConditionCheck(
+            condition_id="NO_SUPERSEDED_CONTACTS",
+            description="Superseded and invalidated contacts must never be staged or marked for send.",
+            passed=pass_superseded,
+            diagnostic="All superseded contacts properly invalidated and blocked from dispatch." if pass_superseded else f"Superseded leads found: {superseded_leads}",
+            details={"superseded_leads": superseded_leads},
+        ))
+
+        # 11. Provenance Integrity Verified
+        missing_provenance = []
+        for c in candidates:
+            prov = c.get("provenance") or c.get("_provenance") or c.get("evidence", {}).get("_provenance")
+            if not prov and c.get("READY_FOR_EMAIL") == "YES":
+                missing_provenance.append(c.get("COMPANY") or c.get("company"))
+        pass_provenance = len(missing_provenance) == 0
+        if not pass_provenance:
+            blocked_reasons.append(f"Gate 11 Failed: Outreach candidates lack immutable provenance footprint ({missing_provenance}).")
+        conditions.append(RampConditionCheck(
+            condition_id="PROVENANCE_INTEGRITY_VERIFIED",
+            description="Every outreach record must carry traceable evidence provenance.",
+            passed=pass_provenance,
+            diagnostic="Evidence provenance verified for all candidate records." if pass_provenance else f"Unprovenanced leads: {missing_provenance}",
+            details={"missing_provenance": missing_provenance},
+        ))
+
         overall_passed = all(c.passed for c in conditions)
 
         if overall_passed:
             if target_tier:
-                recommendation = f"ADVANCE_TO_TIER_{target_tier}: All 9 quality gates passed. Ready to scale from {current_tier} to {target_tier} leads/day."
+                recommendation = f"ADVANCE_TO_TIER_{target_tier}: All 11 quality gates passed. Ready to scale from {current_tier} to {target_tier} leads/day."
             else:
                 recommendation = "MAX_CAPACITY_REACHED: Currently operating at maximum target throughput (150 leads/day)."
         else:
