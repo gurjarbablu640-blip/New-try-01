@@ -20,10 +20,14 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, time, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from config import settings
+from services.idempotency_guard import idempotency_guard, make_idempotency_key
 
 logger = logging.getLogger(__name__)
+
+KOLKATA_TZ = ZoneInfo("Asia/Kolkata")
 
 REPORT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "daily_reports")
 STATE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "runtime_state")
@@ -86,12 +90,20 @@ class AutonomousScheduler:
         self,
         report_dir: str = REPORT_DIR,
         state_dir: str = STATE_DIR,
+        idempotency_guard_instance: Optional[Any] = None,
     ):
         self.report_dir = report_dir
         self.state_dir = state_dir
         os.makedirs(self.report_dir, exist_ok=True)
         os.makedirs(self.state_dir, exist_ok=True)
         self.state_file = os.path.join(self.state_dir, "scheduler_state.json")
+        if idempotency_guard_instance:
+            self.idempotency_guard = idempotency_guard_instance
+        elif state_dir != STATE_DIR:
+            from services.idempotency_guard import IdempotencyGuard
+            self.idempotency_guard = IdempotencyGuard(os.path.join(self.state_dir, "idempotency_state.json"))
+        else:
+            self.idempotency_guard = idempotency_guard
 
     def _load_state(self) -> Dict[str, Any]:
         if not os.path.exists(self.state_file):
@@ -121,18 +133,17 @@ class AutonomousScheduler:
         os.replace(temp, self.state_file)
 
     def determine_time_window(self, current_time: Optional[time] = None) -> str:
-        """Determine window based on local operational hours.
+        """Determine window based on local operational hours in Asia/Kolkata (IST).
         
         10:00 - 18:00: DAY_PROSPECTING
         18:00 - 18:30: EVENING_REPORT
         18:30 - 10:00 next day: NIGHT_RESEARCH
         """
         if current_time is None:
-            now = datetime.now()
+            now = datetime.now(KOLKATA_TZ)
             current_time = now.time()
 
         t_10am = time(10, 0)
-        t_4pm = time(16, 0)
         t_6pm = time(18, 0)
         t_630pm = time(18, 30)
 
@@ -152,11 +163,23 @@ class AutonomousScheduler:
         """Research and enrichment are permitted 24/7 (both day and night)."""
         return True
 
-    def execute_morning_discovery(self) -> Dict[str, Any]:
+    def execute_morning_discovery(self, force: bool = False) -> Dict[str, Any]:
         """Triggered at 10:00 AM: Launches prospecting discovery."""
+        today = datetime.now(KOLKATA_TZ).strftime("%Y-%m-%d")
+        key = make_idempotency_key(operation="morning_discovery", company="SALESOORJA_GLOBAL", date_str=today)
+        if not force and self.idempotency_guard.check_and_mark(key, operation="morning_discovery"):
+            logger.info("Morning discovery already executed for %s; skipping duplicate", today)
+            return {
+                "cycle": "MORNING_DISCOVERY",
+                "time": "10:00 AM",
+                "status": "already_executed",
+                "message": f"Discovery already executed for {today} (idempotency guard protected).",
+            }
+
         logger.info("Executing 10:00 AM Morning Discovery cycle")
         state = self._load_state()
         state["last_discovery_start"] = datetime.now(timezone.utc).isoformat()
+        state["last_discovery_date"] = today
         self._save_state(state)
         return {
             "cycle": "MORNING_DISCOVERY",
@@ -165,8 +188,20 @@ class AutonomousScheduler:
             "message": "Prospect discovery initiated across priority sectors.",
         }
 
-    def execute_inbox_check(self, slot: str = "MORNING_1030") -> Dict[str, Any]:
+    def execute_inbox_check(self, slot: str = "MORNING_1030", force: bool = False) -> Dict[str, Any]:
         """Triggered at 10:30 AM or 4:00 PM: Restricted inbox poll and reply classification."""
+        today = datetime.now(KOLKATA_TZ).strftime("%Y-%m-%d")
+        key = make_idempotency_key(operation=f"inbox_check_{slot}", company="SALESOORJA_GLOBAL", date_str=today)
+        if not force and self.idempotency_guard.check_and_mark(key, operation=f"inbox_check_{slot}"):
+            logger.info("Inbox check %s already executed for %s; skipping duplicate", slot, today)
+            return {
+                "cycle": f"INBOX_CHECK_{slot}",
+                "status": "already_executed",
+                "slot": slot,
+                "readonly_mailbox": "INBOX",
+                "mode": "restricted_header_first",
+            }
+
         logger.info("Executing restricted inbox check [Slot: %s]", slot)
         state = self._load_state()
         state[f"last_inbox_check_{slot}"] = datetime.now(timezone.utc).isoformat()
@@ -185,9 +220,9 @@ class AutonomousScheduler:
         custom_metrics: Optional[Dict[str, Any]] = None,
     ) -> DailyReport:
         """Triggered at 6:00 PM: Cuts off prospecting, saves state, produces daily report."""
-        logger.info("Executing 6:00 PM Evening Cutoff & Daily Report generation")
+        today = date_str or datetime.now(KOLKATA_TZ).strftime("%Y-%m-%d")
+        logger.info("Executing 6:00 PM Evening Cutoff & Daily Report generation for %s", today)
         state = self._load_state()
-        today = date_str or datetime.now().strftime("%Y-%m-%d")
         metrics = state.get("metrics", {})
         if custom_metrics:
             metrics.update(custom_metrics)

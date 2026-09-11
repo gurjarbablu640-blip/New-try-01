@@ -77,6 +77,22 @@ class TestOutreachClaimGuard(unittest.TestCase):
         self.assertFalse(report.clean)
         self.assertFalse(report.cc_3963_scope_validated)
 
+    def test_detects_complimentary_drift_study_and_uncertainty_review(self):
+        bad_text = "We include a free drift study and complimentary uncertainty review with all on-site visits."
+        report = outreach_claim_guard.audit_outreach_claims(bad_text)
+        self.assertFalse(report.clean)
+        self.assertTrue(report.unapproved_commercial_detected)
+        self.assertNotIn("free drift study", report.sanitized_text)
+        self.assertNotIn("complimentary uncertainty review", report.sanitized_text)
+        self.assertIn("measurement drift and stability analysis", report.sanitized_text)
+        self.assertIn("CMC measurement uncertainty evaluation", report.sanitized_text)
+
+    def test_detects_unapproved_pricing_and_discounts(self):
+        bad_text = "We guarantee lowest price guaranteed with 20% discount on all calibration contracts."
+        report = outreach_claim_guard.audit_outreach_claims(bad_text)
+        self.assertFalse(report.clean)
+        self.assertTrue(report.unapproved_commercial_detected)
+
 
 if __name__ == "__main__":
     unittest.main()

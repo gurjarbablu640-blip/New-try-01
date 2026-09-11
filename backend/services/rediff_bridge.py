@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from config import settings
 from services.opportunity_gates import GATE_NAMES, READY_FOR_EMAIL, HOT, evaluate_opportunity_gates
+from services.outreach_claim_guard import outreach_claim_guard
 
 logger = logging.getLogger(__name__)
 
@@ -552,6 +553,13 @@ Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)
 </body>
 </html>"""
 
+        # Re-run claim guard integrity audit on generated copy
+        claim_report = outreach_claim_guard.audit_outreach_claims(body_text)
+        if not claim_report.clean:
+            # Auto-sanitize unapproved claims
+            body_text = claim_report.sanitized_text
+            body_html = outreach_claim_guard.sanitize_text(body_html)
+
         return {
             "preview_status": "READY_FOR_PREVIEW",
             "test_mode": True,
@@ -575,10 +583,27 @@ Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)
                 "is_facility_aware": bool(facility),
                 "is_consultative": True,
                 "asks_referral": True,
-                "cc_3963_scope_validated": True,
-                "has_unsupported_nabl_claims": False,
+                "cc_3963_scope_validated": claim_report.cc_3963_scope_validated,
+                "has_unsupported_nabl_claims": not claim_report.cc_3963_scope_validated,
                 "fake_urgency_detected": False,
                 "ai_filler_detected": False,
+                "claim_guard_clean": claim_report.clean,
+                "violations_count": len(claim_report.violations),
+            },
+            "claim_guard": {
+                "clean": claim_report.clean,
+                "violations": [
+                    {
+                        "category": v.category,
+                        "matched_text": v.matched_text,
+                        "rule_description": v.rule_description,
+                        "severity": v.severity,
+                    }
+                    for v in claim_report.violations
+                ],
+                "unapproved_locations_detected": claim_report.unapproved_locations_detected,
+                "unapproved_slas_detected": claim_report.unapproved_slas_detected,
+                "unapproved_commercial_detected": claim_report.unapproved_commercial_detected,
             },
         }
 

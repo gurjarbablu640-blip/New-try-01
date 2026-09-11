@@ -79,6 +79,18 @@ PROHIBITED_COMMERCIAL_PATTERNS = [
         r"\bmoney[- ]back\s+guarantee\b",
         "Invented commercial guarantee",
     ),
+    (
+        r"\b(?:free\s+drift\s+study|complimentary\s+drift\s+study|zero[- ]cost\s+drift\s+study)\b",
+        "Invented unapproved complimentary drift study",
+    ),
+    (
+        r"\b(?:free\s+uncertainty\s+review|complimentary\s+uncertainty\s+review|zero[- ]cost\s+uncertainty\s+review)\b",
+        "Invented unapproved complimentary uncertainty review",
+    ),
+    (
+        r"\b(?:lowest\s+price\s+guaranteed?|unconditional\s+discount|\d+%\s+discount|fixed\s+rate\s+of\s+rs\.?)\b",
+        "Invented unapproved pricing or commercial terms",
+    ),
 ]
 
 UNAPPROVED_CERTIFICATE_PATTERNS = [
@@ -249,10 +261,22 @@ class OutreachClaimGuard:
             flags=re.IGNORECASE,
         )
 
-        # 3. Replace free audit / commercial guarantees
+        # 3. Replace free audit / commercial guarantees / unapproved promises
         sanitized = re.sub(
-            r"\bfree\s+audit\b",
+            r"\b(?:free\s+audit|free\s+trial|zero[- ]cost\s+audit)\b",
             "consultative technical review",
+            sanitized,
+            flags=re.IGNORECASE,
+        )
+        sanitized = re.sub(
+            r"\b(?:free|complimentary|zero[- ]cost)\s+drift\s+study\b",
+            "measurement drift and stability analysis",
+            sanitized,
+            flags=re.IGNORECASE,
+        )
+        sanitized = re.sub(
+            r"\b(?:free|complimentary|zero[- ]cost)\s+uncertainty\s+review\b",
+            "CMC measurement uncertainty evaluation",
             sanitized,
             flags=re.IGNORECASE,
         )

@@ -140,7 +140,7 @@ class TestSchedulerRecovery(unittest.TestCase):
     def test_scheduler_state_file_has_valid_timestamps(self):
         """scheduler_state.json must have parseable ISO timestamps."""
         state_file = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            os.path.dirname(os.path.dirname(__file__)),
             "data", "runtime_state", "scheduler_state.json",
         )
         if not os.path.exists(state_file):
@@ -165,7 +165,7 @@ class TestSchedulerRecovery(unittest.TestCase):
     def test_scheduler_metrics_are_non_negative(self):
         """Scheduler metrics must be non-negative integers."""
         state_file = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            os.path.dirname(os.path.dirname(__file__)),
             "data", "runtime_state", "scheduler_state.json",
         )
         if not os.path.exists(state_file):

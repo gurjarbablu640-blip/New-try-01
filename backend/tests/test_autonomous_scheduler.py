@@ -143,6 +143,28 @@ class TestAutonomousScheduler(unittest.TestCase):
         self.assertEqual(d["replies_received"], 6)
         self.assertEqual(d["enquiries_generated"], 2)
 
+    def test_morning_discovery_idempotent_recovery(self):
+        """Simulate scheduler restart: re-running discovery on same day returns already_executed."""
+        res1 = self.scheduler.execute_morning_discovery()
+        self.assertEqual(res1["status"], "started")
+
+        # Second call simulates duplicate trigger after restart
+        res2 = self.scheduler.execute_morning_discovery()
+        self.assertEqual(res2["status"], "already_executed")
+        self.assertIn("already executed", res2["message"])
+
+        # Forced run allows operator override
+        res3 = self.scheduler.execute_morning_discovery(force=True)
+        self.assertEqual(res3["status"], "started")
+
+    def test_inbox_check_idempotent_recovery(self):
+        """Simulate scheduler restart: re-running inbox check on same day and slot returns already_executed."""
+        res1 = self.scheduler.execute_inbox_check(slot="MORNING_1030")
+        self.assertEqual(res1["status"], "completed")
+
+        res2 = self.scheduler.execute_inbox_check(slot="MORNING_1030")
+        self.assertEqual(res2["status"], "already_executed")
+
 
 if __name__ == "__main__":
     unittest.main()
