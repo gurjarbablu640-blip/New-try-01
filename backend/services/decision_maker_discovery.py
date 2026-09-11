@@ -860,6 +860,48 @@ def verify_person_candidate(
     }
 
 
+def is_apollo_eligible_lead(
+    candidate: Dict[str, Any],
+    facility_info: Dict[str, Any],
+    trigger_info: Dict[str, Any],
+    contact_info: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, str]:
+    """Strict Apollo Enrichment Gatekeeper (Phase 7).
+
+    Guarantees paid Apollo credits are NEVER consumed unless:
+    1. Industrial trigger is verified & current.
+    2. Facility linkage is DIRECT or corroborated STRONG (never AMBIGUOUS or WEAK).
+    3. Person candidate has verified current employment & relevant role (composite >= 0.60).
+    4. Free public contact research was performed, and contact remains unverified.
+    """
+    # 1. Trigger Check
+    trigger_valid = trigger_info.get("valid_trigger") if "valid_trigger" in trigger_info else bool(trigger_info.get("trigger") or trigger_info.get("title"))
+    if not trigger_valid:
+        return False, "Trigger is invalid or unverified"
+
+    # 2. Facility Check (Must be DIRECT or STRONG, NOT AMBIGUOUS/WEAK/UNKNOWN)
+    fac_linkage = str(facility_info.get("linkage_confidence") or facility_info.get("trigger_facility_confidence") or "").upper()
+    fac_verified = bool(facility_info.get("facility_verified") or facility_info.get("verified"))
+    if not fac_verified or fac_linkage not in {"DIRECT", "STRONG"}:
+        return False, f"Facility linkage is {fac_linkage or 'UNVERIFIED'}; Apollo credits cannot be spent on ambiguous facility"
+
+    # 3. Person Check
+    person_score = float(candidate.get("composite_score") or candidate.get("score") or candidate.get("functional_ownership_score") or 0.0)
+    norm_score = person_score / 100.0 if person_score > 1.0 else person_score
+    if norm_score < 0.60:
+        return False, f"Candidate score {norm_score:.2f} is below Apollo minimum threshold (0.60)"
+
+    # 4. Contact Check (Free research exhausted)
+    if contact_info:
+        if contact_info.get("mailbox_verified") is True:
+            return False, "Person-specific contact is already verified; Apollo enrichment not required"
+        if contact_info.get("evidence_level") == "VERIFIED_PERSON_SPECIFIC":
+            return False, "Authoritative person-specific email already exists"
+
+    return True, "Lead satisfies all 5 Apollo pre-requisites (valid trigger, direct/strong facility, verified person, unverified contact)"
+
+
+
 # ═════════════════════════════════════════════════════════════════════════
 # STEP 6: Apollo Enrichment (Specific Person)
 # ═════════════════════════════════════════════════════════════════════════

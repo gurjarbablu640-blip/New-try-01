@@ -6,6 +6,7 @@ No SMTP probes, email sends, or external verifier/provider calls are performed.
 import re
 import time
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 from services.email_validator import EMAIL_REGEX, ROLE_PREFIXES, ALL_DISPOSABLE_DOMAINS, check_mx_records
 
@@ -146,6 +147,7 @@ ROLE_TERMS = {
     'mumbai', 'pune', 'chennai', 'hyderabad', 'visakhapatnam', 'katni', 'bengal',
     'haryana', 'gujarat', 'maharashtra', 'karnataka', 'telangana', 'andhra', 'pradesh',
     'tamil', 'nadu', 'minda', 'dixon', 'divis', 'suzlon', 'dynamatic', 'dynauton',
+    'website', 'official', 'tools', 'craftsman', 'rolex', 'youtube', 'wikipedia', 'build', 'play', 'store', 'app', 'apps',
     'civil', 'lines', 'line', 'colony', 'nagar', 'road', 'sector', 'layout', 'zone', 'estate'
 }
 
@@ -166,10 +168,10 @@ def validate_person_name(name_str):
         return {'name': clean, 'person_name_validation': 'UNKNOWN', 'is_human_name': False,
                 'role_words': [], 'reason': 'Name is empty'}
 
-    # If contains digits or special symbols
-    if re.search(r'[\d@:/\\_<>{}\[\]\*\+=#\$%^&~]', clean):
+    # If contains digits, trademark symbols, or special punctuation
+    if re.search(r'[\d@:/\\_<>{}\[\]\*\+=#\$%^&~®™©|•!?;]', clean):
         return {'name': clean, 'person_name_validation': 'INVALID_ROLE_TEXT', 'is_human_name': False,
-                'role_words': [], 'reason': 'Contains digits or special symbols'}
+                'role_words': [], 'reason': 'Contains digits, trademark symbols, or special characters'}
 
     tokens = re.findall(r'[a-zA-Z]+', clean)
     if not tokens:
@@ -611,4 +613,62 @@ def enrich_free_candidate(candidate, company, public_evidence, known_contacts=()
         candidate.apollo_email_confidence = 'PUBLICLY_FOUND'
         candidate.email_status = 'EMAIL_FOUND'
     return result
+
+
+# ── Contact Evidence Policy Taxonomy (Phase 6) ──────────────────────────────
+CONTACT_EVIDENCE_LEVELS = {
+    "VERIFIED_PERSON_SPECIFIC",        # Level A: Authoritative source or Apollo verified
+    "PUBLICLY_FOUND_PERSON_SPECIFIC",  # Level B: Explicitly published on credible public web source
+    "INFERRED_PERSON_SPECIFIC",        # Level C: Domain pattern guess
+    "GENERIC_DEPARTMENTAL",            # Level D: info@, sales@, quality@
+    "NOT_FOUND",                       # Level E: Unresolved
+}
+
+
+def classify_contact_evidence_level(
+    email: Optional[str],
+    origin: str = "UNVERIFIED",
+    is_role_account: bool = False,
+    apollo_verified: bool = False,
+    authoritative: bool = False,
+) -> str:
+    """Classify email according to the 5-tier Contact Evidence Policy."""
+    if not email:
+        return "NOT_FOUND"
+    if is_role_account:
+        return "GENERIC_DEPARTMENTAL"
+    if apollo_verified or authoritative:
+        return "VERIFIED_PERSON_SPECIFIC"
+    if origin in ("PUBLICLY_FOUND", "VERIFIED") and not is_role_account:
+        return "PUBLICLY_FOUND_PERSON_SPECIFIC"
+    if origin in ("INFERRED", "PROBABLE"):
+        return "INFERRED_PERSON_SPECIFIC"
+    return "INFERRED_PERSON_SPECIFIC"
+
+
+def is_production_send_eligible_contact(
+    evidence_level: str,
+    mailbox_verified: bool = False,
+) -> Tuple[bool, str]:
+    """Evaluate whether a contact satisfies production outreach criteria.
+
+    Rules:
+    - VERIFIED_PERSON_SPECIFIC: Eligible
+    - PUBLICLY_FOUND_PERSON_SPECIFIC: Eligible (direct public source)
+    - INFERRED_PERSON_SPECIFIC: NOT eligible unless mailbox_verified=True
+    - GENERIC_DEPARTMENTAL: NOT eligible for individual consultative outreach
+    - NOT_FOUND: NOT eligible
+    """
+    if evidence_level == "VERIFIED_PERSON_SPECIFIC":
+        return True, "Verified person-specific contact is production send eligible"
+    if evidence_level == "PUBLICLY_FOUND_PERSON_SPECIFIC":
+        return True, "Directly published person-specific contact is production send eligible"
+    if evidence_level == "INFERRED_PERSON_SPECIFIC":
+        if mailbox_verified:
+            return True, "Pattern-inferred contact verified via live mailbox verification"
+        return False, "Pattern-inferred contact requires live mailbox verification before production send"
+    if evidence_level == "GENERIC_DEPARTMENTAL":
+        return False, "Generic / departmental address is not eligible for person-specific outreach"
+    return False, "No verified contact found"
+
 
