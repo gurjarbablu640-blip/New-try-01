@@ -181,12 +181,16 @@ class RediffBridge:
         if not ready_for_email and status not in {READY_FOR_EMAIL, HOT}:
             gates = opportunity_eval.get("gates", {})
             failed = [g for g, v in gates.items() if not v.get("passed")]
-            return {
-                "success": False,
-                "reason": f"Candidate status is {status}; must be {READY_FOR_EMAIL} to hand off to Rediff. {opportunity_eval.get('reason', '')}",
-                "failed_gates": failed,
-                "record": None,
-            }
+            # Allow staging for TEST preview only if only reachable_email failed and production is False
+            if not production and failed == ["reachable_email"]:
+                pass
+            else:
+                return {
+                    "success": False,
+                    "reason": f"Candidate status is {status}; must be {READY_FOR_EMAIL} to hand off to Rediff. {opportunity_eval.get('reason', '')}",
+                    "failed_gates": failed,
+                    "record": None,
+                }
 
         # Check required fields
         required_fields = [
@@ -222,7 +226,7 @@ class RediffBridge:
                 "record": None,
             }
 
-        staging_status = "READY_FOR_PRODUCTION_SEND" if (production and not settings.OUTBOUND_TEST_MODE and mailbox_verified) else "STAGED_TEST"
+        staging_status = "READY_FOR_PRODUCTION_SEND" if (production and not settings.OUTBOUND_TEST_MODE and mailbox_verified and facility_verified) else "STAGED_TEST"
 
         record = RediffHandoffRecord(
             company=candidate_data["company"],
@@ -244,7 +248,7 @@ class RediffBridge:
             reason_for_outreach=candidate_data.get("reason_for_outreach") or candidate_data["reasoning"],
             icp_score=float(candidate_data["icp_score"]),
             lead_score=float(candidate_data.get("lead_score") or candidate_data["icp_score"]),
-            ready_for_email="YES",
+            ready_for_email="YES" if (mailbox_verified and facility_verified) else "NO",
             facility_verified=facility_verified,
             contact_verified=contact_verified,
             contact_location=candidate_data.get("contact_location") or candidate_data["facility"],
@@ -340,6 +344,30 @@ class RediffBridge:
             "reason": reason,
         }
 
+    def mark_superseded(
+        self,
+        record_id: str,
+        reason: str,
+        superseded_by: Optional[str] = None,
+    ) -> bool:
+        """Mark a specific record ID as SUPERSEDED."""
+        records = self._load_queue()
+        found = False
+        for r in records:
+            if r.get("record_id") == record_id:
+                r["staging_status"] = "SUPERSEDED"
+                r["ready_for_email"] = "NO"
+                r["READY_FOR_EMAIL"] = "NO"
+                r["superseded_at"] = datetime.now(timezone.utc).isoformat()
+                r["supersession_reason"] = reason
+                if superseded_by:
+                    r["superseded_by"] = superseded_by
+                found = True
+                break
+        if found:
+            self._save_queue(records)
+        return found
+
     def list_staged(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
         """List staged records in the queue."""
         records = self._load_queue()
@@ -353,15 +381,35 @@ class RediffBridge:
         self,
         record_ids: Optional[List[str]] = None,
         export_format: str = "json",
+        production: bool = False,
     ) -> Dict[str, Any]:
-        """Export a batch of staged records for Rediff_Email_System."""
+        """Export a batch of staged records for Rediff_Email_System.
+        
+        If production=True, strictly enforces:
+        - staging_status == 'READY_FOR_PRODUCTION_SEND'
+        - READY_FOR_EMAIL == 'YES'
+        - mailbox_verified is True
+        - facility_verified is True
+        - Never exports SUPERSEDED, STAGED_TEST, or REJECTED records
+        """
         records = self._load_queue()
         # Never export SUPERSEDED records
         non_superseded = [r for r in records if r.get("staging_status") != "SUPERSEDED"]
-        if record_ids:
-            target_records = [r for r in non_superseded if r.get("record_id") in record_ids]
+        if production:
+            eligible = [
+                r for r in non_superseded
+                if r.get("staging_status") == "READY_FOR_PRODUCTION_SEND"
+                and str(r.get("READY_FOR_EMAIL", "")).upper() == "YES"
+                and bool(r.get("evidence", {}).get("reachable_email", {}).get("mailbox_verified", False)) is True
+                and bool(r.get("facility_verified", False)) is True
+            ]
         else:
-            target_records = [r for r in non_superseded if r.get("staging_status") in ("STAGED", "STAGED_TEST", "READY_FOR_PRODUCTION_SEND")]
+            eligible = [r for r in non_superseded if r.get("staging_status") in ("STAGED", "STAGED_TEST", "READY_FOR_PRODUCTION_SEND")]
+
+        if record_ids:
+            target_records = [r for r in eligible if r.get("record_id") in record_ids]
+        else:
+            target_records = eligible
 
         if not target_records:
             return {

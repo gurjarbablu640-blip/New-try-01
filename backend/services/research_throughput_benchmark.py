@@ -188,6 +188,7 @@ class BenchmarkReport:
     top_3_bottlenecks: List[str]
     concurrency_mode: str  # SEQUENTIAL vs BOUNDED_PARALLEL
     max_workers: int
+    benchmark_type: str = "SYNTHETIC"  # COLD_LIVE_WEB, WARM_CACHE, UNIT_TEST, SYNTHETIC, MOCK, FIXTURE
     company_results: List[CompanyResearchResult] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -342,8 +343,15 @@ class ResearchThroughputBenchmark:
         self,
         companies: Optional[List[Dict[str, Any]]] = None,
         max_workers: int = 1,
+        benchmark_type: str = "SYNTHETIC",
     ) -> BenchmarkReport:
-        """Run benchmark either sequentially (workers=1) or bounded parallel (workers > 1)."""
+        """Run benchmark either sequentially (workers=1) or bounded parallel (workers > 1).
+        
+        Explicitly distinguishes benchmark environments:
+        - COLD_LIVE_WEB: Full external live search and page extraction
+        - WARM_CACHE: Pre-cached network results
+        - UNIT_TEST / SYNTHETIC / MOCK / FIXTURE: In-memory simulation
+        """
         target_companies = companies or BENCHMARK_COMPANIES
         total_count = len(target_companies)
         results: List[CompanyResearchResult] = []
@@ -421,6 +429,7 @@ class ResearchThroughputBenchmark:
             top_3_bottlenecks=top_bottlenecks,
             concurrency_mode=mode,
             max_workers=max_workers,
+            benchmark_type=benchmark_type,
             company_results=results,
         )
 

@@ -165,7 +165,41 @@ class TestRediffBridge(unittest.TestCase):
         self.assertIn("New EV Powertrain Line Commissioning", preview["body_text"])
         self.assertIn("point me to the right lead", preview["body_text"].lower())
 
+    def test_unverified_mailbox_sets_ready_for_email_no(self):
+        candidate = self._valid_candidate()
+        # Inferred email with mailbox unverified
+        candidate["evidence"]["reachable_email"]["mailbox_verified"] = False
+        res = self.bridge.stage_candidate(candidate, production=False)
+        self.assertTrue(res["success"])
+        record = res["record"]
+        self.assertEqual(record["READY_FOR_EMAIL"], "NO")
+        self.assertEqual(record["staging_status"], "STAGED_TEST")
+
+    def test_export_batch_blocks_unverified_in_production(self):
+        candidate = self._valid_candidate()
+        candidate["evidence"]["reachable_email"]["mailbox_verified"] = False
+        res = self.bridge.stage_candidate(candidate, production=False)
+        record_id = res["record_id"]
+
+        # In production mode, unverified email candidate cannot be exported
+        prod_export = self.bridge.export_batch([record_id], production=True)
+        self.assertEqual(prod_export["count"], 0)
+        self.assertIsNone(prod_export["batch_id"])
+
+    def test_export_batch_blocks_superseded(self):
+        candidate = self._valid_candidate()
+        res = self.bridge.stage_candidate(candidate)
+        record_id = res["record_id"]
+
+        # Supersede the record
+        self.bridge.mark_superseded(record_id, "Newer candidate selected", superseded_by="Other Person")
+
+        # Export attempt should yield 0 records
+        export_res = self.bridge.export_batch([record_id], production=False)
+        self.assertEqual(export_res["count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
