@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -66,7 +66,7 @@ class ResearchResult:
         self.url = url
         self.snippet = snippet
         self.source_domain = source_domain or urlparse(url).netloc
-        self.retrieved_at = retrieved_at or datetime.utcnow().isoformat()
+        self.retrieved_at = retrieved_at or datetime.now(timezone.utc).isoformat()
         self.confidence = confidence
         self.evidence_type = evidence_type
         self.provider = provider
@@ -198,10 +198,10 @@ class SerperSearchProvider(ResearchProvider):
             }
 
         last_err = None
-        for attempt in range(3):
+        for attempt in range(2):
             if mgr:
                 try:
-                    mgr.record_live_request(1)
+                    mgr.reserve_request(1)
                 except SerperBudgetExhaustedError:
                     return {
                         "provider": "serper",
@@ -228,6 +228,11 @@ class SerperSearchProvider(ResearchProvider):
                 latency_ms = round((time.time() - req_start) * 1000, 2)
 
                 if resp.status_code == 200:
+                    if mgr:
+                        try:
+                            mgr.record_successful_request(1)
+                        except Exception as me:
+                            logger.debug("Failed to record successful request: %s", me)
                     data = resp.json()
                     organic = data.get("organic", []) or []
                     results = []
@@ -264,6 +269,11 @@ class SerperSearchProvider(ResearchProvider):
                         cache_instance.set("serper", query, payload, num_results=num_results)
                     return payload
                 elif resp.status_code in (401, 403):
+                    if mgr:
+                        try:
+                            mgr.record_failed_request(1)
+                        except Exception as me:
+                            logger.debug("Failed to record failed request: %s", me)
                     return {
                         "provider": "serper",
                         "provider_status": PROVIDER_ERROR,
@@ -274,6 +284,11 @@ class SerperSearchProvider(ResearchProvider):
                         "cache_hit": False,
                     }
                 elif resp.status_code == 429:
+                    if mgr:
+                        try:
+                            mgr.record_failed_request(1)
+                        except Exception as me:
+                            logger.debug("Failed to record failed request: %s", me)
                     return {
                         "provider": "serper",
                         "provider_status": PROVIDER_QUOTA_EXHAUSTED,
@@ -284,8 +299,18 @@ class SerperSearchProvider(ResearchProvider):
                         "cache_hit": False,
                     }
                 else:
+                    if mgr:
+                        try:
+                            mgr.record_failed_request(1)
+                        except Exception as me:
+                            logger.debug("Failed to record failed request: %s", me)
                     last_err = f"HTTP {resp.status_code}: {resp.text[:200]}"
             except Exception as e:
+                if mgr:
+                    try:
+                        mgr.record_failed_request(1)
+                    except Exception as me:
+                        logger.debug("Failed to record failed request: %s", me)
                 last_err = str(e)
                 time.sleep(0.5)
 

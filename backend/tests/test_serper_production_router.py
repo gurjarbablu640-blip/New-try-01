@@ -312,3 +312,203 @@ class TestKehemsDiscoveryVsVerification:
         )
         assert eligible is False
         assert "below Apollo HIGH-confidence threshold" in reason
+
+
+class TestSerperBudgetTimezone:
+    """Test configurable reset timezone and IST midnight boundaries."""
+
+    def test_default_timezone_is_kolkata(self, clean_budget_manager):
+        assert clean_budget_manager.timezone_str == "Asia/Kolkata"
+
+    def test_ist_midnight_boundary_2359_to_0000(self, clean_budget_manager):
+        # 18:29:59 UTC is 23:59:59 IST (same day)
+        dt_2359 = datetime(2026, 9, 12, 18, 29, 59, tzinfo=timezone.utc)
+        assert clean_budget_manager._today_str(dt_2359) == "2026-09-12"
+
+        # 18:30:00 UTC is 00:00:00 IST (next day rollover)
+        dt_0000 = datetime(2026, 9, 12, 18, 30, 0, tzinfo=timezone.utc)
+        assert clean_budget_manager._today_str(dt_0000) == "2026-09-13"
+
+        # Simulate usage at 23:59 IST (previous day)
+        clean_budget_manager.current_date = "2026-09-12"
+        clean_budget_manager.live_requests_today = 1500
+        clean_budget_manager._save()
+        assert clean_budget_manager.live_requests_today == 1500
+
+        # At 00:00:00 IST, counter must reset to 0
+        reset_occurred = clean_budget_manager.check_and_reset_if_new_day(dt_0000)
+        assert reset_occurred is True
+        assert clean_budget_manager.current_date == "2026-09-13"
+        assert clean_budget_manager.live_requests_today == 0
+        assert clean_budget_manager.remaining_daily_budget == 1500
+
+    def test_utc_date_differing_from_ist_date(self, clean_budget_manager):
+        # 20:00:00 UTC on 2026-09-12 is 01:30:00 IST on 2026-09-13
+        dt_utc = datetime(2026, 9, 12, 20, 0, 0, tzinfo=timezone.utc)
+        assert dt_utc.strftime("%Y-%m-%d") == "2026-09-12"  # UTC date is 12th
+        assert clean_budget_manager._today_str(dt_utc) == "2026-09-13"  # IST date is 13th
+
+    def test_configurable_timezone_override(self, tmp_path):
+        custom_state = str(tmp_path / "custom_tz_state.json")
+        ny_manager = SerperDailyBudgetManager(
+            state_path=custom_state,
+            daily_limit=500,
+            timezone_str="America/New_York",
+        )
+        assert ny_manager.timezone_str == "America/New_York"
+        # 03:00 UTC is 23:00 previous day in America/New_York (UTC-4 in EDT)
+        dt_utc = datetime(2026, 9, 13, 3, 0, 0, tzinfo=timezone.utc)
+        assert ny_manager._today_str(dt_utc) == "2026-09-12"
+
+
+class TestMultiProcessSafetyAndAtomicReservation:
+    """Test atomic reservation and multi-process race safety using FileLock."""
+
+    def test_1500_concurrent_reservations_maximum(self, clean_budget_manager):
+        import concurrent.futures
+
+        num_threads = 10
+        reservations_per_thread = 15
+        batch_size = 10  # 10 * 15 * 10 = 1500 total reservations
+
+        def make_reservations():
+            for _ in range(reservations_per_thread):
+                clean_budget_manager.reserve_request(batch_size)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = [executor.submit(make_reservations) for _ in range(num_threads)]
+            for f in futures:
+                f.result()
+
+        assert clean_budget_manager.live_requests_today == 1500
+        assert clean_budget_manager.remaining_daily_budget == 0
+        assert clean_budget_manager.can_request() is False
+
+        # Request 1501 blocked
+        with pytest.raises(SerperBudgetExhaustedError):
+            clean_budget_manager.reserve_request(1)
+
+    def test_two_workers_competing_for_final_slot(self, tmp_path):
+        import concurrent.futures
+
+        state_file = str(tmp_path / "competing_workers.json")
+        mgr_w1 = SerperDailyBudgetManager(state_path=state_file, daily_limit=1500)
+        mgr_w1.reserve_request(1499)
+
+        # mgr_w2 points to the same underlying state file (simulating another worker process)
+        mgr_w2 = SerperDailyBudgetManager(state_path=state_file, daily_limit=1500)
+
+        results = []
+        errors = []
+
+        def worker_attempt(mgr):
+            try:
+                res = mgr.reserve_request(1)
+                results.append(res)
+            except SerperBudgetExhaustedError as e:
+                errors.append(e)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            f1 = executor.submit(worker_attempt, mgr_w1)
+            f2 = executor.submit(worker_attempt, mgr_w2)
+            f1.result()
+            f2.result()
+
+        # Exactly ONE worker must succeed, and exactly ONE must be blocked
+        assert len(results) == 1, f"Expected exactly 1 success, got {len(results)}"
+        assert len(errors) == 1, f"Expected exactly 1 exhausted error, got {len(errors)}"
+        assert "Serper daily budget exhausted" in str(errors[0])
+
+        # Final state on disk must be exactly 1500
+        mgr_final = SerperDailyBudgetManager(state_path=state_file, daily_limit=1500)
+        assert mgr_final.live_requests_today == 1500
+        assert mgr_final.remaining_daily_budget == 0
+
+
+class TestFailureAccountingAndTelemetry:
+    """Test accounting semantics: failed live requests consume quota, cache hits and blocks do not."""
+
+    def test_failed_live_network_request_consumes_quota(self, clean_budget_manager):
+        provider = SerperSearchProvider(api_key="valid_serper_key_12345", budget_manager=clean_budget_manager)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        mock_resp.text = "Internal Server Error"
+
+        with patch("services.research_provider.get_setting_value", return_value="valid_serper_key_12345"):
+            with patch("requests.post", return_value=mock_resp):
+                res = provider.search("Maruti Suzuki plant expansion", use_cache=False)
+                assert res["provider_status"] == PROVIDER_ERROR
+
+        # Network request was attempted, so daily safety budget IS consumed
+        assert clean_budget_manager.live_requests_today > 0
+        assert clean_budget_manager.failed_live_requests > 0
+        assert clean_budget_manager.successful_live_requests == 0
+        assert clean_budget_manager.remaining_daily_budget == 1500 - clean_budget_manager.live_requests_today
+
+        telemetry = clean_budget_manager.get_telemetry()
+        assert telemetry["failed_live_requests"] > 0
+        assert telemetry["successful_live_requests"] == 0
+
+    def test_successful_live_network_request_accounting(self, clean_budget_manager):
+        provider = SerperSearchProvider(api_key="valid_serper_key_12345", budget_manager=clean_budget_manager)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "organic": [{"title": "Director of Manufacturing", "link": "https://linkedin.com/in/director", "snippet": "Director"}]
+        }
+
+        with patch("services.research_provider.get_setting_value", return_value="valid_serper_key_12345"):
+            with patch("requests.post", return_value=mock_resp):
+                res = provider.search("Valeo India director", use_cache=False)
+                assert res["provider_status"] == PROVIDER_LIVE
+
+        assert clean_budget_manager.live_requests_today == 1
+        assert clean_budget_manager.successful_live_requests == 1
+        assert clean_budget_manager.failed_live_requests == 0
+        assert clean_budget_manager.remaining_daily_budget == 1499
+
+    def test_blocked_request_does_not_consume_quota(self, clean_budget_manager):
+        clean_budget_manager.reserve_request(1500)
+        assert clean_budget_manager.live_requests_today == 1500
+
+        provider = SerperSearchProvider(api_key="valid_serper_key_12345", budget_manager=clean_budget_manager)
+
+        with patch("services.research_provider.get_setting_value", return_value="valid_serper_key_12345"):
+            with patch("requests.post") as mock_post:
+                res = provider.search("Blocked query", use_cache=False)
+                assert res["provider_status"] == PROVIDER_BUDGET_EXHAUSTED
+                mock_post.assert_not_called()
+
+        # Quota remains at 1500, does not increase to 1501
+        assert clean_budget_manager.live_requests_today == 1500
+        assert clean_budget_manager.budget_exhausted_events >= 1
+
+
+class TestCrashSafetyAndProcessRestart:
+    """Test process restart preserves same-day usage without resetting or duplicating allowance."""
+
+    def test_restart_during_same_ist_day_preserves_usage(self, tmp_path):
+        state_file = str(tmp_path / "crash_safety_state.json")
+
+        # Process 1 runs and executes 1200 searches
+        proc1_manager = SerperDailyBudgetManager(state_path=state_file, daily_limit=1500)
+        proc1_manager.reserve_request(1200)
+        assert proc1_manager.live_requests_today == 1200
+        assert proc1_manager.remaining_daily_budget == 300
+
+        # Process 1 crashes or terminates; Process 2 starts later on the same day
+        proc2_manager = SerperDailyBudgetManager(state_path=state_file, daily_limit=1500)
+        assert proc2_manager.live_requests_today == 1200
+        assert proc2_manager.remaining_daily_budget == 300
+
+        # Process 2 can reserve the remaining 300
+        proc2_manager.reserve_request(300)
+        assert proc2_manager.live_requests_today == 1500
+        assert proc2_manager.remaining_daily_budget == 0
+
+        # Request 1501 is blocked
+        with pytest.raises(SerperBudgetExhaustedError):
+            proc2_manager.reserve_request(1)
+

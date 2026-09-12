@@ -120,6 +120,7 @@ class Settings(BaseSettings):
     # Search & Crawling
     SERPER_API_KEY: str = ""
     SERPER_DAILY_HARD_LIMIT: int = 1500
+    SERPER_BUDGET_TIMEZONE: str = "Asia/Kolkata"
     SERPER_INITIAL_QUERIES_PER_COMPANY: int = 4
     SERPER_MAX_QUERIES_PER_COMPANY: int = 10
     SEARXNG_BASE_URL: str = "http://localhost:8080"
