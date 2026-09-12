@@ -389,20 +389,39 @@ class LLMResponse:
         try:
             return json.loads(raw)
         except Exception:
-            start = raw.find("{")
-            end = raw.rfind("}")
-            if start != -1 and end != -1 and end > start:
+            decoder = json.JSONDecoder()
+            object_start = raw.find("{")
+            array_start = raw.find("[")
+            starts = [index for index in (object_start, array_start) if index >= 0]
+            if starts:
+                first_start = min(starts)
                 try:
-                    return json.loads(raw[start:end + 1])
-                except Exception:
+                    parsed, _ = decoder.raw_decode(raw[first_start:])
+                    return parsed
+                except json.JSONDecodeError:
                     pass
-            start_arr = raw.find("[")
-            end_arr = raw.rfind("]")
-            if start_arr != -1 and end_arr != -1 and end_arr > start_arr:
-                try:
-                    return json.loads(raw[start_arr:end_arr + 1])
-                except Exception:
-                    pass
+
+            ranked_match = re.search(r'"ranked_candidates"\s*:\s*\[', raw)
+            if ranked_match:
+                cursor = ranked_match.end()
+                recovered = []
+                while cursor < len(raw):
+                    while cursor < len(raw) and raw[cursor] in " \t\r\n,":
+                        cursor += 1
+                    if cursor >= len(raw) or raw[cursor] == "]":
+                        break
+                    if raw[cursor] != "{":
+                        break
+                    try:
+                        item, consumed = decoder.raw_decode(raw[cursor:])
+                    except json.JSONDecodeError:
+                        break
+                    if isinstance(item, dict):
+                        recovered.append(item)
+                    cursor += consumed
+                if recovered:
+                    return {"ranked_candidates": recovered, "_partial_recovery": True}
+
             logger.warning(f"Failed to parse JSON from LLM text: {raw[:200]}")
             return None
 

@@ -1,11 +1,30 @@
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from config import AUTHORITATIVE_ENV_FILE, PROJECT_ROOT
-from services.llm_provider import HiveProvider, LLMProviderNotAllowedError
+from services.llm_provider import HiveProvider, LLMProviderNotAllowedError, LLMResponse
 
 
 class HiveProviderRegressionTests(unittest.TestCase):
+    def test_json_parser_accepts_fenced_json_with_trailing_prose(self):
+        response = LLMResponse(text='```json\n{"queries": ["q1"]}\n```\nDone')
+
+        self.assertEqual(response.parse_json(), {"queries": ["q1"]})
+
+    def test_json_parser_recovers_only_complete_ranked_candidates(self):
+        fixture = Path(__file__).parent / "fixtures" / "hive_truncated_ranking.txt"
+        response = LLMResponse(text=fixture.read_text(encoding="utf-8"))
+
+        parsed = response.parse_json()
+
+        self.assertTrue(parsed["_partial_recovery"])
+        self.assertEqual(parsed["ranked_candidates"], [{
+            "name": "Complete Person",
+            "rank": 1,
+            "confidence": 0.81,
+        }])
+
     def test_only_actual_control_token_is_removed(self):
         raw = '<customer><html><quality><a href="https://example.com">Keep</a></quality></html></customer><|endoftext|>'
         cleaned = HiveProvider.clean_output(raw)

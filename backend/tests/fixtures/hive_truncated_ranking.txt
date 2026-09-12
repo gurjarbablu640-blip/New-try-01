@@ -1,0 +1,11 @@
+```json
+{
+  "ranked_candidates": [
+    {
+      "name": "Complete Person",
+      "rank": 1,
+      "confidence": 0.81
+    },
+    {
+      "name": "Truncated Person",
+      "rank":

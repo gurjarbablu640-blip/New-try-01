@@ -26,9 +26,13 @@ from __future__ import annotations
 
 import logging
 import json
+import html
+import io
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -165,61 +169,72 @@ def generate_person_search_queries(
     company_name: str,
     facility_name: Optional[str] = None,
     city: Optional[str] = None,
-    max_queries: int = 12,
+    company_domain: str = "",
+    sector: str = "",
+    target_functions: Optional[List[str]] = None,
+    max_queries: int = 36,
 ) -> List[Dict[str, str]]:
-    """Generate adaptive 3-pass person discovery queries.
-
-    Pass 1: Exact function (Quality, Metrology, Calibration).
-    Pass 2: Facility / Plant ownership (Plant Head, City Quality).
-    Pass 3: Broader authoritative leadership (VP Operations, QA QC Head).
-    """
+    """Generate broad deterministic person queries without relaxing verification."""
     clean_company = company_name.strip()
-    c_loc = city or (facility_name if facility_name and len(facility_name) < 25 else "")
-    queries = []
+    clean_domain = company_domain.strip().lower().removeprefix("www.")
+    queries: List[Dict[str, str]] = []
 
-    # PASS 1: Exact function (High conversion for calibration/quality)
-    p1_roles = ["Quality Head", "Plant Quality", "Head Quality", "Metrology", "Calibration"]
-    for role in p1_roles:
+    def add(query: str, family: str, target_role: str, source_target: str) -> None:
         queries.append({
-            "query": f'site:linkedin.com/in "{clean_company}" "{role}"',
-            "pass": "PASS_1_EXACT_FUNCTION",
-            "target_role": role,
-        })
-
-    # PASS 2: Facility ownership
-    if c_loc:
-        queries.append({
-            "query": f'site:linkedin.com/in "{clean_company}" "{c_loc}" "Plant Head"',
-            "pass": "PASS_2_FACILITY_OWNERSHIP",
-            "target_role": "Plant Head",
-        })
-        queries.append({
-            "query": f'site:linkedin.com/in "{clean_company}" "{c_loc}" Quality',
-            "pass": "PASS_2_FACILITY_OWNERSHIP",
-            "target_role": "Quality",
-        })
-        queries.append({
-            "query": f'"{clean_company}" "{c_loc}" "Plant Head"',
-            "pass": "PASS_2_FACILITY_OWNERSHIP",
-            "target_role": "Plant Head",
-        })
-    else:
-        queries.append({
-            "query": f'site:linkedin.com/in "{clean_company}" "Plant Head"',
-            "pass": "PASS_2_FACILITY_OWNERSHIP",
-            "target_role": "Plant Head",
+            "query": query,
+            "family": family,
+            "pass": family,
+            "target_role": target_role,
+            "source_target": source_target,
         })
 
-    # PASS 3: Broader authoritative roles
-    p3_roles = ["VP Quality", "Head Manufacturing Quality", "QA QC Head"]
-    for role in p3_roles:
-        queries.append({
-            "query": f'"{clean_company}" "{role}"',
-            "pass": "PASS_3_AUTHORITATIVE_LEADERSHIP",
-            "target_role": role,
-        })
+    for role in (
+        "quality head", "head quality", "plant quality", "quality manager",
+        "quality assurance", "metrology", "calibration", "measurement systems",
+    ):
+        add(f'"{clean_company}" "{role}"', "COMPANY_QUALITY", role, "PUBLIC_WEB")
 
-    return queries[:max_queries]
+    if city:
+        add(f'"{clean_company}" "{city}" quality', "COMPANY_FACILITY", "quality", "PUBLIC_WEB")
+        add(f'"{clean_company}" "{city}" "plant head"', "COMPANY_FACILITY", "plant head", "PUBLIC_WEB")
+    if facility_name:
+        for role in ("quality", "operations", "manufacturing"):
+            add(f'"{clean_company}" "{facility_name}" {role}', "COMPANY_FACILITY", role, "PUBLIC_WEB")
+
+    for role in ("quality", "plant", "operations"):
+        add(f'site:linkedin.com/in "{clean_company}" {role}', "PEOPLE_SOURCES", role, "LINKEDIN_PUBLIC")
+    if clean_domain:
+        for role in ("quality", "plant head", "management"):
+            add(f'site:{clean_domain} {role}', "PEOPLE_SOURCES", role, "OFFICIAL_WEBSITE")
+
+    for phrase in (
+        "annual report plant head", "annual report quality", "investor presentation plant",
+        "conference quality", "speaker quality", "TPM plant head", "award quality head", "webinar quality",
+    ):
+        add(f'"{clean_company}" {phrase}', "DOCUMENT_AND_EVENT_SOURCES", phrase, "DOCUMENT_OR_EVENT")
+
+    for role in (
+        "Head QA", "Head QA QC", "Head Quality Assurance", "VP Quality",
+        "AVP Quality", "GM Quality", "DGM Quality", "Operational Excellence",
+        "Instrumentation", "Plant Operations",
+    ):
+        add(f'"{clean_company}" "{role}"', "ROLE_VARIATIONS", role, "PUBLIC_WEB")
+
+    for target_function in (target_functions or [])[:2]:
+        if target_function:
+            add(f'"{clean_company}" "{target_function}"', "TARGET_FUNCTION", target_function, "PUBLIC_WEB")
+    if sector:
+        add(f'"{clean_company}" "{sector}" "plant head"', "SECTOR_CONTEXT", "plant head", "PUBLIC_WEB")
+
+    deduplicated: List[Dict[str, str]] = []
+    seen_queries = set()
+    for query in queries:
+        key = query["query"].casefold()
+        if key in seen_queries:
+            continue
+        seen_queries.add(key)
+        deduplicated.append(query)
+    return deduplicated[:max_queries]
 
 
 # ── Phase 6, 7, 8: Entity Evaluation & Scoring ──────────────────────────────
@@ -433,7 +448,7 @@ def compute_deterministic_person_score(
         score_auth = 2.0
 
     # 5. Source Quality (0-10)
-    if source_quality in ("OFFICIAL_COMPANY_PAGE", "PRESS_RELEASE"):
+    if source_quality in ("OFFICIAL_COMPANY_PAGE", "COMPANY_PUBLIC_POST", "ANNUAL_REPORT", "PRESS_RELEASE"):
         score_src = 10.0
     elif source_quality == "LINKEDIN_SEARCH_SNIPPET":
         score_src = 8.0
@@ -460,7 +475,7 @@ def compute_deterministic_person_score(
 
 
 # ── Phase 4 & 10: Extraction & Candidate Ranking ──────────────────────────────
-def extract_person_from_search_result(
+def _extract_person_from_search_result_legacy(
     item: Dict[str, Any],
     company_name: str,
     facility_name: str = "",
@@ -542,7 +557,257 @@ def extract_person_from_search_result(
     }
 
 
+PERSON_NAME_PATTERN = (
+    r"(?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+|Shri\s+)?"
+    r"[A-Z][A-Za-z.'-]{1,30}(?:\s+[A-Z](?:\.|[A-Za-z.'-]{1,30})){1,4}"
+)
+PERSON_ROLE_PATTERN = (
+    r"(?:Vice President|VP|AVP|Director|Plant Head|Site Head|Unit Head|Works Manager|"
+    r"Factory Manager|General Manager|GM|DGM|AGM|Head(?:\s+of)?\s+(?:Plant\s+)?Quality|"
+    r"Quality(?:\s+Assurance|\s+Control)?\s+(?:Head|Manager|Lead)|QA(?:\s*/\s*QC)?\s+(?:Head|Manager)|"
+    r"QC\s+(?:Head|Manager)|Operations Head|Head of Operations|Manufacturing Head|"
+    r"Head of Manufacturing|Metrology(?:\s+Head|\s+Manager)?|Calibration(?:\s+Head|\s+Manager|\s+Incharge)?|"
+    r"Operational Excellence(?:\s+Head|\s+Lead)?|Instrumentation(?:\s+Head|\s+Manager)?)"
+)
+
+
+def classify_person_source(url: str, title: str = "", company_domain: str = "") -> str:
+    """Classify the public source surface used to discover a candidate."""
+    parsed = urlparse(url or "")
+    host = parsed.netloc.lower().removeprefix("www.")
+    path = parsed.path.lower()
+    clean_domain = company_domain.lower().removeprefix("www.").strip()
+    combined = f"{title} {path}".lower()
+    is_official = bool(clean_domain and (host == clean_domain or host.endswith(f".{clean_domain}")))
+
+    if "linkedin.com/in/" in (url or "").lower():
+        return "LINKEDIN_SEARCH_SNIPPET"
+    if path.endswith(".pdf") or any(term in combined for term in ("annual-report", "annual_report", "annual report")):
+        return "ANNUAL_REPORT"
+    if is_official and any(term in combined for term in ("news", "media", "press", "event", "award", "webinar")):
+        return "COMPANY_PUBLIC_POST"
+    if is_official:
+        return "OFFICIAL_COMPANY_PAGE"
+    if any(term in combined for term in ("conference", "speaker", "summit", "webinar", "symposium", "technical")):
+        return "CONFERENCE_TECHNICAL"
+    if any(domain in host for domain in (
+        "autocarpro.in", "manufacturingtodayindia.com", "business-standard.com",
+        "economictimes.indiatimes.com", "expresscomputer.in",
+    )):
+        return "TRADE_MEDIA"
+    return "PUBLIC_WEB_BIO"
+
+
+def _candidate_from_fields(
+    *,
+    name: str,
+    role: str,
+    item: Dict[str, Any],
+    company_name: str,
+    facility_name: str,
+    city: str,
+    company_domain: str,
+) -> Optional[Dict[str, Any]]:
+    is_human, _ = is_human_person_candidate(name, company_name=company_name)
+    if not is_human:
+        return None
+
+    title_raw = str(item.get("title") or "")
+    snippet_raw = html.unescape(str(item.get("snippet") or item.get("content") or ""))
+    clean_title = re.sub(r"\s+", " ", role).replace(" | LinkedIn", "").replace(" - LinkedIn", "").strip(" ,;:-")
+    if not clean_title or len(clean_title) < 3:
+        return None
+    source_url = str(item.get("url") or "")
+    source_type = classify_person_source(source_url, title_raw, company_domain)
+    current_employment = classify_current_employment(snippet_raw, title_raw, company_name)
+    facility_relationship = classify_facility_relationship(clean_title, snippet_raw, facility_name, city)
+    authority_class = classify_authority_class(clean_title, snippet_raw)
+    score, confidence = compute_deterministic_person_score(
+        current_employment=current_employment,
+        facility_relationship=facility_relationship,
+        authority_class=authority_class,
+        title=clean_title,
+        source_quality=source_type,
+    )
+    return {
+        "name": re.sub(r"\s+", " ", name).strip(),
+        "title": clean_title,
+        "company": company_name,
+        "facility": facility_name or city,
+        "location": item.get("location") or city or facility_name,
+        "source_date": item.get("source_date") or item.get("published_date") or item.get("date") or "",
+        "current_employment": current_employment,
+        "facility_relationship": facility_relationship,
+        "authority_class": authority_class,
+        "person_score": score,
+        "person_confidence": confidence,
+        "source_url": source_url,
+        "source_type": source_type,
+        "evidence_snippet": snippet_raw[:500],
+        **({"source_page": item["source_page"]} if item.get("source_page") else {}),
+    }
+
+
+def extract_person_candidates_from_search_result(
+    item: Dict[str, Any],
+    company_name: str,
+    facility_name: str = "",
+    city: str = "",
+    company_domain: str = "",
+) -> List[Dict[str, Any]]:
+    """Extract all plausible named leaders from one public result."""
+    title_raw = html.unescape(str(item.get("title") or ""))
+    snippet_raw = html.unescape(str(item.get("snippet") or item.get("content") or ""))
+    url = str(item.get("url") or "")
+    if any(bad in url.lower() for bad in ("wikipedia.org", "britannica.com", "glassdoor.", "ambitionbox.")):
+        return []
+
+    matches: List[Tuple[str, str]] = []
+    if "linkedin.com/in/" in url.lower():
+        parts = [part.strip() for part in re.split(r"\s+[-–—|]\s+", title_raw) if part.strip()]
+        if len(parts) >= 2:
+            matches.append((parts[0], parts[1]))
+
+    combined = re.sub(r"\s+", " ", f"{title_raw}. {snippet_raw}").strip()
+    if "linkedin.com/in/" not in url.lower():
+        role_pattern = rf"(?i:{PERSON_ROLE_PATTERN})"
+        patterns = (
+            rf"(?P<name>{PERSON_NAME_PATTERN})\s*[-–—|,:]\s*(?P<role>{role_pattern})",
+            rf"(?P<role>{role_pattern})\s*[-–—|,:]\s*(?P<name>{PERSON_NAME_PATTERN})",
+            rf"(?P<name>{PERSON_NAME_PATTERN})\s+(?i:is|was|serves as|serving as|has joined as|appointed as|named as)\s+(?i:the\s+)?(?P<role>{role_pattern})",
+            rf"(?i:appoints?|appointed|names?|named)\s+(?P<name>{PERSON_NAME_PATTERN})\s+(?i:as\s+(?:the\s+)?)?(?P<role>{role_pattern})",
+        )
+        for pattern in patterns:
+            for match in re.finditer(pattern, combined):
+                matches.append((match.group("name"), match.group("role")))
+
+    candidates: List[Dict[str, Any]] = []
+    seen = set()
+    for name, role in matches:
+        candidate = _candidate_from_fields(
+            name=name,
+            role=role,
+            item=item,
+            company_name=company_name,
+            facility_name=facility_name,
+            city=city,
+            company_domain=company_domain,
+        )
+        if not candidate:
+            continue
+        key = (_normalize_person_name(candidate["name"]), _normalize_company_name(company_name))
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
+    return candidates
+
+
+def extract_person_from_search_result(
+    item: Dict[str, Any],
+    company_name: str,
+    facility_name: str = "",
+    city: str = "",
+    company_domain: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Compatibility wrapper returning the first extracted person candidate."""
+    candidates = extract_person_candidates_from_search_result(
+        item,
+        company_name=company_name,
+        facility_name=facility_name,
+        city=city,
+        company_domain=company_domain,
+    )
+    return candidates[0] if candidates else None
+
+
+def extract_people_from_document_pages(
+    pages: List[str],
+    source_url: str,
+    company_name: str,
+    facility_name: str = "",
+    city: str = "",
+    company_domain: str = "",
+    max_candidates: int = 15,
+) -> List[Dict[str, Any]]:
+    """Extract candidates from public document text with page provenance."""
+    candidates: List[Dict[str, Any]] = []
+    seen = set()
+    limit = min(max(int(max_candidates), 0), 15)
+    for page_number, page_text in enumerate(pages, start=1):
+        item = {
+            "title": f"Annual report page {page_number}",
+            "snippet": page_text,
+            "url": source_url,
+            "source_page": page_number,
+        }
+        for candidate in extract_person_candidates_from_search_result(
+            item,
+            company_name=company_name,
+            facility_name=facility_name,
+            city=city,
+            company_domain=company_domain,
+        ):
+            key = (_normalize_person_name(candidate["name"]), _normalize_company_name(company_name))
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(candidate)
+            if len(candidates) >= limit:
+                return candidates
+    return candidates
+
+
+def extract_people_from_pdf_bytes(
+    pdf_bytes: bytes,
+    source_url: str,
+    company_name: str,
+    facility_name: str = "",
+    city: str = "",
+    company_domain: str = "",
+    max_pages: int = 30,
+) -> List[Dict[str, Any]]:
+    """Parse a bounded public PDF locally; document contents never enter an LLM."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    pages = [(page.extract_text() or "") for page in reader.pages[:max(int(max_pages), 0)]]
+    return extract_people_from_document_pages(
+        pages,
+        source_url=source_url,
+        company_name=company_name,
+        facility_name=facility_name,
+        city=city,
+        company_domain=company_domain,
+    )
+
+
+def extract_people_from_public_html(
+    page_html: str,
+    source_url: str,
+    company_name: str,
+    facility_name: str = "",
+    city: str = "",
+    company_domain: str = "",
+) -> List[Dict[str, Any]]:
+    """Extract named leaders from bounded public HTML without an LLM."""
+    without_scripts = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", page_html, flags=re.IGNORECASE | re.DOTALL)
+    page_text = html.unescape(re.sub(r"<[^>]+>", " ", without_scripts))
+    page_text = re.sub(r"\s+", " ", page_text)[:250_000]
+    return extract_person_candidates_from_search_result(
+        {"title": "Official public page", "snippet": page_text, "url": source_url},
+        company_name=company_name,
+        facility_name=facility_name,
+        city=city,
+        company_domain=company_domain,
+    )
+
+
 def _normalize_person_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def _normalize_company_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (name or "").lower())
 
 
@@ -554,21 +819,24 @@ def generate_deepseek_person_queries(
     target_functions: List[str],
     provider: Any,
     max_queries: int = 3,
+    queries_already_attempted: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Generate up to three public-search queries; generated text is never evidence."""
+    """Generate up to five public-search queries; generated text is never evidence."""
     request_payload = {
         "company": company_name,
         "facility": facility_name,
         "city": city,
         "commercial_trigger": commercial_trigger,
         "target_functions": target_functions,
-        "max_queries": min(max(int(max_queries), 0), 3),
+        "max_queries": min(max(int(max_queries), 0), 5),
+        "queries_already_attempted": list(queries_already_attempted or []),
     }
     response = provider.complete(
         system_prompt=(
             "Generate targeted public-web search queries for a manufacturing decision maker. "
             "Use only supplied facts. Queries are discovery instructions, never evidence. "
-            "Return JSON as {\"queries\": [\"...\"]} with at most three queries."
+            "Avoid duplicating queries_already_attempted. Return JSON as "
+            "{\"queries\": [\"...\"]} with at most five queries."
         ),
         messages=[{"role": "user", "content": json.dumps(request_payload)}],
         response_format="json",
@@ -611,7 +879,11 @@ def rank_candidates_with_deepseek(
             "name": candidate.get("name", ""),
             "title": candidate.get("title", ""),
             "source": candidate.get("source_url", ""),
-            "snippet": candidate.get("evidence_snippet", ""),
+            "snippet": (
+                ""
+                if candidate.get("source_type") == "ANNUAL_REPORT"
+                else candidate.get("evidence_snippet", "")
+            ),
             "source_date": candidate.get("source_date", ""),
             "location": candidate.get("location") or candidate.get("facility", ""),
         }
@@ -674,7 +946,7 @@ def rank_candidates_with_deepseek(
     }
 
 
-def discover_and_rank_decision_makers(
+def _discover_and_rank_decision_makers_legacy(
     company_name: str,
     facility_name: str = "",
     city: str = "",
@@ -837,5 +1109,325 @@ def discover_and_rank_decision_makers(
         "primary_person": primary,
         "secondary_person": secondary,
         "candidates": all_candidates[:max_candidates],
+        "telemetry": telemetry,
+    }
+
+
+def _person_sort_key(candidate: Dict[str, Any]) -> Tuple[float, int, int, str]:
+    authority_index = (
+        AUTHORITY_HIERARCHY.index(candidate["authority_class"])
+        if candidate.get("authority_class") in AUTHORITY_HIERARCHY else 99
+    )
+    return (
+        -float(candidate.get("person_score") or 0),
+        authority_index,
+        int(candidate.get("deepseek_rank") or 9999),
+        _normalize_person_name(str(candidate.get("name") or "")),
+    )
+
+
+def discover_and_rank_decision_makers(
+    company_name: str,
+    facility_name: str = "",
+    city: str = "",
+    search_router: Any = None,
+    max_candidates: int = 5,
+    use_deepseek: bool = False,
+    ranking_provider: Any = None,
+    commercial_trigger: str = "",
+    target_functions: Optional[List[str]] = None,
+    company_domain: str = "",
+    sector: str = "",
+    use_deepseek_queries: Optional[bool] = None,
+    use_deepseek_ranking: Optional[bool] = None,
+    deepseek_query_limit: int = 3,
+    search_workers: int = 5,
+    additional_queries: Optional[List[str]] = None,
+    fetch_public_sources: bool = False,
+) -> Dict[str, Any]:
+    """Discover a broad candidate set while keeping verification deterministic."""
+    if search_router is None:
+        from services.research_provider import research_router
+        search_router = research_router
+    if use_deepseek_queries is None:
+        use_deepseek_queries = use_deepseek
+    if use_deepseek_ranking is None:
+        use_deepseek_ranking = use_deepseek
+
+    functions = target_functions or ["Plant Quality", "Metrology", "Plant Head"]
+    deterministic_queries = generate_person_search_queries(
+        company_name,
+        facility_name=facility_name,
+        city=city,
+        company_domain=company_domain,
+        sector=sector,
+        target_functions=functions,
+    )
+    all_candidates: List[Dict[str, Any]] = []
+    candidate_indexes: Dict[Tuple[str, str], int] = {}
+    public_source_items: Dict[str, Dict[str, Any]] = {}
+    telemetry: Dict[str, Any] = {
+        "queries_run": 0,
+        "results_returned": 0,
+        "raw_candidates_extracted": 0,
+        "non_human_rejected": 0,
+        "verified_employment_count": 0,
+        "high_confidence_count": 0,
+        "hive_requests": 0,
+        "hive_input_tokens": 0,
+        "hive_output_tokens": 0,
+        "deepseek_queries_generated": 0,
+        "query_audit": [],
+        "search_errors": [],
+        "source_yield": {
+            "OFFICIAL_COMPANY_PAGE": 0,
+            "ANNUAL_REPORT": 0,
+            "COMPANY_PUBLIC_POST": 0,
+            "LINKEDIN_SEARCH_SNIPPET": 0,
+            "CONFERENCE_TECHNICAL": 0,
+            "TRADE_MEDIA": 0,
+            "PUBLIC_WEB_BIO": 0,
+        },
+        "public_source_fetches": [],
+    }
+
+    def run_search(index: int, query_object: Dict[str, str]) -> Tuple[int, Dict[str, str], Dict[str, Any]]:
+        return index, query_object, search_router.search(query_object["query"], num_results=5)
+
+    def collect_candidates(query_objects: List[Dict[str, str]]) -> None:
+        if not query_objects:
+            return
+        ordered_results: Dict[int, Tuple[Dict[str, str], Dict[str, Any]]] = {}
+        worker_count = min(max(int(search_workers), 1), len(query_objects))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(run_search, index, query_object): (index, query_object)
+                for index, query_object in enumerate(query_objects)
+            }
+            for future in as_completed(futures):
+                index, query_object = futures[future]
+                try:
+                    _, _, search_result = future.result()
+                except Exception as error:
+                    telemetry["search_errors"].append({
+                        "query": query_object["query"],
+                        "error": type(error).__name__,
+                    })
+                    search_result = {"results": [], "error": type(error).__name__}
+                ordered_results[index] = (query_object, search_result)
+
+        for index in range(len(query_objects)):
+            query_object, search_result = ordered_results[index]
+            items = search_result.get("results", []) or []
+            telemetry["queries_run"] += 1
+            telemetry["results_returned"] += len(items)
+            telemetry["query_audit"].append({
+                "query": query_object["query"],
+                "family": query_object.get("family") or query_object.get("pass") or "UNKNOWN",
+                "source_target": query_object.get("source_target") or "PUBLIC_WEB",
+                "provider": search_result.get("provider") or "unknown",
+                "provider_status": search_result.get("provider_status") or "unknown",
+                "results": len(items),
+                "error": search_result.get("error"),
+            })
+            for item in items:
+                item_url = str(item.get("url") or "")
+                source_type = classify_person_source(item_url, str(item.get("title") or ""), company_domain)
+                if (
+                    item_url.startswith(("http://", "https://"))
+                    and source_type in {"ANNUAL_REPORT", "COMPANY_PUBLIC_POST", "OFFICIAL_COMPANY_PAGE"}
+                ):
+                    public_source_items.setdefault(item_url, item)
+                extracted = extract_person_candidates_from_search_result(
+                    item,
+                    company_name=company_name,
+                    facility_name=facility_name,
+                    city=city,
+                    company_domain=company_domain,
+                )
+                telemetry["raw_candidates_extracted"] += len(extracted)
+                for candidate in extracted:
+                    source_type = candidate.get("source_type") or "PUBLIC_WEB_BIO"
+                    telemetry["source_yield"].setdefault(source_type, 0)
+                    telemetry["source_yield"][source_type] += 1
+                    key = (
+                        _normalize_person_name(str(candidate.get("name") or "")),
+                        _normalize_company_name(company_name),
+                    )
+                    existing_index = candidate_indexes.get(key)
+                    if existing_index is None:
+                        candidate_indexes[key] = len(all_candidates)
+                        all_candidates.append(candidate)
+                    elif _person_sort_key(candidate) < _person_sort_key(all_candidates[existing_index]):
+                        all_candidates[existing_index] = candidate
+
+    collect_candidates(deterministic_queries)
+
+    reused_queries = [
+        {
+            "query": query,
+            "family": "REUSED_DEEPSEEK_QUERY",
+            "pass": "REUSED_DEEPSEEK_QUERY",
+            "target_role": "LLM_GENERATED_REPLAY",
+            "source_target": "PUBLIC_WEB",
+        }
+        for query in (additional_queries or [])
+        if isinstance(query, str) and query.strip()
+    ]
+    collect_candidates(reused_queries)
+
+    if (use_deepseek_queries or use_deepseek_ranking) and ranking_provider is None:
+        from services.llm_provider import get_provider
+        ranking_provider = get_provider("hive")
+
+    if use_deepseek_queries:
+        try:
+            generated = generate_deepseek_person_queries(
+                company_name=company_name,
+                facility_name=facility_name,
+                city=city,
+                commercial_trigger=commercial_trigger,
+                target_functions=functions,
+                provider=ranking_provider,
+                max_queries=deepseek_query_limit,
+                queries_already_attempted=[query["query"] for query in deterministic_queries],
+            )
+            telemetry["hive_requests"] += 1
+            telemetry["hive_input_tokens"] += int(generated["usage"].get("input_tokens", 0) or 0)
+            telemetry["hive_output_tokens"] += int(generated["usage"].get("output_tokens", 0) or 0)
+            generated_queries = [
+                {
+                    "query": query,
+                    "family": "DEEPSEEK_QUERY_GENERATION",
+                    "pass": "DEEPSEEK_QUERY_GENERATION",
+                    "target_role": "LLM_GENERATED",
+                    "source_target": "PUBLIC_WEB",
+                }
+                for query in generated["queries"]
+            ]
+            telemetry["deepseek_queries_generated"] = len(generated_queries)
+            collect_candidates(generated_queries)
+        except Exception as error:
+            telemetry["deepseek_query_error"] = type(error).__name__
+
+    if fetch_public_sources and public_source_items:
+        import requests
+
+        priority = {"ANNUAL_REPORT": 0, "COMPANY_PUBLIC_POST": 1, "OFFICIAL_COMPANY_PAGE": 2}
+        selected_items = sorted(
+            public_source_items.values(),
+            key=lambda item: priority.get(
+                classify_person_source(str(item.get("url") or ""), str(item.get("title") or ""), company_domain),
+                9,
+            ),
+        )[:3]
+        for item in selected_items:
+            source_url = str(item.get("url") or "")
+            source_type = classify_person_source(source_url, str(item.get("title") or ""), company_domain)
+            fetch_record = {"url": source_url, "source_type": source_type, "status": "FAILED", "candidates": 0}
+            try:
+                response = requests.get(
+                    source_url,
+                    timeout=20,
+                    headers={"User-Agent": "SalesoorjaPublicResearch/1.0"},
+                )
+                response.raise_for_status()
+                if len(response.content) > 10_000_000:
+                    raise ValueError("PUBLIC_SOURCE_TOO_LARGE")
+                content_type = str(response.headers.get("content-type") or "").lower()
+                if source_type == "ANNUAL_REPORT" or "application/pdf" in content_type:
+                    fetched_candidates = extract_people_from_pdf_bytes(
+                        response.content,
+                        source_url=source_url,
+                        company_name=company_name,
+                        facility_name=facility_name,
+                        city=city,
+                        company_domain=company_domain,
+                    )
+                else:
+                    fetched_candidates = extract_people_from_public_html(
+                        response.text,
+                        source_url=source_url,
+                        company_name=company_name,
+                        facility_name=facility_name,
+                        city=city,
+                        company_domain=company_domain,
+                    )
+                for candidate in fetched_candidates:
+                    key = (
+                        _normalize_person_name(str(candidate.get("name") or "")),
+                        _normalize_company_name(company_name),
+                    )
+                    existing_index = candidate_indexes.get(key)
+                    if existing_index is None:
+                        candidate_indexes[key] = len(all_candidates)
+                        all_candidates.append(candidate)
+                    elif _person_sort_key(candidate) < _person_sort_key(all_candidates[existing_index]):
+                        all_candidates[existing_index] = candidate
+                    candidate_source = str(candidate.get("source_type") or "PUBLIC_WEB_BIO")
+                    telemetry["source_yield"].setdefault(candidate_source, 0)
+                    telemetry["source_yield"][candidate_source] += 1
+                fetch_record["status"] = "SUCCESS"
+                fetch_record["candidates"] = len(fetched_candidates)
+            except Exception as error:
+                fetch_record["error"] = type(error).__name__
+            telemetry["public_source_fetches"].append(fetch_record)
+
+    all_candidates.sort(key=_person_sort_key)
+    all_candidates = all_candidates[:15]
+    candidates_before_llm = [dict(candidate) for candidate in all_candidates]
+
+    if use_deepseek_ranking and all_candidates:
+        try:
+            ranked = rank_candidates_with_deepseek(
+                company_name=company_name,
+                facility_name=facility_name,
+                city=city,
+                commercial_trigger=commercial_trigger,
+                target_functions=functions,
+                candidates=all_candidates,
+                provider=ranking_provider,
+            )
+            telemetry["hive_requests"] += 1
+            telemetry["hive_input_tokens"] += int(ranked["usage"].get("input_tokens", 0) or 0)
+            telemetry["hive_output_tokens"] += int(ranked["usage"].get("output_tokens", 0) or 0)
+            ranked_by_name = {
+                _normalize_person_name(str(candidate.get("name") or "")): candidate
+                for candidate in ranked["candidates"]
+            }
+            all_candidates = [
+                ranked_by_name.get(_normalize_person_name(str(candidate.get("name") or "")), candidate)
+                for candidate in all_candidates
+            ]
+            deepseek_candidates = sorted(
+                [candidate for candidate in ranked["candidates"] if candidate.get("deepseek_rank") is not None],
+                key=lambda candidate: (
+                    int(candidate.get("deepseek_rank") or 9999),
+                    -float(candidate.get("person_score") or 0),
+                ),
+            )
+            telemetry["deepseek_top1"] = deepseek_candidates[0].get("name") if deepseek_candidates else None
+            telemetry["deepseek_ranking_applied"] = bool(ranked["assessment_count"])
+            if not ranked["assessment_count"]:
+                telemetry["deepseek_ranking_error"] = "NO_VALID_STRUCTURED_RANKING"
+        except Exception as error:
+            telemetry["deepseek_ranking_applied"] = False
+            telemetry["deepseek_ranking_error"] = type(error).__name__
+
+    all_candidates.sort(key=_person_sort_key)
+    limit = min(max(int(max_candidates), 0), 15)
+    returned_candidates = all_candidates[:limit]
+    telemetry["candidate_pool_size"] = len(all_candidates)
+    telemetry["verified_employment_count"] = sum(
+        candidate.get("current_employment") == "VERIFIED" for candidate in all_candidates
+    )
+    telemetry["high_confidence_count"] = sum(
+        candidate.get("person_confidence") == "HIGH" for candidate in all_candidates
+    )
+    return {
+        "primary_person": returned_candidates[0] if returned_candidates else None,
+        "secondary_person": returned_candidates[1] if len(returned_candidates) > 1 else None,
+        "candidates": returned_candidates,
+        "candidates_before_llm": candidates_before_llm,
         "telemetry": telemetry,
     }

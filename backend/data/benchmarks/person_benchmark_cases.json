@@ -2,6 +2,8 @@
   {
     "id": "CASE-01",
     "company": "Maruti Suzuki",
+    "company_domain": "marutisuzuki.com",
+    "sector": "Automotive",
     "facility": "Hansalpur Manufacturing Complex",
     "city": "Hansalpur",
     "function_context": "Plant Operations & Quality",
@@ -11,6 +13,8 @@
   {
     "id": "CASE-02",
     "company": "Valeo India",
+    "company_domain": "valeo.com",
+    "sector": "Automotive Components",
     "facility": "Sanand Plant",
     "city": "Sanand",
     "function_context": "Quality & Metrology",
@@ -20,6 +24,8 @@
   {
     "id": "CASE-03",
     "company": "Kehems Technologies",
+    "company_domain": "kehems.com",
+    "sector": "HVAC Manufacturing",
     "facility": "Indore Plant",
     "city": "Indore",
     "function_context": "Plant Quality Assurance",
@@ -29,6 +35,8 @@
   {
     "id": "CASE-04",
     "company": "Exide Energy Solutions",
+    "company_domain": "exideindustries.com",
+    "sector": "Battery Manufacturing",
     "facility": "Bengaluru Giga Factory",
     "city": "Bengaluru",
     "function_context": "Head of Quality",
@@ -38,6 +46,8 @@
   {
     "id": "CASE-05",
     "company": "Aarti Industries",
+    "company_domain": "aarti-industries.com",
+    "sector": "Specialty Chemicals",
     "facility": "Dahej Complex",
     "city": "Dahej",
     "function_context": "Quality Assurance",
