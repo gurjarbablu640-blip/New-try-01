@@ -254,7 +254,7 @@ class ResearchProviderRouter:
                 "q": query,
                 "format": "json",
                 "categories": "general,news",
-                "engines": "bing,bing news,reuters",
+                "engines": "bing,yandex,bing news",
                 "language": "en-IN",
             }
             try:

@@ -1,0 +1,72 @@
+[
+  {
+    "company": "Maruti Suzuki / Suzuki Motor Gujarat",
+    "person": "Atul Jain",
+    "trigger_date": "2026-07-30",
+    "recency_days": 44,
+    "timing_class": "CURRENT",
+    "ongoing_evidence_source": "",
+    "ongoing_evidence_date": "",
+    "timing_pass": true,
+    "timing_reason": "Trigger is CURRENT (44 days old)",
+    "facility_pass": true,
+    "person_pass": true,
+    "final_status": "PENDING_APOLLO_RENEWAL"
+  },
+  {
+    "company": "Exide Energy Solutions Ltd",
+    "person": "Vijayaraghavan Manian",
+    "trigger_date": "2024-11-14",
+    "recency_days": 667,
+    "timing_class": "STALE",
+    "ongoing_evidence_source": "",
+    "ongoing_evidence_date": "",
+    "timing_pass": false,
+    "timing_reason": "Trigger is STALE (>365 days old, 667 days) with no newer source or ongoing milestone proving activity: missing ongoing evidence",
+    "facility_pass": true,
+    "person_pass": true,
+    "final_status": "HOLD_STALE_TRIGGER"
+  },
+  {
+    "company": "Aarti Industries Ltd",
+    "person": "Dr. Dharmendra Chouhan",
+    "trigger_date": "2026-03-06",
+    "recency_days": 190,
+    "timing_class": "RECENT",
+    "ongoing_evidence_source": "",
+    "ongoing_evidence_date": "",
+    "timing_pass": false,
+    "timing_reason": "Trigger is RECENT (190 days old) but lacks required evidence of ongoing activity (missing ongoing evidence)",
+    "facility_pass": true,
+    "person_pass": true,
+    "final_status": "HOLD_STALE_TRIGGER"
+  },
+  {
+    "company": "JSW Energy Ltd",
+    "person": "Anuj Kumar Tyagi",
+    "trigger_date": "2025-11-12",
+    "recency_days": 304,
+    "timing_class": "RECENT",
+    "ongoing_evidence_source": "",
+    "ongoing_evidence_date": "",
+    "timing_pass": false,
+    "timing_reason": "Trigger is RECENT (304 days old) but lacks required evidence of ongoing activity (missing ongoing evidence)",
+    "facility_pass": true,
+    "person_pass": true,
+    "final_status": "HOLD_STALE_TRIGGER"
+  },
+  {
+    "company": "Dixon Technologies (India) Ltd",
+    "person": "Kuldeep Singh",
+    "trigger_date": "2026-01-05",
+    "recency_days": 250,
+    "timing_class": "RECENT",
+    "ongoing_evidence_source": "",
+    "ongoing_evidence_date": "",
+    "timing_pass": false,
+    "timing_reason": "Trigger is RECENT (250 days old) but lacks required evidence of ongoing activity (missing ongoing evidence)",
+    "facility_pass": true,
+    "person_pass": true,
+    "final_status": "HOLD_STALE_TRIGGER"
+  }
+]

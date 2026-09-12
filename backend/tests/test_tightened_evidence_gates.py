@@ -319,6 +319,121 @@ class TightenedEvidenceGatesTests(unittest.TestCase):
         self.assertIn("out-of-scope", res["gates"]["technical_capability"]["reason"])
         self.assertEqual(res["status"], BLOCKED)
 
+    # ─────────────────────────────────────────────────────────────────
+    # Trigger Recency & Timing Semantics Regression Tests
+    # ─────────────────────────────────────────────────────────────────
+
+    def test_recency_364_days_is_recent(self):
+        """364 days old trigger is classified as RECENT."""
+        ev = base_evidence(
+            trigger_current={
+                "recency_days": 364,
+                "ongoing_activity_evidence": "",
+                "trigger_facility_confidence": "DIRECT",
+            }
+        )
+        res = evaluate_opportunity_gates(ev, production=True)
+        self.assertEqual(res["gates"]["trigger_current"]["recency_status"], "RECENT")
+        self.assertFalse(res["gates"]["trigger_current"]["passed"])
+        self.assertEqual(res["status"], BLOCKED)
+
+    def test_recency_366_days_is_stale(self):
+        """366 days old trigger is classified as STALE."""
+        ev = base_evidence(
+            trigger_current={
+                "recency_days": 366,
+                "ongoing_activity_evidence": "",
+                "trigger_facility_confidence": "DIRECT",
+            }
+        )
+        res = evaluate_opportunity_gates(ev, production=True)
+        self.assertEqual(res["gates"]["trigger_current"]["recency_status"], "STALE")
+        self.assertFalse(res["gates"]["trigger_current"]["passed"])
+        self.assertEqual(res["status"], BLOCKED)
+
+    def test_stale_without_ongoing_fails(self):
+        """>365 days trigger without ongoing evidence fails timing."""
+        ev = base_evidence(
+            trigger_current={
+                "recency_days": 400,
+                "ongoing_activity_evidence": "",
+                "trigger_facility_confidence": "DIRECT",
+            }
+        )
+        res = evaluate_opportunity_gates(ev, production=True)
+        self.assertFalse(res["gates"]["trigger_current"]["passed"])
+        self.assertIn("STALE", res["gates"]["trigger_current"]["reason"])
+        self.assertEqual(res["status"], BLOCKED)
+
+    def test_stale_with_independent_ongoing_passes(self):
+        """>365 days trigger with independent ongoing commissioning evidence passes timing."""
+        ev = base_evidence(
+            trigger_current={
+                "recency_days": 450,
+                "ongoing_activity_evidence": "Phase 2 commercial commissioning underway in FY26",
+                "ongoing_source": "https://www.autocarpro.in/news/phase2-update",
+                "ongoing_date": "2026-08-15",
+                "trigger_facility_confidence": "DIRECT",
+            }
+        )
+        res = evaluate_opportunity_gates(ev, production=True)
+        self.assertTrue(res["gates"]["trigger_current"]["passed"])
+        self.assertEqual(res["gates"]["trigger_current"]["recency_status"], "STALE")
+        self.assertIn("multi-year execution is confirmed active", res["gates"]["trigger_current"]["reason"])
+        self.assertTrue(res["ready_for_email"])
+
+    def test_recent_181_to_365_without_ongoing_fails(self):
+        """181-365 days trigger without ongoing evidence fails timing."""
+        ev = base_evidence(
+            trigger_current={
+                "recency_days": 250,
+                "ongoing_activity_evidence": "",
+                "trigger_facility_confidence": "DIRECT",
+            }
+        )
+        res = evaluate_opportunity_gates(ev, production=True)
+        self.assertFalse(res["gates"]["trigger_current"]["passed"])
+        self.assertEqual(res["gates"]["trigger_current"]["recency_status"], "RECENT")
+        self.assertIn("lacks required evidence of ongoing activity", res["gates"]["trigger_current"]["reason"])
+        self.assertEqual(res["status"], BLOCKED)
+
+    def test_recent_181_to_365_with_ongoing_passes(self):
+        """181-365 days trigger with independent ongoing evidence passes timing."""
+        ev = base_evidence(
+            trigger_current={
+                "recency_days": 250,
+                "ongoing_activity_evidence": "Active hiring and equipment installation for new line",
+                "ongoing_source": "https://company.com/careers/quality-hiring",
+                "ongoing_date": "2026-07-20",
+                "trigger_facility_confidence": "DIRECT",
+            }
+        )
+        res = evaluate_opportunity_gates(ev, production=True)
+        self.assertTrue(res["gates"]["trigger_current"]["passed"])
+        self.assertEqual(res["gates"]["trigger_current"]["recency_status"], "RECENT")
+        self.assertIn("verified ongoing activity", res["gates"]["trigger_current"]["reason"])
+        self.assertTrue(res["ready_for_email"])
+
+    def test_prohibited_ongoing_patterns_fail(self):
+        """Prohibited patterns like historical article, old inauguration, generic company existence must FAIL."""
+        for prohibited in [
+            "historical article about past capex",
+            "old inauguration ceremony archive",
+            "old plant launch in 2022",
+            "generic company existence overview",
+        ]:
+            ev = base_evidence(
+                trigger_current={
+                    "recency_days": 250,
+                    "ongoing_activity_evidence": prohibited,
+                    "trigger_facility_confidence": "DIRECT",
+                }
+            )
+            res = evaluate_opportunity_gates(ev, production=True)
+            self.assertFalse(res["gates"]["trigger_current"]["passed"], f"Failed to reject prohibited ongoing pattern: {prohibited}")
+            self.assertEqual(res["status"], BLOCKED)
+
 
 if __name__ == "__main__":
     unittest.main()
+

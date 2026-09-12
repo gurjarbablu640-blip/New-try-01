@@ -251,14 +251,29 @@ def determine_qualification_state(
             is_rejected=False,
         )
 
-    # Stale trigger
+    # Stale or Recent trigger recency check
     trig_info = evidence.get("trigger_current") or {}
     recency_status = str(trig_info.get("recency_status") or "").upper()
-    if recency_status == "STALE" and not trig_info.get("ongoing_activity_evidence"):
+    ongoing_ev = str(trig_info.get("ongoing_activity_evidence") or trig_info.get("ongoing_source") or "").strip()
+    from services.opportunity_gates import is_valid_ongoing_evidence
+    has_valid_ongoing, _ = is_valid_ongoing_evidence(ongoing_ev)
+
+    if recency_status == "STALE" and not has_valid_ongoing:
         return StateValidationResult(
             valid=True,
             state=QualificationState.HOLD,
             reason="Trigger is STALE (>365 days old) with no ongoing execution proof",
+            can_stage_test=False,
+            can_send_production=False,
+            requires_apollo=False,
+            is_hold=True,
+            is_rejected=False,
+        )
+    elif recency_status == "RECENT" and not has_valid_ongoing:
+        return StateValidationResult(
+            valid=True,
+            state=QualificationState.HOLD,
+            reason="Trigger is RECENT (181-365 days old) but lacks required independent ongoing activity evidence",
             can_stage_test=False,
             can_send_production=False,
             requires_apollo=False,

@@ -177,7 +177,18 @@ NON_HUMAN_NAME_TERMS = {
     'digital', 'ecosystem', 'community', 'society', 'foundation', 'trust', 'network', 'club',
     'team', 'associates', 'association', 'consortium', 'forum', 'group', 'channel', 'brand',
     'brands', 'initiative', 'venture', 'ventures', 'hub', 'cluster', 'mission', 'vision',
-    'platform', 'portal'
+    'platform', 'portal', 'wardrobe', 'organisers', 'organizers', 'pokedex', 'tourism',
+    'challan', 'echallan', 'movie', 'movies', 'football', 'cricket', 'picks', 'parlays',
+    'cleaner', 'software', 'download', 'online', 'teenagers', 'hindi', 'hollywood',
+    'bollywood', 'reddit', 'youtube', 'nextgen', 'college', 'shop', 'store', 'cart',
+    'checkout', 'booking', 'ticket', 'game', 'gaming', 'pokemon'
+}
+
+ACTION_VERB_PREFIXES = {
+    'download', 'shop', 'buy', 'welcome', 'select', 'click', 'search', 'order',
+    'find', 'view', 'get', 'watch', 'stream', 'play', 'read', 'login', 'signup',
+    'register', 'apply', 'subscribe', 'latest', 'free', 'best', 'top', 'trending',
+    'explore', 'install', 'upgrade', 'update', 'check', 'book'
 }
 
 
@@ -195,6 +206,11 @@ def is_human_person_candidate(name_str: str, company_name: str = "", title_or_co
     tokens = re.findall(r'[a-zA-Z]+', clean)
     if not tokens:
         return False, "No alphabetic tokens found"
+
+    # Action verb / imperative prefix check
+    first_token = tokens[0].lower()
+    if first_token in ACTION_VERB_PREFIXES:
+        return False, f"First word '{tokens[0]}' is an action verb/imperative prefix, not a human name"
 
     # Pronoun / conversational token rejection
     pronoun_tokens = {'i', 'we', 'you', 'he', 'she', 'it', 'they', 'my', 'our', 'your', 'me', 'us', 'him', 'her', 'them'}

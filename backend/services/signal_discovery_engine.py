@@ -526,11 +526,17 @@ def generate_industrial_trigger_query(company_name: str) -> str:
     """
     clean_name = company_name.strip()
     return (
-        f'{clean_name} ("new plant" OR "manufacturing facility" OR "commissioning" OR '
+        f'"{clean_name}" ("new plant" OR "manufacturing facility" OR "commissioning" OR '
         f'"commercial production" OR "capacity expansion" OR "new production line" OR '
         f'"new machinery" OR "new laboratory" OR "metrology" OR "capex commissioning" OR '
         f'"production ramp-up") -stock -share -"target price" -brokerage -"price target" -trading'
     )
+
+
+def generate_secondary_capex_query(company_name: str) -> str:
+    """Generate a targeted industrial capex and capacity milestone query for reference year 2026."""
+    clean_name = re.sub(r"\b(Limited|Ltd\.?|Pvt\.?|Private|LLP|Inc\.?)\b", "", company_name, flags=re.IGNORECASE).strip()
+    return f'"{clean_name}" (capex OR "plant expansion" OR commissioning OR "new unit" OR "manufacturing") "2026"'
 
 
 def filter_negative_financial_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

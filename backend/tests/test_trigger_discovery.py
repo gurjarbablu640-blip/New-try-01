@@ -116,6 +116,26 @@ class TestTriggerDiscoveryService(unittest.TestCase):
         self.assertEqual(dt_res["ongoing_status"], "CURRENT")
         self.assertLessEqual(dt_res["recency_days"], 180)
 
+    def test_recency_364_days_is_recent(self):
+        """364 days boundary test is RECENT."""
+        from datetime import datetime, timezone, timedelta
+        ref_dt = datetime(2026, 9, 12, tzinfo=timezone.utc)
+        target_dt = ref_dt - timedelta(days=364)
+        date_str = target_dt.strftime("%Y-%m-%d")
+        dt_res = extract_event_date(f"Published on {date_str}. Event update.", now_dt=ref_dt)
+        self.assertEqual(dt_res["recency_days"], 364)
+        self.assertEqual(dt_res["recency_status"], "RECENT")
+
+    def test_recency_366_days_is_stale(self):
+        """366 days boundary test is STALE."""
+        from datetime import datetime, timezone, timedelta
+        ref_dt = datetime(2026, 9, 12, tzinfo=timezone.utc)
+        target_dt = ref_dt - timedelta(days=366)
+        date_str = target_dt.strftime("%Y-%m-%d")
+        dt_res = extract_event_date(f"Published on {date_str}. Event update.", now_dt=ref_dt)
+        self.assertEqual(dt_res["recency_days"], 366)
+        self.assertEqual(dt_res["recency_status"], "STALE")
+
     def test_source_tier_classification(self):
         """Classify tiers: BSE/Official = A, Economic Times = B, Naukri = C, Generic = D."""
         self.assertEqual(classify_source_tier("https://www.bseindia.com/xml-data/corpfiling/1.pdf", "bseindia.com"), SOURCE_TIER_A)

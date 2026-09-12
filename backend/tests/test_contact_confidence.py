@@ -129,6 +129,28 @@ class ContactConfidenceTests(unittest.TestCase):
         self.assertEqual(res3['phone_type'], 'SWITCHBOARD')
         self.assertIsNone(candidate_sb.apollo_phone)  # Switchboard not stored as personal mobile!
 
+    def test_reject_action_verb_and_non_human_candidate_names(self):
+        """Action verbs, ecommerce, media, and SEO tokens must never pass as human names."""
+        from services.contact_confidence import is_human_person_candidate, validate_person_name
+
+        bad_names = [
+            "Shop Wardrobe Organisers Online",
+            "Paras Pokedex",
+            "Download CCleaner",
+            "Welcome to Gujarat Tourism",
+            "NextGen eChallan",
+            "Latest Hindi Action Movies",
+            "College Football Picks",
+            "Buy Solar Panels",
+            "Explore Our Products",
+        ]
+        for name in bad_names:
+            is_human, reason = is_human_person_candidate(name)
+            self.assertFalse(is_human, f"Failed to reject non-human name: '{name}'")
+            val = validate_person_name(name)
+            self.assertFalse(val["is_human_name"], f"validate_person_name failed to reject: '{name}'")
+            self.assertEqual(val["person_name_validation"], "INVALID_ROLE_TEXT")
+
 
 if __name__ == '__main__':
     unittest.main()

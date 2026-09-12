@@ -1,0 +1,130 @@
+import os
+import sys
+import json
+
+# Verified, high-volume Indian industrial manufacturing companies across diverse sectors
+# Zero overlap with Batch 25 and Batch 50
+BATCH_100_COMPANIES = [
+    # Aerospace & Defense
+    {"name": "Hindustan Aeronautics Limited", "domain": "hal-india.co.in", "sector": "Aerospace & Defense Aircraft", "primary_hub": "Bengaluru / Nashik / Koraput"},
+    {"name": "Bharat Electronics Limited", "domain": "bel-india.in", "sector": "Defense Radars & Avionics", "primary_hub": "Bengaluru / Ghaziabad / Machilipatnam"},
+    {"name": "Bharat Dynamics Limited", "domain": "bdl-india.in", "sector": "Guided Missiles & Defense Systems", "primary_hub": "Hyderabad / Bhanur"},
+    {"name": "Mishra Dhatu Nigam Limited", "domain": "midhani-india.in", "sector": "Specialty Alloys & Titanium", "primary_hub": "Hyderabad / Rohtak"},
+    {"name": "Zen Technologies Limited", "domain": "zentechnologies.com", "sector": "Combat Training & Drone Systems", "primary_hub": "Hyderabad Telangana"},
+    {"name": "MTAR Technologies Limited", "domain": "mtar.in", "sector": "Precision Nuclear & Space Machining", "primary_hub": "Hyderabad Telangana"},
+    {"name": "BEML Limited", "domain": "bemlindia.in", "sector": "Heavy Rail Coaches & Mining Equipment", "primary_hub": "Kolar Gold Fields / Bengaluru / Mysuru"},
+    {"name": "Mazagon Dock Shipbuilders Limited", "domain": "mazagondock.in", "sector": "Defense Warships & Submarines", "primary_hub": "Mumbai / Nhava Yard"},
+    {"name": "Garden Reach Shipbuilders & Engineers Limited", "domain": "grse.in", "sector": "Warships & Marine Diesel Engines", "primary_hub": "Kolkata / Ranchi Engine Division"},
+    {"name": "Cochin Shipyard Limited", "domain": "cochinshipyard.in", "sector": "Shipbuilding & Ship Repair Yards", "primary_hub": "Kochi Kerala"},
+    {"name": "Titagarh Rail Systems Limited", "domain": "titagarh.in", "sector": "Passenger Train Sets & Metro Coaches", "primary_hub": "Titagarh / Uttarpara West Bengal"},
+    {"name": "Jupiter Wagons Limited", "domain": "jupiterwagons.com", "sector": "Railway Wagons & Bogie Castings", "primary_hub": "Kolkata / Jabalpur"},
+    {"name": "Rossell Techsys Limited", "domain": "rosselltechsys.com", "sector": "Aerospace Interconnects & Avionics", "primary_hub": "Bengaluru Aerospace SEZ"},
+    
+    # Capital Goods, Machinery & Power Transmission
+    {"name": "Kirloskar Brothers Limited", "domain": "kirloskarpumps.com", "sector": "Industrial Pumps & Valves", "primary_hub": "Kirloskarvadi Sangli / Dewas"},
+    {"name": "Texmaco Rail & Engineering Limited", "domain": "texmaco.in", "sector": "Railway Wagons & Freight Cars", "primary_hub": "Kolkata West Bengal"},
+    {"name": "Triveni Turbine Limited", "domain": "triveniturbines.com", "sector": "Steam Turbines & Power Equipment", "primary_hub": "Peenya Bengaluru"},
+    {"name": "Elecon Engineering Company Limited", "domain": "elecon.com", "sector": "Industrial Gears & Material Handling", "primary_hub": "Vallabh Vidyanagar Anand"},
+    {"name": "Praj Industries Limited", "domain": "praj.net", "sector": "Bioenergy Process Plant Machinery", "primary_hub": "Kandla / Sanaswadi Pune"},
+    {"name": "Isgec Heavy Engineering Limited", "domain": "isgec.com", "sector": "Heavy Boilers, Presses & Pressure Vessels", "primary_hub": "Yamunanagar / Dahej"},
+    {"name": "Walchandnagar Industries Limited", "domain": "walchand.com", "sector": "Heavy Precision Nuclear & Aerospace", "primary_hub": "Walchandnagar Pune"},
+    {"name": "KEC International Limited", "domain": "kecrpg.com", "sector": "Power Transmission Towers & Cables", "primary_hub": "Nagpur / Butibori / Silvassa"},
+    {"name": "Kalpataru Projects International Limited", "domain": "kalpataruprojects.com", "sector": "Transmission Infrastructure & Structures", "primary_hub": "Gandhinagar / Raipur"},
+    {"name": "GMM Pfaudler Limited", "domain": "gmmpfaudler.com", "sector": "Glass-Lined Chemical Reactors", "primary_hub": "Karamsad Anand Gujarat"},
+    {"name": "HLE Glascoat Limited", "domain": "hleglascoat.com", "sector": "Filtration & Drying Chemical Equipment", "primary_hub": "Maroli Navsari / Anand"},
+    {"name": "Shanthi Gears Limited", "domain": "shanthigears.com", "sector": "Industrial Custom Gears", "primary_hub": "Coimbatore Tamil Nadu"},
+    
+    # Auto Components & Mobility
+    {"name": "Sona BLW Precision Forgings Limited", "domain": "sonabhw.com", "sector": "EV Driveline & Differential Gears", "primary_hub": "Gurugram / Manesar / Chennai"},
+    {"name": "CIE Automotive India Limited", "domain": "cie-india.com", "sector": "Forged & Cast Automotive Components", "primary_hub": "Chakan Pune / Pantnagar"},
+    {"name": "Subros Limited", "domain": "subros.com", "sector": "Automotive Thermal & AC Systems", "primary_hub": "Noida / Manesar / Sanand"},
+    {"name": "Rane Holdings Limited", "domain": "ranegroup.com", "sector": "Steering & Valve Train Components", "primary_hub": "Chennai / Puducherry"},
+    {"name": "Talbros Automotive Components Limited", "domain": "talbros.com", "sector": "Gaskets & Forgings", "primary_hub": "Faridabad / Bawal"},
+    {"name": "Sundram Fasteners Limited", "domain": "sundram.com", "sector": "High Tensile Fasteners & Powertrain", "primary_hub": "Padi Chennai / Hosur"},
+    {"name": "Wheels India Limited", "domain": "wheelsindia.com", "sector": "Steel & Alloy Wheels", "primary_hub": "Padi Chennai / Sriperumbudur"},
+    {"name": "Brakes India Private Limited", "domain": "brakesindia.com", "sector": "Braking Systems & Ferrous Castings", "primary_hub": "Sholinghur / Padi Chennai"},
+    {"name": "Lucas-TVS Limited", "domain": "lucas-tvs.com", "sector": "Auto Electricals & Starter Motors", "primary_hub": "Padi Chennai / Rewari"},
+    {"name": "Sutlej Motors Limited", "domain": "sutlejbus.com", "sector": "Bus Body Building & Mobility", "primary_hub": "Jalandhar Punjab"},
+    {"name": "Force Motors Limited", "domain": "forcemotors.com", "sector": "Specialized Commercial Vehicles & Engines", "primary_hub": "Pithampur / Akurdi Pune"},
+    {"name": "Olectra Greentech Limited", "domain": "olectra.com", "sector": "Electric Buses & Composite Insulators", "primary_hub": "Cherlapally Hyderabad"},
+    {"name": "Greaves Cotton Limited", "domain": "greavescotton.com", "sector": "Engines & Clean Mobility Solutions", "primary_hub": "Ranipet / Aurangabad"},
+    {"name": "Federal-Mogul Goetze (India) Limited", "domain": "federalmogulgoetze.in", "sector": "Pistons & Piston Rings", "primary_hub": "Patiala / Bengaluru"},
+    {"name": "ZF Commercial Vehicle Control Systems India Limited", "domain": "zf.com", "sector": "Commercial Vehicle Braking & Stability", "primary_hub": "Ambattur Chennai / Mahindra World City"},
+    
+    # Electronics Manufacturing Services (EMS) & Consumer Durables
+    {"name": "V-Guard Industries Limited", "domain": "vguard.in", "sector": "Electrical Appliances & Cables", "primary_hub": "Kochi Kerala / Coimbatore"},
+    {"name": "Finolex Industries Limited", "domain": "finolexpipes.com", "sector": "PVC Pipes & Resin Manufacturing", "primary_hub": "Ratnagiri / Urse Pune / Masar"},
+    {"name": "PG Electroplast Limited", "domain": "pgel.in", "sector": "Plastic Moulding & PCB Assembly", "primary_hub": "Greater Noida / Ahmednagar"},
+    {"name": "Prince Pipes and Fittings Limited", "domain": "princepipes.com", "sector": "Polymer Piping Systems & Precision Moulds", "primary_hub": "Haridwar / Chennai / Athal"},
+    {"name": "Supreme Industries Limited", "domain": "supreme.co.in", "sector": "Advanced Plastic Products & Piping", "primary_hub": "Jalgaon / Gadegaon / Malanpur"},
+    {"name": "Optiemus Infracom Limited", "domain": "optiemus.com", "sector": "Mobile & IT Hardware Manufacturing", "primary_hub": "Noida Uttar Pradesh"},
+    {"name": "Epack Durable Limited", "domain": "epack.in", "sector": "RAC Manufacturing & Induction Moulding", "primary_hub": "Dehradun / Bhiwadi / Sri City"},
+    {"name": "IKIO Lighting Limited", "domain": "ikio.in", "sector": "LED Lighting Solutions & ABS Moulding", "primary_hub": "Noida Special Economic Zone"},
+    {"name": "Stove Kraft Limited", "domain": "stovekraft.com", "sector": "Kitchen Appliances & Cookware", "primary_hub": "Harohalli Ramanagara"},
+    {"name": "Butterfly Gandhimathi Appliances Limited", "domain": "butterflyindia.com", "sector": "Domestic Electrical Appliances", "primary_hub": "Navalur Chennai"},
+    
+    # Renewable Energy & Solar/Wind Equipment
+    {"name": "Orient Electric Limited", "domain": "orientelectric.com", "sector": "Electrical Switchgears & Lighting", "primary_hub": "Faridabad / Guwahati"},
+    {"name": "Inox Wind Limited", "domain": "inoxwind.com", "sector": "Wind Turbine Nacelles & Blades", "primary_hub": "Rohika Ahmedabad / Barwani"},
+    {"name": "Crompton Greaves Consumer Electricals Limited", "domain": "crompton.co.in", "sector": "Pumps & Consumer Electrical Machinery", "primary_hub": "Bethora Goa / Baddi"},
+    {"name": "Vikram Solar Limited", "domain": "vikramsolar.com", "sector": "Solar PV Cell & Module Manufacturing", "primary_hub": "Falta SEZ / Oragadam Chennai"},
+    {"name": "Bajaj Electricals Limited", "domain": "bajajelectricals.com", "sector": "Industrial Lighting & Power Transmission", "primary_hub": "Chakan Pune / Ranjangaon"},
+    {"name": "Websol Energy System Limited", "domain": "websol.energy", "sector": "Photovoltaic Crystalline Solar Cells", "primary_hub": "Falta SEZ West Bengal"},
+    {"name": "Astral Limited", "domain": "astralpipes.com", "sector": "CPVC Piping & Drainage Solutions", "primary_hub": "Santej Ahmedabad / Dholka"},
+    {"name": "HBL Power Systems Limited", "domain": "hbl.in", "sector": "Engineered Batteries & Train Collision Avoidance", "primary_hub": "Shamirpet Hyderabad / Viskahapatnam"},
+    {"name": "Servotech Power Systems Limited", "domain": "servotech.in", "sector": "EV Chargers & Solar Inverters", "primary_hub": "Kundli Sonipat Haryana"},
+    
+    # Specialty Chemicals & Materials
+    {"name": "Himadri Speciality Chemical Limited", "domain": "himadri.com", "sector": "Coal Tar Pitch & Carbon Materials", "primary_hub": "Mahistikry Hooghly / Sambalpur"},
+    {"name": "SRF Limited", "domain": "srf.com", "sector": "Fluorochemicals & Technical Textiles", "primary_hub": "Dahej Gujarat / Gwalior"},
+    {"name": "Tata Chemicals Limited", "domain": "tatachemicals.com", "sector": "Soda Ash & Specialty Silica", "primary_hub": "Mithapur Gujarat / Cuddalore"},
+    {"name": "Alkyl Amines Chemicals Limited", "domain": "alkylamines.com", "sector": "Aliphatic Amines & Derivatives", "primary_hub": "Kurkumbh MIDC / Patalganga"},
+    {"name": "Balaji Amines Limited", "domain": "balajiamines.com", "sector": "Specialty Methyl & Ethyl Amines", "primary_hub": "Solapur Maharashtra"},
+    {"name": "Neogen Chemicals Limited", "domain": "neogenchem.com", "sector": "Bromine & Lithium Specialty Compounds", "primary_hub": "Dahej SEZ / Karakhadi Vadodara"},
+    {"name": "Aether Industries Limited", "domain": "aether.co.in", "sector": "Advanced Intermediates & Fine Chemicals", "primary_hub": "Sachin GIDC Surat"},
+    {"name": "Tatva Chintan Pharma Chem Limited", "domain": "tatvachintan.com", "sector": "Phase Transfer Catalysts & Electrolyte Salts", "primary_hub": "Ankleshwar / Dahej"},
+    {"name": "Archean Chemical Industries Limited", "domain": "archeanchemicals.com", "sector": "Industrial Marine Chemicals & Bromine", "primary_hub": "Hajipir Kutch Gujarat"},
+    {"name": "Rossari Biotech Limited", "domain": "rossari.com", "sector": "Textile Specialty Chemicals & Polymers", "primary_hub": "Silvassa / Dahej"},
+    {"name": "Sudarshan Chemical Industries Limited", "domain": "sudarshan.com", "sector": "Organic & Inorganic Pigments", "primary_hub": "Rohad MIDC / Mahad"},
+    {"name": "NOCIL Limited", "domain": "nocil.com", "sector": "Rubber Processing Chemicals", "primary_hub": "Navi Mumbai / Dahej"},
+    
+    # Metals, Pipes & Advanced Metallurgy
+    {"name": "Tata Steel Limited", "domain": "tatasteel.com", "sector": "Flat & Long Steel Products", "primary_hub": "Jamshedpur / Kalinganagar"},
+    {"name": "JSW Steel Limited", "domain": "jswsteel.in", "sector": "Integrated Steel Manufacturing", "primary_hub": "Vijayanagar / Dolvi / Salem"},
+    {"name": "Jindal Steel & Power Limited", "domain": "jindalsteelpower.com", "sector": "Rail, Plate & Structural Steel", "primary_hub": "Angul Odisha / Raigarh"},
+    {"name": "Steel Authority of India Limited", "domain": "sail.co.in", "sector": "Special & Alloy Steels", "primary_hub": "Bhilai / Rourkela / Bokaro"},
+    {"name": "Hindalco Industries Limited", "domain": "hindalco.com", "sector": "Aluminium Smelting & Flat Rolled Products", "primary_hub": "Renukoot / Aditya Aluminium Lapanga"},
+    {"name": "Vedanta Limited", "domain": "vedantalimited.com", "sector": "Zinc, Lead, Silver & Aluminium", "primary_hub": "Jharsuguda / Chanderiya Chittorgarh"},
+    {"name": "National Aluminium Company Limited", "domain": "nalcoindia.com", "sector": "Bauxite Refining & Smelting", "primary_hub": "Damanjodi / Angul Odisha"},
+    {"name": "APL Apollo Tubes Limited", "domain": "aplapollo.com", "sector": "Structural Steel Pipes & Hollow Sections", "primary_hub": "Raipur / Sikandrabad / Hosur"},
+    {"name": "Welspun Corp Limited", "domain": "welspuncorp.com", "sector": "Large Diameter Submerged Arc Welded Pipes", "primary_hub": "Anjar Gujarat / Mandya"},
+    {"name": "Ratnamani Metals & Tubes Limited", "domain": "ratnamani.com", "sector": "Stainless Steel & Carbon Steel Tubes", "primary_hub": "Chhatral Gandhinagar / Kutch"},
+    {"name": "Jindal SAW Limited", "domain": "jindalsaw.com", "sector": "Seamless Tubes & Ductile Iron Pipes", "primary_hub": "Nashik / Samaghogha Kutch"},
+    {"name": "Maharashtra Seamless Limited", "domain": "jindalmsl.com", "sector": "Seamless Carbon & Alloy Steel Pipes", "primary_hub": "Nagothane Raigad / Narketpally"},
+    {"name": "Sunflag Iron and Steel Company Limited", "domain": "sunflagsteel.com", "sector": "Special Alloy Steels for Auto Components", "primary_hub": "Bhandara Maharashtra"},
+    {"name": "Kalyani Steels Limited", "domain": "kalyanisteels.com", "sector": "Forging Quality Alloy Steel Billets", "primary_hub": "Ginigera Koppal Karnataka"},
+    
+    # Pharma Formulations & Active Pharmaceutical Ingredients (APIs)
+    {"name": "Sun Pharmaceutical Industries Limited", "domain": "sunpharma.com", "sector": "Finished Dosage Formulations & APIs", "primary_hub": "Halol Gujarat / Dewas / Baddi"},
+    {"name": "Dr. Reddy's Laboratories Limited", "domain": "drreddys.com", "sector": "Generics & Biosimilar Formulations", "primary_hub": "Bachupally Hyderabad / Srikakulam"},
+    {"name": "Cipla Limited", "domain": "cipla.com", "sector": "Respiratory Inhalation & Sterile Injectables", "primary_hub": "Kurkumbh / Patalganga / Goa"},
+    {"name": "Lupin Limited", "domain": "lupin.com", "sector": "Solid Orals & Biotechnology Formulations", "primary_hub": "Pithampur / Mandideep / Tarapur"},
+    {"name": "Aurobindo Pharma Limited", "domain": "aurobindo.com", "sector": "Oral Solid Formulations & Sterile APIs", "primary_hub": "Jadcherla / Pashamylaram Hyderabad"},
+    {"name": "Mankind Pharma Limited", "domain": "mankindpharma.com", "sector": "Formulations & API Manufacturing", "primary_hub": "Paonta Sahib / Sikkim / Vizag"},
+    {"name": "Zydus Lifesciences Limited", "domain": "zyduslife.com", "sector": "Formulations, Vaccines & Biosimilars", "primary_hub": "Moraiya Ahmedabad / Vadodara"},
+    {"name": "Alkem Laboratories Limited", "domain": "alkemlabs.com", "sector": "Antibiotics & Finished Formulations", "primary_hub": "Daman / Baddi / Mandva"},
+    {"name": "Glenmark Pharmaceuticals Limited", "domain": "glenmarkpharma.com", "sector": "Dermatology & Inhalation Formulations", "primary_hub": "Baddi Himachal / Ankleshwar"},
+    {"name": "Biocon Limited", "domain": "biocon.com", "sector": "Biologics & Monoclonal Antibodies", "primary_hub": "Biocon Park Bengaluru"},
+    {"name": "Alembic Pharmaceuticals Limited", "domain": "alembicpharmaceuticals.com", "sector": "Formulations & Active Ingredients", "primary_hub": "Panelav Vadodara / Karkhadi"},
+    {"name": "Laurus Labs Limited", "domain": "lauruslabs.com", "sector": "Anti-Retroviral APIs & Finished Dosages", "primary_hub": "Parawada Visakhapatnam"},
+    {"name": "Granules India Limited", "domain": "granulesindia.com", "sector": "Paracetamol APIs & Finished Dosages", "primary_hub": "Gagillapur Hyderabad / Bonthapally"},
+    {"name": "Gland Pharma Limited", "domain": "glandpharma.com", "sector": "Sterile Injectables & Lyophilized Vials", "primary_hub": "Dundigal Hyderabad / Visakhapatnam"},
+    {"name": "Natco Pharma Limited", "domain": "natcopharma.co.in", "sector": "Oncology Formulations & Cytotoxic Injectables", "primary_hub": "Kothur Telangana / Manali Chennai"},
+    {"name": "JB Chemicals & Pharmaceuticals Limited", "domain": "jbpharma.com", "sector": "Oral Dosages & Lozenges", "primary_hub": "Panoli / Ankleshwar Gujarat"},
+    {"name": "Eris Lifesciences Limited", "domain": "eris.co.in", "sector": "Oral Solid Dosage Formulations", "primary_hub": "Guwahati Assam"},
+    {"name": "Ajanta Pharma Limited", "domain": "ajantapharma.com", "sector": "Ophthalmology & Dermatology Formulations", "primary_hub": "Paithan Aurangabad / Dahej"},
+    {"name": "IPCA Laboratories Limited", "domain": "ipca.com", "sector": "Active Pharmaceutical Ingredients & Formulations", "primary_hub": "Ratlam / Silvassa / Indore"},
+    {"name": "Suven Pharmaceuticals Limited", "domain": "suvenpharm.com", "sector": "Contract Development & Manufacturing (CDMO)", "primary_hub": "Suryapet / Pashamylaram Telangana"},
+]
+
+print(f"Total Batch 100 Companies Prepared: {len(BATCH_100_COMPANIES)}")

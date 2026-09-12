@@ -72,13 +72,77 @@ def classify_technical_scope(
     }
 
 
+PROHIBITED_ONGOING_PATTERNS = [
+    "historical article",
+    "old inauguration",
+    "old plant launch",
+    "generic company existence",
+    "archived announcement",
+    "past completion",
+]
+
+VALID_ONGOING_PATTERNS = [
+    "commissioning",
+    "production ramp",
+    "ramp up",
+    "ramp-up",
+    "hiring",
+    "capex milestone",
+    "program ramp",
+    "customer ramp",
+    "oem ramp",
+    "construction update",
+    "equipment installation",
+    "expansion phase",
+    "expansion",
+    "active project",
+    "under construction",
+    "commercial operation",
+    "commercial production",
+    "trial production",
+    "active execution",
+    "current milestone",
+    "active manufacturing",
+    "phase 2",
+    "phase ii",
+    "phase 3",
+    "phase iii",
+    "fy26",
+    "fy27",
+    "mou",
+    "capex",
+    "plant",
+    "new line",
+]
+
+
+def is_valid_ongoing_evidence(text: str) -> tuple[bool, str]:
+    """Validate ongoing activity evidence for RECENT and STALE triggers."""
+    if not text or not text.strip():
+        return False, "missing ongoing evidence"
+    t_lower = text.strip().lower()
+    for prohibited in PROHIBITED_ONGOING_PATTERNS:
+        if prohibited in t_lower:
+            return False, f"Prohibited invalid ongoing evidence: '{prohibited}'"
+    for valid in VALID_ONGOING_PATTERNS:
+        if valid in t_lower:
+            return True, f"Valid ongoing evidence matched: '{valid}'"
+    return False, "Ongoing evidence lacks verifiable progress or milestone indicator"
+
+
 def _trigger_passes(value: Any, now_dt: datetime | None = None) -> tuple[bool, str, dict[str, Any]]:
-    """Enforce trigger recency and trigger-to-facility alignment policies."""
+    """Enforce trigger recency and trigger-to-facility alignment policies.
+    
+    Recency Rules:
+    - 0-180 days: CURRENT (passes)
+    - 181-365 days: RECENT (passes ONLY when ongoing/current activity is independently proven)
+    - >365 days: STALE (fails unless explicit current ongoing evidence proves activity is still active)
+    """
     if not isinstance(value, Mapping):
         passed = _truth(value)
         return passed, ("evidence present" if passed else "missing or insufficient trigger evidence"), {}
 
-    now_dt = now_dt or datetime(2026, 9, 10, tzinfo=timezone.utc)
+    now_dt = now_dt or datetime.now(timezone.utc)
     trigger_date_str = str(value.get("trigger_date") or value.get("source_date") or value.get("date") or "").strip()
     ongoing_evidence = str(value.get("ongoing_activity_evidence") or value.get("continued_activity") or "").strip()
     future_commissioning = bool(value.get("future_commissioning") or value.get("completion_in_future"))
@@ -97,32 +161,54 @@ def _trigger_passes(value: Any, now_dt: datetime | None = None) -> tuple[bool, s
                 pass
 
     if recency_days is None:
-        recency_days = int(value.get("recency_days") or 0)
+        rec_val = value.get("recency_days")
+        if rec_val is not None:
+            try:
+                recency_days = int(rec_val)
+            except (ValueError, TypeError):
+                recency_days = 999
+        else:
+            recency_days = 999
+
+    # Validate ongoing evidence
+    has_prohibited = any(p in ongoing_evidence.lower() for p in PROHIBITED_ONGOING_PATTERNS) if ongoing_evidence else False
+    if has_prohibited:
+        has_ongoing = False
+        ongoing_reason = "Prohibited ongoing evidence pattern detected"
+    else:
+        has_valid_ongoing, ongoing_reason = is_valid_ongoing_evidence(ongoing_evidence)
+        has_ongoing = has_valid_ongoing or current_milestone or future_commissioning
+        if not has_valid_ongoing and (current_milestone or future_commissioning):
+            ongoing_reason = "Future commissioning or current milestone verified"
 
     # 1. Recency Policy:
     # 0 - 180 days: CURRENT
     # 181 - 365 days: RECENT (Requires ongoing activity evidence)
-    # > 365 days: STALE (Requires future commissioning or current milestone to pass)
-    if recency_days <= 180:
+    # > 365 days: STALE (Requires explicit current ongoing evidence proving active status)
+    if not trigger_date_str and value.get("recency_days") is None:
+        recency_status = "DATE_UNKNOWN"
+        passed = False
+        reason = "Trigger lacks verified publication or event date; unverified timing rejected"
+    elif recency_days <= 180:
         recency_status = "CURRENT"
         passed = True
         reason = f"Trigger is CURRENT ({recency_days} days old)"
     elif 181 <= recency_days <= 365:
         recency_status = "RECENT"
-        if ongoing_evidence or current_milestone or future_commissioning:
+        if has_ongoing:
             passed = True
-            reason = f"Trigger is RECENT ({recency_days} days old) with verified ongoing activity"
+            reason = f"Trigger is RECENT ({recency_days} days old) with verified ongoing activity ({ongoing_reason})"
         else:
             passed = False
-            reason = f"Trigger is RECENT ({recency_days} days old) but lacks required evidence of ongoing activity"
+            reason = f"Trigger is RECENT ({recency_days} days old) but lacks required evidence of ongoing activity ({ongoing_reason})"
     else:
         recency_status = "STALE"
-        if future_commissioning or ongoing_evidence or current_milestone:
+        if has_ongoing:
             passed = True
-            reason = f"Trigger is >365 days old ({recency_days} days) but multi-year execution is confirmed active"
+            reason = f"Trigger is >365 days old ({recency_days} days) but multi-year execution is confirmed active ({ongoing_reason})"
         else:
             passed = False
-            reason = f"Trigger is STALE (>365 days old, {recency_days} days) with no newer source or ongoing milestone proving activity"
+            reason = f"Trigger is STALE (>365 days old, {recency_days} days) with no newer source or ongoing milestone proving activity: {ongoing_reason}"
 
     # 2. Trigger-to-Facility linkage
     tf_conf = str(value.get("trigger_facility_confidence") or "").upper()
@@ -130,13 +216,19 @@ def _trigger_passes(value: Any, now_dt: datetime | None = None) -> tuple[bool, s
         passed = False
         reason = "Trigger-to-facility linkage is WEAK; corporate trigger is not proven to affect this specific facility"
 
+    ongoing_src = str(value.get("ongoing_evidence_source") or value.get("ongoing_source") or "")
+    ongoing_dt = str(value.get("ongoing_evidence_date") or value.get("ongoing_date") or "")
+
     metadata = {
         "trigger_date": trigger_date_str,
         "source_date": str(value.get("source_date") or trigger_date_str),
         "recency_days": recency_days,
         "recency_status": recency_status,
         "ongoing_activity_evidence": ongoing_evidence,
+        "ongoing_source": ongoing_src,
+        "ongoing_date": ongoing_dt,
         "recency_reason": reason,
+        "timing_pass": passed,
         "trigger_facility_confidence": tf_conf or "NOT_EVALUATED",
     }
     return passed, reason, metadata

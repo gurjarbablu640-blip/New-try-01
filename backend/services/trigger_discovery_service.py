@@ -178,28 +178,54 @@ DATE_PATTERNS = [
     # YYYY-MM-DD or YYYY/MM/DD
     r"\b(20[12]\d[-/]\d{2}[-/]\d{2})\b",
     # DD Month YYYY or Month DD, YYYY
-    r"\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+20[12]\d)\b",
+    r"\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*,?\s+20[12]\d)\b",
     r"\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+20[12]\d)\b",
     # Month YYYY
     r"\b((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+20[12]\d)\b",
+    # Relative: X days/weeks/months ago
+    r"\b(\d+\s+(?:days?|weeks?|months?|hours?)\s+ago)\b",
     # Bare Year: 2018-2027
     r"\b(20[12]\d)\b",
 ]
 
 
-def extract_event_date(text: str, title: str = "") -> Dict[str, Any]:
+def extract_event_date(text: str, title: str = "", now_dt: datetime | None = None) -> Dict[str, Any]:
     """Extract event publication/action date and compute recency status."""
+    from datetime import timedelta
     combined_text = f"{text} {title}".strip()
-    now_dt = datetime.now(timezone.utc)
+    now_dt = now_dt or datetime.now(timezone.utc)
     for pat in DATE_PATTERNS:
         m = re.search(pat, combined_text, re.IGNORECASE)
         if m:
             raw_date = m.group(1).strip()
-            # Attempt parsing
+            # Check relative date
+            m_rel = re.search(r"(\d+)\s+(day|week|month|hour)s?\s+ago", raw_date, re.IGNORECASE)
+            if m_rel:
+                val = int(m_rel.group(1))
+                unit = m_rel.group(2).lower()
+                if unit == "hour":
+                    dt = now_dt - timedelta(hours=val)
+                elif unit == "day":
+                    dt = now_dt - timedelta(days=val)
+                elif unit == "week":
+                    dt = now_dt - timedelta(weeks=val)
+                elif unit == "month":
+                    dt = now_dt - timedelta(days=val * 30)
+                recency_days = max(0, (now_dt - dt).days)
+                return {
+                    "event_date": dt.strftime("%Y-%m-%d"),
+                    "recency_days": recency_days,
+                    "ongoing_status": "CURRENT" if recency_days <= 180 else "RECENT",
+                    "recency_status": "CURRENT" if recency_days <= 180 else "RECENT",
+                    "has_date": True,
+                }
+
+            # Attempt parsing absolute date
             recency_days = 90  # Default if only year/month
-            for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d %b %Y", "%B %d, %Y", "%B %d %Y", "%B %Y", "%Y"):
+            clean_date_str = raw_date.replace(",", "")
+            for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d %b %Y", "%d %B %Y", "%B %d %Y", "%b %d %Y", "%B %Y", "%b %Y", "%Y"):
                 try:
-                    dt = datetime.strptime(raw_date[:len(fmt.replace("%Y", "xxxx").replace("%b", "xxx").replace("%B", "xxxxxxx"))], fmt).replace(tzinfo=timezone.utc)
+                    dt = datetime.strptime(clean_date_str, fmt).replace(tzinfo=timezone.utc)
                     recency_days = max(0, (now_dt - dt).days)
                     break
                 except (ValueError, Exception):
