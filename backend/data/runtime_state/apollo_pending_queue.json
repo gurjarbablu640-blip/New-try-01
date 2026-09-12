@@ -11,6 +11,8 @@
     "linkedin_url": "https://in.linkedin.com/in/atul-jain-13a97a21",
     "authority_class": "STRONG_PLANT_QUALITY_OWNER",
     "apollo_person_confidence": "HIGH",
+    "current_employment_verified": true,
+    "person_facility_relationship": "FACILITY_OWNER",
     "trigger_type": "PLANT_4TH_LINE_COMMISSIONING_AND_CAPACITY_EXPANSION",
     "trigger_date": "2026-07-30",
     "recency_days": 44,

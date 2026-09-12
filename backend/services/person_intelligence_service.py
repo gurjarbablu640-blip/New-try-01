@@ -25,6 +25,7 @@ Strict Tenets:
 from __future__ import annotations
 
 import logging
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -539,12 +540,145 @@ def extract_person_from_search_result(
     }
 
 
+def _normalize_person_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def generate_deepseek_person_queries(
+    company_name: str,
+    facility_name: str,
+    city: str,
+    commercial_trigger: str,
+    target_functions: List[str],
+    provider: Any,
+    max_queries: int = 3,
+) -> Dict[str, Any]:
+    """Generate up to three public-search queries; generated text is never evidence."""
+    request_payload = {
+        "company": company_name,
+        "facility": facility_name,
+        "city": city,
+        "commercial_trigger": commercial_trigger,
+        "target_functions": target_functions,
+        "max_queries": min(max(int(max_queries), 0), 3),
+    }
+    response = provider.complete(
+        system_prompt=(
+            "Generate targeted public-web search queries for a manufacturing decision maker. "
+            "Use only supplied facts. Queries are discovery instructions, never evidence. "
+            "Return JSON as {\"queries\": [\"...\"]} with at most three queries."
+        ),
+        messages=[{"role": "user", "content": json.dumps(request_payload)}],
+        response_format="json",
+        temperature=0.1,
+        max_tokens=300,
+    )
+    parsed = response.parse_json() or {}
+    raw_queries = parsed.get("queries") if isinstance(parsed, dict) else []
+    queries: List[str] = []
+    for raw_query in raw_queries if isinstance(raw_queries, list) else []:
+        query_value = raw_query.get("query") if isinstance(raw_query, dict) else raw_query
+        if not isinstance(query_value, str):
+            continue
+        query = query_value.strip()
+        if not query or len(query) > 300 or "\n" in query or query in queries:
+            continue
+        queries.append(query)
+        if len(queries) >= request_payload["max_queries"]:
+            break
+    return {
+        "queries": queries,
+        "usage": dict(response.usage or {}),
+        "provider": response.provider,
+        "model": response.model,
+    }
+
+
+def rank_candidates_with_deepseek(
+    company_name: str,
+    facility_name: str,
+    city: str,
+    commercial_trigger: str,
+    target_functions: List[str],
+    candidates: List[Dict[str, Any]],
+    provider: Any,
+) -> Dict[str, Any]:
+    """Batch-rank known candidates without changing deterministic truth fields."""
+    public_candidates = [
+        {
+            "name": candidate.get("name", ""),
+            "title": candidate.get("title", ""),
+            "source": candidate.get("source_url", ""),
+            "snippet": candidate.get("evidence_snippet", ""),
+            "source_date": candidate.get("source_date", ""),
+            "location": candidate.get("location") or candidate.get("facility", ""),
+        }
+        for candidate in candidates
+    ]
+    request_payload = {
+        "company": company_name,
+        "facility": facility_name,
+        "city": city,
+        "commercial_trigger": commercial_trigger,
+        "target_functions": target_functions,
+        "candidates": public_candidates,
+    }
+    response = provider.complete(
+        system_prompt=(
+            "Rank only the supplied person candidates for calibration-related commercial outreach. "
+            "Do not create people or facts. Treat missing current-employment or facility evidence as missing. "
+            "Return JSON with ranked_candidates; each item must include name, rank, employment_assessment, "
+            "facility_relationship, functional_alignment, authority_class, confidence, and reason."
+        ),
+        messages=[{"role": "user", "content": json.dumps(request_payload)}],
+        response_format="json",
+        temperature=0.1,
+        max_tokens=1200,
+    )
+    parsed = response.parse_json() or {}
+    ranked_items = parsed.get("ranked_candidates") if isinstance(parsed, dict) else []
+    assessments: Dict[str, Dict[str, Any]] = {}
+    for item in ranked_items if isinstance(ranked_items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        key = _normalize_person_name(str(item.get("name") or ""))
+        if key and key not in assessments:
+            assessments[key] = item
+
+    ranked_candidates: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        candidate_copy = dict(candidate)
+        assessment = assessments.get(_normalize_person_name(str(candidate.get("name") or "")))
+        if assessment:
+            candidate_copy["deepseek_assessment"] = assessment
+        ranked_candidates.append(candidate_copy)
+    def ranking_key(candidate: Dict[str, Any]) -> tuple[int, float]:
+        raw_rank = (candidate.get("deepseek_assessment") or {}).get("rank")
+        try:
+            rank = int(raw_rank)
+        except (TypeError, ValueError):
+            rank = 9999
+        return rank, -float(candidate.get("person_score") or 0)
+
+    ranked_candidates.sort(key=ranking_key)
+    return {
+        "candidates": ranked_candidates,
+        "usage": dict(response.usage or {}),
+        "provider": response.provider,
+        "model": response.model,
+    }
+
+
 def discover_and_rank_decision_makers(
     company_name: str,
     facility_name: str = "",
     city: str = "",
     search_router: Any = None,
     max_candidates: int = 5,
+    use_deepseek: bool = False,
+    ranking_provider: Any = None,
+    commercial_trigger: str = "",
+    target_functions: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Execute end-to-end multi-query person discovery and return Primary + Secondary candidates.
 
@@ -571,47 +705,100 @@ def discover_and_rank_decision_makers(
         "non_human_rejected": 0,
         "verified_employment_count": 0,
         "high_confidence_count": 0,
+        "hive_requests": 0,
+        "hive_input_tokens": 0,
+        "hive_output_tokens": 0,
+        "deepseek_queries_generated": 0,
     }
 
-    for q_obj in queries:
-        q = q_obj["query"]
-        telemetry["queries_run"] += 1
-        res = search_router.search(q, num_results=5)
-        items = res.get("results", [])
-        telemetry["results_returned"] += len(items)
+    def collect_candidates(query_objects: List[Dict[str, str]]) -> None:
+        for q_obj in query_objects:
+            q = q_obj["query"]
+            telemetry["queries_run"] += 1
+            res = search_router.search(q, num_results=5)
+            items = res.get("results", [])
+            telemetry["results_returned"] += len(items)
 
-        for item in items:
-            cand = extract_person_from_search_result(
-                item,
-                company_name=company_name,
-                facility_name=facility_name,
-                city=city,
+            for item in items:
+                cand = extract_person_from_search_result(
+                    item,
+                    company_name=company_name,
+                    facility_name=facility_name,
+                    city=city,
+                )
+                if not cand:
+                    continue
+
+                name_key = cand["name"].lower()
+                if name_key in seen_names:
+                    continue
+
+                seen_names.add(name_key)
+                all_candidates.append(cand)
+                telemetry["raw_candidates_extracted"] += 1
+
+                if cand["current_employment"] == "VERIFIED":
+                    telemetry["verified_employment_count"] += 1
+                if cand["person_confidence"] == "HIGH":
+                    telemetry["high_confidence_count"] += 1
+
+    collect_candidates(queries)
+
+    functions = target_functions or ["Plant Quality", "Metrology", "Plant Head"]
+    if use_deepseek:
+        if ranking_provider is None:
+            from services.llm_provider import get_provider
+            ranking_provider = get_provider("hive")
+        if not any(candidate.get("person_confidence") == "HIGH" for candidate in all_candidates):
+            try:
+                generated = generate_deepseek_person_queries(
+                    company_name=company_name,
+                    facility_name=facility_name,
+                    city=city,
+                    commercial_trigger=commercial_trigger,
+                    target_functions=functions,
+                    provider=ranking_provider,
+                    max_queries=3,
+                )
+                telemetry["hive_requests"] += 1
+                telemetry["hive_input_tokens"] += int(generated["usage"].get("input_tokens", 0) or 0)
+                telemetry["hive_output_tokens"] += int(generated["usage"].get("output_tokens", 0) or 0)
+                generated_queries = [
+                    {"query": query, "pass": "PASS_4_DEEPSEEK_QUERY", "target_role": "LLM_GENERATED"}
+                    for query in generated["queries"]
+                ]
+                telemetry["deepseek_queries_generated"] = len(generated_queries)
+                collect_candidates(generated_queries)
+            except Exception as exc:
+                telemetry["deepseek_query_error"] = type(exc).__name__
+
+        if all_candidates:
+            try:
+                ranked = rank_candidates_with_deepseek(
+                    company_name=company_name,
+                    facility_name=facility_name,
+                    city=city,
+                    commercial_trigger=commercial_trigger,
+                    target_functions=functions,
+                    candidates=all_candidates,
+                    provider=ranking_provider,
+                )
+                telemetry["hive_requests"] += 1
+                telemetry["hive_input_tokens"] += int(ranked["usage"].get("input_tokens", 0) or 0)
+                telemetry["hive_output_tokens"] += int(ranked["usage"].get("output_tokens", 0) or 0)
+                all_candidates = ranked["candidates"]
+                telemetry["deepseek_ranking_applied"] = True
+            except Exception as exc:
+                telemetry["deepseek_ranking_applied"] = False
+                telemetry["deepseek_ranking_error"] = type(exc).__name__
+
+    if not telemetry.get("deepseek_ranking_applied"):
+        all_candidates.sort(
+            key=lambda c: (
+                -c["person_score"],
+                AUTHORITY_HIERARCHY.index(c["authority_class"]) if c["authority_class"] in AUTHORITY_HIERARCHY else 99,
             )
-            if not cand:
-                continue
-
-            name_key = cand["name"].lower()
-            if name_key in seen_names:
-                continue
-
-            seen_names.add(name_key)
-            all_candidates.append(cand)
-            telemetry["raw_candidates_extracted"] += 1
-
-            if cand["current_employment"] == "VERIFIED":
-                telemetry["verified_employment_count"] += 1
-            if cand["person_confidence"] == "HIGH":
-                telemetry["high_confidence_count"] += 1
-
-    # Sort candidates by:
-    # 1. person_score (descending)
-    # 2. authority class rank
-    all_candidates.sort(
-        key=lambda c: (
-            -c["person_score"],
-            AUTHORITY_HIERARCHY.index(c["authority_class"]) if c["authority_class"] in AUTHORITY_HIERARCHY else 99,
         )
-    )
 
     primary = all_candidates[0] if all_candidates else None
     secondary = all_candidates[1] if len(all_candidates) > 1 else None

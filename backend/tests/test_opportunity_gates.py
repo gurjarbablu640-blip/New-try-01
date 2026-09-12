@@ -1,6 +1,17 @@
 import unittest
 
-from services.opportunity_gates import BLOCKED, HOT, READY_FOR_EMAIL, evaluate_opportunity_gates
+from services.opportunity_gates import (
+    BLOCKED,
+    HOT,
+    HOLD_LOW_SCORE,
+    P1_HOT,
+    P2_STRONG,
+    P3_QUALIFIED,
+    READY_FOR_EMAIL,
+    classify_icp_score,
+    evaluate_apollo_credit_gate,
+    evaluate_opportunity_gates,
+)
 
 
 def evidence(**overrides):
@@ -30,9 +41,12 @@ def evidence(**overrides):
         "correct_person": {
             "name": "Anil Patil",
             "employment_verified": True,
+            "current_employment": "VERIFIED",
             "facility_verified": True,
             "duties_verified": True,
             "facility_classification": "FACILITY_OWNER",
+            "authority_class": "FACILITY_OWNER",
+            "person_confidence": "HIGH",
         },
         "reachable_email": {
             "address": "quality@example.test",
@@ -55,6 +69,33 @@ class OpportunityGateTests(unittest.TestCase):
 
     def test_95_is_hot(self):
         self.assertEqual(evaluate_opportunity_gates(evidence(score=95))["status"], HOT)
+
+    def test_canonical_icp_bands(self):
+        self.assertEqual(classify_icp_score(95), P1_HOT)
+        self.assertEqual(classify_icp_score(90), P2_STRONG)
+        self.assertEqual(classify_icp_score(85), P3_QUALIFIED)
+        self.assertEqual(classify_icp_score(84.99), HOLD_LOW_SCORE)
+
+    def test_p3_with_all_person_gates_is_ready(self):
+        result = evaluate_opportunity_gates(evidence(score=85))
+        self.assertEqual(result["icp_band"], P3_QUALIFIED)
+        self.assertTrue(result["ready_for_email"])
+
+    def test_p3_without_high_person_confidence_is_not_sendable(self):
+        person = dict(evidence()["correct_person"])
+        person["person_confidence"] = "MEDIUM"
+        result = evaluate_opportunity_gates(evidence(score=85, correct_person=person))
+        self.assertFalse(result["ready_for_email"])
+        self.assertIn("HIGH is required", result["gates"]["correct_person"]["reason"])
+
+    def test_p3_verified_person_is_eligible_for_contact_enrichment(self):
+        enrichment_evidence = evidence(
+            score=85,
+            reachable_email={"address": "", "status": "not_found"},
+        )
+        result = evaluate_apollo_credit_gate(enrichment_evidence)
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["criteria"]["icp_score"]["band"], P3_QUALIFIED)
 
     def test_missing_gate_blocks(self):
         result = evaluate_opportunity_gates(evidence(timing=False))

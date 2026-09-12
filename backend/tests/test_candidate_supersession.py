@@ -75,6 +75,8 @@ class TestCandidateSupersession(unittest.TestCase):
                     "facility_verified": True,
                     "duties_verified": True,
                     "facility_classification": "FACILITY_OWNER",
+                    "authority_class": "FACILITY_OWNER",
+                    "person_confidence": "HIGH",
                 },
                 "reachable_email": {
                     "status": "verified",

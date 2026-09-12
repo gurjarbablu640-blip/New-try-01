@@ -204,8 +204,13 @@ class TestIntelligenceRefinements(unittest.TestCase):
                 "name": "Srinivasa Rao",
                 "facility_classification": "COMPANY_ONLY",
                 "facility_verified": False,
+                "employment_verified": True,
+                "duties_verified": True,
+                "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+                "person_confidence": "HIGH",
             },
             "reachable_email": {"status": "NOT_FOUND"},
+            "score": 85,
         }
         res = evaluate_apollo_credit_gate(evidence)
         self.assertFalse(res["apollo_recommended"])
@@ -219,7 +224,12 @@ class TestIntelligenceRefinements(unittest.TestCase):
                 "trigger_date": "2026-05-15",
                 "trigger_facility_confidence": "STRONG",
             },
-            "exact_facility": {"verified": True, "address": "Plot 1, Sector 3, IMT Manesar, Gurugram"},
+            "exact_facility": {
+                "verified": True,
+                "address": "Plot 1, Sector 3, IMT Manesar, Gurugram",
+                "address_precision": "FULL_ADDRESS",
+                "trigger_facility_confidence": "STRONG",
+            },
             "calibration_demand": {"verified": True},
             "technical_capability": {"verified": True},
             "timing": {"active_buying_window": True, "timing_evidence": "EV capacity expansion"},
@@ -229,12 +239,16 @@ class TestIntelligenceRefinements(unittest.TestCase):
                 "facility_classification": "FACILITY_OWNER",
                 "facility_verified": True,
                 "current_employment_verified": True,
+                "duties_verified": True,
+                "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+                "person_confidence": "HIGH",
             },
             "reachable_email": {
                 "status": "PUBLICLY_FOUND",
                 "address": "investor@unominda.com",
             },
             "phone": {"phone": "0124-2290427", "is_direct_mobile": False},
+            "score": 85,
         }
         res = evaluate_apollo_credit_gate(evidence)
         self.assertTrue(res["apollo_recommended"])
@@ -535,4 +549,3 @@ class TestIntelligenceRefinements(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

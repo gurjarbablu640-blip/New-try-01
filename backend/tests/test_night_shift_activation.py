@@ -109,11 +109,16 @@ class TestApolloNightModeAndQueue(unittest.TestCase):
             "facility": "Sanand Plant",
             "facility_city": "Sanand",
             "trigger_to_facility": "DIRECT",
+            "trigger_event_semantics_verified": True,
+            "timing_class": "CURRENT",
             "lead_score": 98.0,
             "primary_person": {
                 "name": "Rakesh Patel",
                 "title": "Plant Quality Head",
                 "authority_classification": "STRONG_PLANT_QUALITY_OWNER",
+                "person_confidence": "HIGH",
+                "current_employment": "VERIFIED",
+                "facility_relationship": "FACILITY_FUNCTION_OWNER",
             }
         }
 
@@ -143,11 +148,16 @@ class TestApolloNightModeAndQueue(unittest.TestCase):
             "facility": "Sanand Plant",
             "facility_city": "Sanand",
             "trigger_to_facility": "DIRECT",
+            "trigger_event_semantics_verified": True,
+            "timing_class": "CURRENT",
             "lead_score": 98.0,
             "primary_person": {
                 "name": "Rakesh Patel",
                 "title": "Plant Quality Head",
                 "authority_classification": "STRONG_PLANT_QUALITY_OWNER",
+                "person_confidence": "HIGH",
+                "current_employment": "VERIFIED",
+                "facility_relationship": "FACILITY_FUNCTION_OWNER",
             }
         }
         with patch("services.fast_contact_waterfall.get_setting_value", return_value=False):

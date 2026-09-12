@@ -139,6 +139,9 @@ VERIFIED_FREE_MODELS: dict[str, dict[str, Any]] = {
     "unorouter": {
         "glm-5.3-search:free": {"free_allowed": True, "structured": True, "context": 131072},
     },
+    "hive": {
+        "deepseek-ai/DeepSeek-V4.1-Flash": {"free_allowed": True, "structured": True, "context": 65536},
+    },
 }
 
 
@@ -213,6 +216,19 @@ def verify_provider_billing_mode(provider_name: str) -> tuple[bool, str]:
             return False, PROVIDER_ACCOUNT_MODE_PAID_BLOCKED
         return False, PROVIDER_BILLING_STATUS_UNVERIFIED
 
+    if p == "hive":
+        mode = str(get_setting_value("HIVE_ACCOUNT_MODE", "PROMO_CREDIT")).strip().upper()
+        if mode in ("FREE", "PROMO_CREDIT"):
+            # PROMO_CREDIT = funded by promotional credit; usage allowed while credit exists.
+            # HIVE_ALLOW_PAID_OVERAGE=false (default) ensures we never roll into billed usage.
+            allow_overage = str(get_setting_value("HIVE_ALLOW_PAID_OVERAGE", "false")).strip().lower()
+            if mode == "PROMO_CREDIT" and allow_overage == "true":
+                return True, "PROMO_CREDIT_OVERAGE_ALLOWED"  # not default; user must explicitly opt in
+            return True, mode
+        elif mode == "PAID":
+            return False, PROVIDER_ACCOUNT_MODE_PAID_BLOCKED
+        return False, PROVIDER_BILLING_STATUS_UNVERIFIED
+
     return False, "UNKNOWN_PROVIDER"
 
 
@@ -258,6 +274,9 @@ def is_cost_allowed(provider_name: str, model_name: str) -> bool:
             m in VERIFIED_FREE_MODELS.get("unorouter", {})
             or m == "glm-5.3-search:free"
         )
+
+    if p == "hive":
+        return m in VERIFIED_FREE_MODELS.get("hive", {})
 
     return False
 
@@ -1254,7 +1273,266 @@ class UnoRouterProvider(LLMProvider):
         cls._count_429 = 0
 
 
-# ── 6. OpenAI Provider (Retained for Manual Use; Blocked under Zero-Cost) ───
+# ── 6. Hive v3 Provider (DeepSeek-V4.1-Flash, Promotional Credit Tier) ──────
+class HiveProvider(LLMProvider):
+    """Hive AI v3 provider using DeepSeek-V4.1-Flash.
+
+    Account model: PROMO_CREDIT ($51 promotional credit; no paid overage by default).
+    Enforces:
+    - HIVE_API_KEY read exclusively from env; never printed, logged, or surfaced.
+    - HIVE_ACCOUNT_MODE=PROMO_CREDIT (or FREE) required under ZERO_COST_ONLY.
+    - HIVE_ALLOW_PAID_OVERAGE=false (default) prevents rolling into billable usage.
+    - Model must be in VERIFIED_FREE_MODELS['hive'].
+    - Uses streaming internally (required by model) and returns LLMResponse.
+    - Failure semantics are distinct per HTTP status:
+        401  AUTHENTICATION_FAILURE  — blocks this instance; key invalid
+        402  CREDIT_OR_BILLING_EXHAUSTED — blocks this instance; credit gone
+        403  PERMISSION_OR_MODEL_ACCESS_DENIED — model-scoped block only;
+             does NOT permanently block other Hive models unless account evidence.
+        429  RATE_LIMIT — retryable with Retry-After backoff
+        5xx  TRANSIENT_PROVIDER_FAILURE — retryable / failover eligible
+    """
+
+    _DEFAULT_MODEL = "deepseek-ai/DeepSeek-V4.1-Flash"
+    _DEFAULT_BASE_URL = "https://api-cdn.thehive.ai/api/v3"
+    _CONTROL_TOKENS = ("<|endoftext|>",)
+
+    @classmethod
+    def clean_output(cls, text: str) -> str:
+        """Remove only literal Hive/model control tokens observed in content deltas."""
+        cleaned = text
+        for token in cls._CONTROL_TOKENS:
+            cleaned = cleaned.replace(token, "")
+        return cleaned.strip()
+
+    # Per-instance model-level block flag (403 model scope only)
+    # _blocked = True means account-level block (401/402/405); all calls halt.
+    # _model_blocked = True means this specific model is denied (403).
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model_name: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
+        # Key is NEVER stored in any attribute that could surface in repr/logs.
+        self._api_key = (
+            api_key
+            or str(get_setting_value("HIVE_API_KEY", "")).strip()
+        )
+        self.model_name = (
+            model_name
+            or str(get_setting_value("HIVE_MODEL", self._DEFAULT_MODEL)).strip()
+            or self._DEFAULT_MODEL
+        )
+        self.base_url = (
+            base_url
+            or str(get_setting_value("HIVE_BASE_URL", self._DEFAULT_BASE_URL)).strip()
+            or self._DEFAULT_BASE_URL
+        ).rstrip("/")
+        self._status = LLM_STATUS_AVAILABLE
+        self._retry_after_until: Optional[float] = None
+        self._blocked: bool = False          # account-level block (401/402/405)
+        self._model_blocked: bool = False    # model-level block (403)
+
+    def __repr__(self) -> str:
+        # Guarantee the API key never appears in repr.
+        key_hint = "[SET]" if self._api_key else "[MISSING]"
+        return f"HiveProvider(model={self.model_name!r}, key={key_hint})"
+
+    def is_available(self) -> bool:
+        if self._blocked or self._model_blocked:
+            return False
+        if not is_cost_allowed("hive", self.model_name):
+            return False
+        if self._retry_after_until and time.time() < self._retry_after_until:
+            return False
+        return bool(
+            self._api_key
+            and not self._api_key.startswith("mock_")
+            and not self._api_key.startswith("YOUR_")
+            and len(self._api_key) > 10
+        )
+
+    def complete(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.2,
+        max_tokens: int = 1500,
+        response_format: Optional[str] = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        if self._blocked:
+            raise LLMProviderNotAllowedError(
+                "AUTHENTICATION_FAILURE or CREDIT_OR_BILLING_EXHAUSTED: "
+                "HiveProvider is account-blocked. Check HIVE_API_KEY validity and credit balance."
+            )
+        if self._model_blocked:
+            raise LLMProviderNotAllowedError(
+                f"PERMISSION_OR_MODEL_ACCESS_DENIED: Model '{self.model_name}' "
+                f"returned HTTP 403 from Hive. Try a different model."
+            )
+
+        account_verified, reason = verify_provider_billing_mode("hive")
+        if not account_verified:
+            raise LLMProviderNotAllowedError(
+                f"{reason}: Hive account mode must be FREE or PROMO_CREDIT under ZERO_COST_ONLY. "
+                f"Set HIVE_ACCOUNT_MODE=PROMO_CREDIT in .env."
+            )
+
+        if not is_cost_allowed("hive", self.model_name):
+            raise LLMProviderNotAllowedError(
+                f"LLM_PROVIDER_NOT_ALLOWED: Model '{self.model_name}' is not in the Hive verified-free allowlist."
+            )
+
+        if not self.is_available():
+            if self._retry_after_until and time.time() < self._retry_after_until:
+                raise QuotaExhaustedError(
+                    f"HiveProvider is rate-limited until {self._retry_after_until}"
+                )
+            raise RuntimeError("HiveProvider is not available (HIVE_API_KEY missing or unconfigured).")
+
+        # Build OpenAI-compatible message list.
+        formatted_messages: list[dict[str, str]] = []
+        if system_prompt:
+            formatted_messages.append({"role": "system", "content": system_prompt})
+        for msg in messages:
+            formatted_messages.append({"role": msg["role"], "content": msg["content"]})
+
+        payload: dict[str, Any] = {
+            "model": self.model_name,
+            "messages": formatted_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,  # Required for DeepSeek-V4.1-Flash on Hive v3
+        }
+
+        url = f"{self.base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+
+        timeout_seconds = int(get_setting_value("HIVE_TIMEOUT", 60))
+        start_time = time.time()
+
+        try:
+            resp = requests.post(
+                url, json=payload, headers=headers,
+                timeout=timeout_seconds, stream=True,
+            )
+            latency_ms = (time.time() - start_time) * 1000.0
+            quota_tracker.update_from_headers("hive", dict(resp.headers))
+
+            if resp.status_code == 200:
+                # Consume SSE stream and accumulate text + usage.
+                accumulated_text = ""
+                input_tokens = 0
+                output_tokens = 0
+                for raw_line in resp.iter_lines():
+                    if not raw_line:
+                        continue
+                    line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[len("data:"):].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except Exception:
+                        continue
+                    # Delta text
+                    choices = chunk.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        accumulated_text += delta.get("content") or ""
+                    # Usage (may appear in final chunk)
+                    usage = chunk.get("usage") or {}
+                    if usage:
+                        input_tokens = usage.get("prompt_tokens", input_tokens)
+                        output_tokens = usage.get("completion_tokens", output_tokens)
+
+                accumulated_text = self.clean_output(accumulated_text)
+
+                self._status = LLM_STATUS_AVAILABLE
+                self._retry_after_until = None
+                return LLMResponse(
+                    text=accumulated_text,
+                    usage={
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": input_tokens + output_tokens,
+                    },
+                    provider="hive",
+                    model=self.model_name,
+                    raw_response=None,
+                    status=LLM_STATUS_AVAILABLE,
+                    quota=quota_tracker.get_quota("hive"),
+                    latency_ms=latency_ms,
+                )
+
+            elif resp.status_code == 401:
+                # AUTHENTICATION_FAILURE: key is invalid at the account level.
+                # Block the entire provider instance — all subsequent calls will fail.
+                self._blocked = True
+                self._status = LLM_STATUS_UNAVAILABLE
+                raise RuntimeError(
+                    "AUTHENTICATION_FAILURE: Hive API key rejected (HTTP 401). "
+                    "Verify HIVE_API_KEY is correct and active."
+                )
+
+            elif resp.status_code in (402, 405):
+                # CREDIT_OR_BILLING_EXHAUSTED: promotional credit or balance exhausted.
+                # Block the entire provider instance — credit is gone.
+                self._blocked = True
+                self._status = LLM_PROVIDER_NOT_ALLOWED
+                raise LLMProviderNotAllowedError(
+                    f"CREDIT_OR_BILLING_EXHAUSTED: Hive returned HTTP {resp.status_code}. "
+                    "Promotional credit or account balance is exhausted. "
+                    "Provider BLOCKED under ZERO_COST_ONLY (HIVE_ALLOW_PAID_OVERAGE=false)."
+                )
+
+            elif resp.status_code == 403:
+                # PERMISSION_OR_MODEL_ACCESS_DENIED: this model/endpoint is not accessible.
+                # Block only this model — do NOT block the account for other models.
+                self._model_blocked = True
+                self._status = LLM_PROVIDER_NOT_ALLOWED
+                raise LLMProviderNotAllowedError(
+                    f"PERMISSION_OR_MODEL_ACCESS_DENIED: Hive HTTP 403 for model '{self.model_name}'. "
+                    f"This model instance is blocked but other Hive models may still be accessible."
+                )
+
+            elif resp.status_code == 429:
+                self._status = LLM_STATUS_RATE_LIMITED
+                retry_header = resp.headers.get("Retry-After")
+                retry_seconds = int(retry_header) if retry_header and str(retry_header).isdigit() else 60
+                self._retry_after_until = time.time() + retry_seconds
+                raise QuotaExhaustedError(
+                    f"Hive rate limit (HTTP 429): {resp.text[:200]}",
+                    retry_after=retry_seconds,
+                )
+
+            elif resp.status_code >= 500:
+                self._status = LLM_STATUS_UNAVAILABLE
+                raise RuntimeError(f"Hive server error (HTTP {resp.status_code}): {resp.text[:200]}")
+
+            else:
+                raise RuntimeError(f"Hive API error (HTTP {resp.status_code}): {resp.text[:200]}")
+
+        except requests.exceptions.Timeout:
+            self._status = LLM_STATUS_UNAVAILABLE
+            raise RuntimeError(f"Hive request timed out after {timeout_seconds}s")
+        except (QuotaExhaustedError, LLMProviderNotAllowedError):
+            raise
+        except Exception as exc:
+            if "Hive" in str(exc):
+                raise
+            raise RuntimeError(f"Hive connection error: {exc}")
+
+
+# ── 7. OpenAI Provider (Retained for Manual Use; Blocked under Zero-Cost) ───
 class OpenAIProvider(LLMProvider):
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
         if api_key is not None:
@@ -1647,6 +1925,7 @@ class ZeroCostRouter(FallbackLLMProvider):
                 GroqProvider(),
                 CloudflareProvider(),
                 OpenRouterProvider(),
+                HiveProvider(),  # Last-resort fallback; no tool-calling but handles generation
             ]
 
         # Web / Trigger / Source research: PREFER UnoRouter search route first
@@ -1657,16 +1936,19 @@ class ZeroCostRouter(FallbackLLMProvider):
                 GroqProvider(),
                 CloudflareProvider(),
                 OpenRouterProvider(),
+                HiveProvider(),
             ]
 
         # General reasoning & analysis: use verified zero-cost reasoning providers only.
         # UnoRouter (glm-5.3-search:free) is strictly excluded from general reasoning
         # to protect the 1-RPM quota, avoid ~35s latency, and keep search model focused.
+        # HiveProvider is included as last-resort fallback.
         return [
             GeminiProvider(),
             GroqProvider(),
             CloudflareProvider(),
             OpenRouterProvider(),
+            HiveProvider(),
         ]
 
     def complete(
@@ -1722,6 +2004,8 @@ def get_provider(provider_name: str) -> LLMProvider:
         return OpenRouterProvider()
     if name in ["cloudflare"]:
         return CloudflareProvider()
+    if name in ["hive"]:
+        return HiveProvider()
     if name in ["openai", "chatgpt"]:
         return OpenAIProvider()
     raise ValueError(f"Unknown LLM provider: {provider_name}")
@@ -1781,7 +2065,7 @@ def run_analyst_verifier_protocol(
     """Execute high-value reasoning protocol:
     1. Check cache first.
     2. Model A (Analyst) evaluates evidence -> structured output.
-    3. If ICP >= 90 and ambiguity exists, Model B (Verifier) audits conclusion.
+    3. If ICP >= 85 and ambiguity exists, Model B (Verifier) audits conclusion.
     4. If Analyst and Verifier disagree -> result becomes NEEDS_MORE_RESEARCH (never averaged).
     """
     if not evaluate_llm_task_allowed(task_type):
@@ -1880,7 +2164,7 @@ def run_analyst_verifier_protocol(
         or parsed.get("decision") in ("BORDERLINE", "AMBIGUOUS")
     )
 
-    if float(icp_score or 0) >= 90 and has_ambiguity:
+    if float(icp_score or 0) >= 85 and has_ambiguity:
         verifier = verifier_provider or GroqProvider()
         if not verifier.is_available() or verifier.__class__ == analyst.__class__:
             verifier = GroqProvider() if not isinstance(analyst, GroqProvider) else GeminiProvider()

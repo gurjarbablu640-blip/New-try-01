@@ -1,10 +1,22 @@
 """Application configuration — loaded from environment variables."""
 import os
-from pydantic_settings import BaseSettings
+from pathlib import Path
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+AUTHORITATIVE_ENV_FILE = PROJECT_ROOT / ".env"
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables / .env file."""
+
+    model_config = SettingsConfigDict(
+        env_file=str(AUTHORITATIVE_ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://salesoorja:salesoorja@localhost:5432/salesoorja"
@@ -54,6 +66,14 @@ class Settings(BaseSettings):
     UNOROUTER_MODEL: str = "glm-5.3-search:free"
     UNOROUTER_ACCOUNT_MODE: str = "FREE"  # Allowed: FREE, PAID, UNVERIFIED (Default: FREE for approved zero-cost routes)
     UNOROUTER_TIMEOUT: int = 90
+
+    # Hive Settings & Promotional-Credit Safety
+    HIVE_API_KEY: str = ""
+    HIVE_BASE_URL: str = "https://api-cdn.thehive.ai/api/v3"
+    HIVE_MODEL: str = "deepseek-ai/DeepSeek-V4.1-Flash"
+    HIVE_ACCOUNT_MODE: str = "UNVERIFIED"
+    HIVE_ALLOW_PAID_OVERAGE: bool = False
+    HIVE_TIMEOUT: int = 60
 
     # LLM Reasoning Cache
     LLM_CACHE_ENABLED: bool = True
@@ -107,10 +127,15 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
-
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug_mode(cls, value):
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"release", "production", "prod"}:
+                return False
+            if normalized in {"development", "dev"}:
+                return True
+        return value
 
 settings = Settings()

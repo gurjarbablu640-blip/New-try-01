@@ -61,6 +61,8 @@ class TestRediffBridge(unittest.TestCase):
                     "facility_verified": True,
                     "duties_verified": True,
                     "facility_classification": "FACILITY_OWNER",
+                    "authority_class": "FACILITY_OWNER",
+                    "person_confidence": "HIGH",
                 },
                 "reachable_email": {
                     "status": "verified",
@@ -220,5 +222,4 @@ class TestRediffBridge(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
 

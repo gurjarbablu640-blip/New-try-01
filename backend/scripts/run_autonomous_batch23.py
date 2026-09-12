@@ -124,6 +124,7 @@ def run_batch23() -> Dict[str, Any]:
         "apollo_ready": 0,
         "p1_queued": 0,
         "p2_queued": 0,
+        "p3_queued": 0,
         "searxng_queries": 0,
         "source_fetches": 0,
         "gemini_calls": 0,
@@ -468,7 +469,7 @@ def run_batch23() -> Dict[str, Any]:
 
         record["lead_score"] = lead_score
 
-        # Strict Policy: 95-100 = P1, 90-94 = P2, <90 = HOLD
+        # Strict Policy: 95-100 = P1, 90-94 = P2, 85-89 = P3, <85 = HOLD
         if lead_score >= 95.0:
             record["apollo_priority"] = "P1"
             record["status"] = "PENDING_APOLLO_RENEWAL"
@@ -483,10 +484,17 @@ def run_batch23() -> Dict[str, Any]:
             telemetry["apollo_ready"] += 1
             apollo_ready_pool.append(record)
             logger.info(f"  -> QUEUED AS P2 / STRONG (Score: {lead_score})")
+        elif lead_score >= 85.0:
+            record["apollo_priority"] = "P3"
+            record["status"] = "PENDING_APOLLO_RENEWAL"
+            telemetry["p3_queued"] += 1
+            telemetry["apollo_ready"] += 1
+            apollo_ready_pool.append(record)
+            logger.info(f"  -> QUEUED AS P3 / QUALIFIED (Score: {lead_score})")
         else:
             record["status"] = "HOLD_LOW_SCORE"
             record["apollo_priority"] = None
-            logger.info(f"  -> PLACED ON HOLD (Score: {lead_score} < 90)")
+            logger.info(f"  -> PLACED ON HOLD (Score: {lead_score} < 85)")
 
         results.append(record)
 
@@ -554,6 +562,7 @@ def run_batch23() -> Dict[str, Any]:
     logger.info(f"Apollo Ready (Total):         {telemetry['apollo_ready']}")
     logger.info(f"  P1 (95-100):                {telemetry['p1_queued']}")
     logger.info(f"  P2 (90-94):                 {telemetry['p2_queued']}")
+    logger.info(f"  P3 (85-89):                 {telemetry['p3_queued']}")
     logger.info(f"Trigger Source Precision:     {metrics['precision_percent']}")
     logger.info(f"False Positive Leakage:       {metrics['false_positive_leakage']}")
     logger.info(f"Audit results written to:     {out_file}")

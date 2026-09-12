@@ -428,6 +428,8 @@ class TestGateIndependence(unittest.TestCase):
                 "employment_verified": True,
                 "duties_verified": True,
                 "facility_classification": "FACILITY_OWNER",
+                "authority_class": "FACILITY_OWNER",
+                "person_confidence": "HIGH",
             },
             "reachable_email": {"address": "a@v.com", "status": "INFERRED", "mailbox_verified": False, "contact_confidence": "LOW"},
         }

@@ -31,6 +31,7 @@ def run_forensic_audit():
     
     p1_after = 0
     p2_after = 0
+    p3_after = 0
     held_after = 0
 
     for idx, r in enumerate(accepted_records, 1):
@@ -293,18 +294,22 @@ def run_forensic_audit():
             failure_reason = f"Source {source_quality} requires primary corroboration"
         elif person_conf != "HIGH":
             final_status = "HOLD_PERSON_NOT_VERIFIED"
-            failure_reason = f"No verified human decision-maker (Score {recomputed_score} < 90)"
-        elif recomputed_score < 90.0:
+            failure_reason = f"No verified human decision-maker (person confidence {person_conf})"
+        elif recomputed_score < 85.0:
             final_status = "HOLD_LOW_SCORE"
-            failure_reason = f"Deterministic score {recomputed_score} < 90"
+            failure_reason = f"Deterministic score {recomputed_score} < 85"
         elif recomputed_score >= 95.0:
             final_status = "P1_APOLLO_READY"
             failure_reason = None
             p1_after += 1
-        else:
+        elif recomputed_score >= 90.0:
             final_status = "P2_APOLLO_READY"
             failure_reason = None
             p2_after += 1
+        else:
+            final_status = "P3_APOLLO_READY"
+            failure_reason = None
+            p3_after += 1
 
         if final_status.startswith("HOLD"):
             held_after += 1
@@ -349,6 +354,7 @@ def run_forensic_audit():
         "source_weakness": source_weakness,
         "p1_after": p1_after,
         "p2_after": p2_after,
+        "p3_after": p3_after,
         "held_after": held_after,
         "forensic_records": forensic_records,
     }
@@ -370,6 +376,7 @@ def run_forensic_audit():
     print(f"Source Weaknesses:           {source_weakness}")
     print(f"P1 Leads Surviving:          {p1_after}")
     print(f"P2 Leads Surviving:          {p2_after}")
+    print(f"P3 Leads Surviving:          {p3_after}")
     print(f"Held Leads:                  {held_after}")
     print(f"Apollo Ready Candidates:     {len(data['apollo_ready_candidates'])}")
 

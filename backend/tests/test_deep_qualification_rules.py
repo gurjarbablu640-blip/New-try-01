@@ -68,6 +68,8 @@ class TestDeepQualificationRules(unittest.TestCase):
         candidate = {
             "functional_ownership_score": 0.85,
             "current_company_verified": True,
+            "facility_relationship": "STRONG",
+            "authority_class": "STRONG_PLANT_QUALITY_OWNER",
         }
         trigger_info = {"valid_trigger": True, "title": "Plant expansion announced"}
         contact_info = {"evidence_level": "INFERRED_PERSON_SPECIFIC", "mailbox_verified": False}
@@ -175,6 +177,8 @@ class TestDeepQualificationRules(unittest.TestCase):
         candidate = {
             "functional_ownership_score": 0.85,
             "current_company_verified": True,
+            "facility_relationship": "STRONG",
+            "authority_class": "STRONG_PLANT_QUALITY_OWNER",
         }
         facility_info = {"linkage_confidence": "STRONG", "facility_verified": True}
         trigger_info = {"valid_trigger": True, "title": "Facility Capex Expansion"}

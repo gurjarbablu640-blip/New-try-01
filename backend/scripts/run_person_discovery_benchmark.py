@@ -1,222 +1,187 @@
-"""Person Discovery Benchmark & Telemetry Runner.
-
-Measures independent rediscovery of known decision-makers WITHOUT answer leakage.
-Evaluates:
-- Discovery recall
-- Top-1 accuracy
-- Top-3 recall
-- Current employment verification
-- Facility relation verification
-- High confidence rate
-- Failure funnel classification
-- Search engine person yield
-"""
+"""Run the evaluation-only person benchmark with optional Hive/DeepSeek assistance."""
+import argparse
 import io
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
+from typing import Any, Dict, List
 
-# Ensure utf-8 output on Windows
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, BACKEND_DIR)
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from services.person_intelligence_service import (
-    AUTHORITY_HIERARCHY,
-    discover_and_rank_decision_makers,
-)
+from services.person_intelligence_service import discover_and_rank_decision_makers
 
 
-def run_benchmark():
-    benchmark_path = os.path.join(os.path.dirname(__file__), "..", "data", "benchmarks", "person_benchmark_cases.json")
-    with open(benchmark_path, "r", encoding="utf-8") as f:
-        cases = json.load(f)
+BENCHMARK_PATH = os.path.join(BACKEND_DIR, "data", "benchmarks", "person_benchmark_cases.json")
+BASELINE_PATH = os.path.join(BACKEND_DIR, "data", "runtime_state", "person_benchmark_results.json")
+ASSISTED_PATH = os.path.join(BACKEND_DIR, "data", "runtime_state", "person_benchmark_deepseek_results.json")
+MAX_HIVE_REQUESTS = 20
 
+
+def normalize_person_name(name: str) -> str:
+    tokens = re.findall(r"[a-z]+", (name or "").lower())
+    return " ".join(token for token in tokens if token not in {"dr", "mr", "mrs", "ms", "shri", "smt"})
+
+
+def find_expected_candidate(candidates: List[Dict[str, Any]], expected_person: str) -> tuple[int, Dict[str, Any] | None]:
+    expected_key = normalize_person_name(expected_person)
+    for index, candidate in enumerate(candidates):
+        if normalize_person_name(str(candidate.get("name") or "")) == expected_key:
+            return index, candidate
+    return -1, None
+
+
+def evaluate_cases(cases: List[Dict[str, Any]], *, use_deepseek: bool) -> Dict[str, Any]:
     metrics = {
-        "KNOWN_PERSON_CASES": len(cases),
+        "KNOWN_CASES": len(cases),
         "PERSON_FOUND": 0,
-        "CORRECT_PRIMARY_PERSON": 0,
-        "CORRECT_PERSON_IN_TOP3": 0,
+        "CORRECT_TOP1": 0,
+        "CORRECT_TOP3": 0,
         "CURRENT_EMPLOYMENT_VERIFIED": 0,
-        "FACILITY_RELATION_VERIFIED": 0,
+        "FACILITY_LINK_VERIFIED": 0,
         "HIGH_CONFIDENCE_PERSON": 0,
     }
-
-    failure_funnel = {
-        "NO_PERSON_SEARCH_RESULT": 0,
-        "NON_HUMAN_EXTRACTION": 0,
-        "OLD_EMPLOYMENT": 0,
-        "EMPLOYMENT_UNKNOWN": 0,
-        "FACILITY_UNKNOWN": 0,
-        "FUNCTION_UNKNOWN": 0,
-        "GROUP_ROLE_AMBIGUOUS": 0,
-        "TITLE_TOO_GENERIC": 0,
-        "SOURCE_TOO_OLD": 0,
-        "LINKEDIN_AUTH_REQUIRED": 0,
-        "SEARCH_ENGINE_NO_RESULT": 0,
-        "OTHER": 0,
-    }
-
-    engine_yield = {
-        "searxng_bing": {"queries": 0, "linkedin_hits": 0, "human_candidates": 0, "verified_employment": 0, "facility_linked": 0},
-        "searxng_duckduckgo": {"queries": 0, "linkedin_hits": 0, "human_candidates": 0, "verified_employment": 0, "facility_linked": 0},
-    }
-
+    usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0}
     case_results = []
 
-    print("=================================================")
-    print("SALESOORJA — PERSON DISCOVERY BENCHMARK")
-    print(f"Total Cases: {len(cases)}")
-    print("Zero Answer Leakage: Production receives only company, facility, city")
-    print("=================================================\n")
-
     for case in cases:
-        c_id = case["id"]
-        company = case["company"]
-        facility = case.get("facility", "")
-        city = case.get("city", "")
-        expected = case["expected_person"]
-        expected_title = case.get("expected_title", "")
-
-        print(f"--- Running {c_id}: {company} ({facility}, {city}) ---")
-
-        # Independent discovery: passes NO answer details
-        disc_res = discover_and_rank_decision_makers(
-            company_name=company,
-            facility_name=facility,
-            city=city,
+        discovery = discover_and_rank_decision_makers(
+            company_name=case["company"],
+            facility_name=case.get("facility", ""),
+            city=case.get("city", ""),
             max_candidates=5,
+            use_deepseek=use_deepseek,
+            commercial_trigger=case.get("function_context", ""),
+            target_functions=[case.get("function_context", "Plant Quality")],
         )
+        candidates = discovery.get("candidates", [])
+        telemetry = discovery.get("telemetry", {})
+        usage["requests"] += int(telemetry.get("hive_requests", 0) or 0)
+        usage["input_tokens"] += int(telemetry.get("hive_input_tokens", 0) or 0)
+        usage["output_tokens"] += int(telemetry.get("hive_output_tokens", 0) or 0)
+        if usage["requests"] > MAX_HIVE_REQUESTS:
+            raise RuntimeError(f"Hive benchmark request cap exceeded: {usage['requests']} > {MAX_HIVE_REQUESTS}")
 
-        candidates = disc_res.get("candidates", [])
-        primary = disc_res.get("primary_person")
-        telemetry = disc_res.get("telemetry", {})
-
-        # Record engine yield approximations
-        engine_yield["searxng_bing"]["queries"] += telemetry.get("queries_run", 0)
-        engine_yield["searxng_bing"]["linkedin_hits"] += telemetry.get("results_returned", 0)
-        engine_yield["searxng_bing"]["human_candidates"] += telemetry.get("raw_candidates_extracted", 0)
-        engine_yield["searxng_bing"]["verified_employment"] += telemetry.get("verified_employment_count", 0)
-
-        # Check expected match
-        exp_parts = expected.lower().split()
-        cand_names = [c["name"].lower() for c in candidates]
-
-        found = False
-        in_top3 = False
-        is_primary = False
-        matched_cand = None
-
-        for idx, c in enumerate(candidates):
-            c_name_lower = c["name"].lower()
-            if any(p in c_name_lower for p in exp_parts if len(p) > 3):
-                found = True
-                matched_cand = c
-                if idx < 3:
-                    in_top3 = True
-                if idx == 0:
-                    is_primary = True
-                break
-
-        if found:
+        rank_index, matched = find_expected_candidate(candidates, case["expected_person"])
+        if matched is not None:
             metrics["PERSON_FOUND"] += 1
-            if in_top3:
-                metrics["CORRECT_PERSON_IN_TOP3"] += 1
-            if is_primary:
-                metrics["CORRECT_PRIMARY_PERSON"] += 1
-
-            if matched_cand["current_employment"] == "VERIFIED":
+            if rank_index == 0:
+                metrics["CORRECT_TOP1"] += 1
+            if rank_index < 3:
+                metrics["CORRECT_TOP3"] += 1
+            if matched.get("current_employment") == "VERIFIED":
                 metrics["CURRENT_EMPLOYMENT_VERIFIED"] += 1
-                engine_yield["searxng_bing"]["facility_linked"] += 1
-
-            if matched_cand["facility_relationship"] in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER", "GROUP_FUNCTION_OWNER"):
-                metrics["FACILITY_RELATION_VERIFIED"] += 1
-
-            if matched_cand["person_confidence"] == "HIGH":
+            if matched.get("facility_relationship") in {"FACILITY_OWNER", "FACILITY_FUNCTION_OWNER", "GROUP_FUNCTION_OWNER"}:
+                metrics["FACILITY_LINK_VERIFIED"] += 1
+            if matched.get("person_confidence") == "HIGH":
                 metrics["HIGH_CONFIDENCE_PERSON"] += 1
 
-            print(f"  Result: FOUND (Rank #{candidates.index(matched_cand)+1})")
-            print(f"  Name: {matched_cand['name']} | Title: {matched_cand['title']}")
-            print(f"  Employment: {matched_cand['current_employment']} | Facility Rel: {matched_cand['facility_relationship']}")
-            print(f"  Score: {matched_cand['person_score']} | Confidence: {matched_cand['person_confidence']}")
-        else:
-            print("  Result: MISSED (Expected person not in extracted candidates)")
-            if not candidates:
-                failure_funnel["NO_PERSON_SEARCH_RESULT"] += 1
-            else:
-                top_cand = candidates[0]
-                if top_cand["current_employment"] == "UNKNOWN":
-                    failure_funnel["EMPLOYMENT_UNKNOWN"] += 1
-                elif top_cand["facility_relationship"] == "COMPANY_ONLY":
-                    failure_funnel["FACILITY_UNKNOWN"] += 1
-                elif top_cand["authority_class"] in ("GENERAL_QUALITY", "UNKNOWN"):
-                    failure_funnel["FUNCTION_UNKNOWN"] += 1
-                else:
-                    failure_funnel["OTHER"] += 1
-
         case_results.append({
-            "case_id": c_id,
-            "company": company,
-            "expected_person": expected,
-            "found": found,
-            "matched_candidate": matched_cand,
-            "top_candidate": primary,
+            "case_id": case["id"],
+            "company": case["company"],
+            "expected_person": case["expected_person"],
+            "found": matched is not None,
+            "rank": rank_index + 1 if matched is not None else None,
+            "matched_candidate": matched,
+            "top_candidate": candidates[0] if candidates else None,
             "total_candidates": len(candidates),
+            "telemetry": telemetry,
         })
 
-    # Calculate percentages
-    total = metrics["KNOWN_PERSON_CASES"]
-    p_recall = (metrics["PERSON_FOUND"] / total * 100) if total else 0.0
-    top1_acc = (metrics["CORRECT_PRIMARY_PERSON"] / total * 100) if total else 0.0
-    top3_rec = (metrics["CORRECT_PERSON_IN_TOP3"] / total * 100) if total else 0.0
-    hi_conf_rate = (metrics["HIGH_CONFIDENCE_PERSON"] / total * 100) if total else 0.0
+    total = metrics["KNOWN_CASES"]
+    metrics.update({
+        "PERSON_DISCOVERY_RECALL": metrics["PERSON_FOUND"] / total * 100 if total else 0.0,
+        "TOP1_ACCURACY": metrics["CORRECT_TOP1"] / total * 100 if total else 0.0,
+        "TOP3_RECALL": metrics["CORRECT_TOP3"] / total * 100 if total else 0.0,
+        "HIGH_CONFIDENCE_RATE": metrics["HIGH_CONFIDENCE_PERSON"] / total * 100 if total else 0.0,
+    })
+    return {"metrics": metrics, "hive_usage": usage, "case_results": case_results}
 
-    print("\n=================================================")
-    print("BENCHMARK SUMMARY METRICS")
-    print("=================================================")
-    print(f"KNOWN_PERSON_CASES:           {total}")
-    print(f"PERSON_FOUND:                 {metrics['PERSON_FOUND']}")
-    print(f"CORRECT_PRIMARY_PERSON:       {metrics['CORRECT_PRIMARY_PERSON']}")
-    print(f"CORRECT_PERSON_IN_TOP3:        {metrics['CORRECT_PERSON_IN_TOP3']}")
-    print(f"CURRENT_EMPLOYMENT_VERIFIED:  {metrics['CURRENT_EMPLOYMENT_VERIFIED']}")
-    print(f"FACILITY_RELATION_VERIFIED:   {metrics['FACILITY_RELATION_VERIFIED']}")
-    print(f"HIGH_CONFIDENCE_PERSON:       {metrics['HIGH_CONFIDENCE_PERSON']}")
-    print(f"PERSON_DISCOVERY_RECALL:      {p_recall:.1f}%")
-    print(f"TOP1_ACCURACY:                {top1_acc:.1f}%")
-    print(f"TOP3_RECALL:                  {top3_rec:.1f}%")
-    print(f"HIGH_CONFIDENCE_RATE:         {hi_conf_rate:.1f}%")
 
-    print("\n=================================================")
-    print("FAILURE FUNNEL")
-    print("=================================================")
-    for reason, count in failure_funnel.items():
-        print(f"  {reason}: {count}")
+def load_prior_baseline() -> Dict[str, Any] | None:
+    if not os.path.exists(BASELINE_PATH):
+        return None
+    with open(BASELINE_PATH, "r", encoding="utf-8") as baseline_file:
+        baseline = json.load(baseline_file)
+    metrics = baseline.get("metrics", {})
+    if "KNOWN_CASES" in metrics:
+        return baseline
 
-    print("\n=================================================")
-    print("SEARCH ENGINE PERSON YIELD")
-    print("=================================================")
-    for eng, data in engine_yield.items():
-        print(f"  {eng}: {data}")
+    case_results = baseline.get("case_results", [])
+    corrected = {
+        "KNOWN_CASES": len(case_results),
+        "PERSON_FOUND": 0,
+        "CORRECT_TOP1": 0,
+        "CORRECT_TOP3": 0,
+        "CURRENT_EMPLOYMENT_VERIFIED": 0,
+        "FACILITY_LINK_VERIFIED": 0,
+        "HIGH_CONFIDENCE_PERSON": 0,
+    }
+    for case in case_results:
+        matched = case.get("matched_candidate")
+        if not matched or normalize_person_name(matched.get("name", "")) != normalize_person_name(case.get("expected_person", "")):
+            continue
+        corrected["PERSON_FOUND"] += 1
+        rank = case.get("rank")
+        top_candidate = case.get("top_candidate") or {}
+        if rank is None and normalize_person_name(top_candidate.get("name", "")) == normalize_person_name(case.get("expected_person", "")):
+            rank = 1
+        if rank == 1:
+            corrected["CORRECT_TOP1"] += 1
+        if rank is not None and rank <= 3:
+            corrected["CORRECT_TOP3"] += 1
+        if matched.get("current_employment") == "VERIFIED":
+            corrected["CURRENT_EMPLOYMENT_VERIFIED"] += 1
+        if matched.get("facility_relationship") in {"FACILITY_OWNER", "FACILITY_FUNCTION_OWNER", "GROUP_FUNCTION_OWNER"}:
+            corrected["FACILITY_LINK_VERIFIED"] += 1
+        if matched.get("person_confidence") == "HIGH":
+            corrected["HIGH_CONFIDENCE_PERSON"] += 1
 
-    # Save benchmark report to runtime state
-    out_path = os.path.join(os.path.dirname(__file__), "..", "data", "runtime_state", "person_benchmark_results.json")
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "metrics": {
-                **metrics,
-                "PERSON_DISCOVERY_RECALL": p_recall,
-                "TOP1_ACCURACY": top1_acc,
-                "TOP3_RECALL": top3_rec,
-                "HIGH_CONFIDENCE_RATE": hi_conf_rate,
-            },
-            "failure_funnel": failure_funnel,
-            "engine_yield": engine_yield,
-            "case_results": case_results,
-        }, f, indent=2)
+    total = corrected["KNOWN_CASES"]
+    corrected.update({
+        "PERSON_DISCOVERY_RECALL": corrected["PERSON_FOUND"] / total * 100 if total else 0.0,
+        "TOP1_ACCURACY": corrected["CORRECT_TOP1"] / total * 100 if total else 0.0,
+        "TOP3_RECALL": corrected["CORRECT_TOP3"] / total * 100 if total else 0.0,
+        "HIGH_CONFIDENCE_RATE": corrected["HIGH_CONFIDENCE_PERSON"] / total * 100 if total else 0.0,
+    })
+    baseline["legacy_metrics"] = metrics
+    baseline["metrics"] = corrected
+    baseline["baseline_note"] = "Legacy substring name matching was corrected to exact normalized full-name matching."
+    return baseline
+
+
+def run_benchmark(mode: str = "deepseek") -> Dict[str, Any]:
+    with open(BENCHMARK_PATH, "r", encoding="utf-8") as benchmark_file:
+        cases = json.load(benchmark_file)
+
+    prior_baseline = load_prior_baseline()
+    result = evaluate_cases(cases, use_deepseek=mode == "deepseek")
+    result["timestamp"] = datetime.now(timezone.utc).isoformat()
+    result["mode"] = mode
+    if mode == "deepseek":
+        result["baseline"] = prior_baseline.get("metrics", {}) if prior_baseline else None
+        output_path = ASSISTED_PATH
+    else:
+        output_path = BASELINE_PATH
+
+    with open(output_path, "w", encoding="utf-8") as output_file:
+        json.dump(result, output_file, indent=2)
+
+    print(json.dumps({
+        "mode": mode,
+        "metrics": result["metrics"],
+        "hive_usage": result["hive_usage"],
+        "output_path": output_path,
+    }, indent=2))
+    return result
 
 
 if __name__ == "__main__":
-    run_benchmark()
+    if sys.platform == "win32":
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=("baseline", "deepseek"), default="deepseek")
+    arguments = parser.parse_args()
+    run_benchmark(arguments.mode)

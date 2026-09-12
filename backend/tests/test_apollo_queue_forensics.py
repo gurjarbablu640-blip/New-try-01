@@ -67,25 +67,24 @@ class TestApolloQueueForensics(unittest.TestCase):
         self.assertEqual(priority_90, "P2")
         self.assertEqual(status_90, STATUS_PENDING_APOLLO_RENEWAL)
 
-    def test_score_89_is_hold_low_score(self):
-        """score < 90 MUST be mapped to HOLD / HOLD_LOW_SCORE and rejected from active queue."""
+    def test_score_89_is_p3_and_84_99_is_hold(self):
+        """85 <= score < 90 maps to P3; only scores below 85 are held."""
         priority, status = compute_deterministic_priority_and_status(89.0)
-        self.assertEqual(priority, "HOLD")
-        self.assertEqual(status, STATUS_HOLD_LOW_SCORE)
+        self.assertEqual(priority, "P3")
+        self.assertEqual(status, STATUS_PENDING_APOLLO_RENEWAL)
 
-        # Policy checks: score 85 must not be P1, score 80 must not be P2
-        priority_85, _ = compute_deterministic_priority_and_status(85.0)
-        self.assertNotEqual(priority_85, "P1")
-        self.assertEqual(priority_85, "HOLD")
+        priority_85, status_85 = compute_deterministic_priority_and_status(85.0)
+        self.assertEqual(priority_85, "P3")
+        self.assertEqual(status_85, STATUS_PENDING_APOLLO_RENEWAL)
 
-        priority_80, _ = compute_deterministic_priority_and_status(80.0)
-        self.assertNotEqual(priority_80, "P2")
-        self.assertEqual(priority_80, "HOLD")
+        priority_hold, status_hold = compute_deterministic_priority_and_status(84.99)
+        self.assertEqual(priority_hold, "HOLD")
+        self.assertEqual(status_hold, STATUS_HOLD_LOW_SCORE)
 
         # Candidate with score 89 cannot enter Apollo enrichment queue
         candidate = {
             "company": "Test Co",
-            "lead_score": 89.0,
+            "lead_score": 84.99,
             "trigger_to_facility": "DIRECT",
             "primary_person": {
                 "name": "Arun Sharma",
@@ -243,6 +242,9 @@ class TestApolloQueueForensics(unittest.TestCase):
                 "trigger_event_semantics_verified": True,
                 "trigger_to_facility": "DIRECT",
                 "apollo_person_confidence": "HIGH",
+                "current_employment_verified": True,
+                "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+                "person_facility_relationship": "FACILITY_OWNER",
             },
             {
                 "company": "Low Score Co",
@@ -351,6 +353,9 @@ class TestApolloQueueForensics(unittest.TestCase):
                 "trigger_event_semantics_verified": True,
                 "trigger_to_facility": "DIRECT",
                 "apollo_person_confidence": "HIGH",
+                "current_employment_verified": True,
+                "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+                "person_facility_relationship": "FACILITY_OWNER",
                 "calculated_recency_days": 44,
                 "recency_data_inconsistency": False,
             }

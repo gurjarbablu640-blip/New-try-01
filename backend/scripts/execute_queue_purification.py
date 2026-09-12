@@ -176,11 +176,14 @@ def compute_lead_score_and_priority(
     # Required commercial mapping:
     # score >= 95 -> P1
     # 90 <= score < 95 -> P2
-    # score < 90 -> HOLD_LOW_SCORE / HOLD
+    # 85 <= score < 90 -> P3
+    # score < 85 -> HOLD_LOW_SCORE / HOLD
     if score >= 95.0:
         priority = "P1"
     elif score >= 90.0:
         priority = "P2"
+    elif score >= 85.0:
+        priority = "P3"
     else:
         priority = "HOLD"
 
@@ -215,6 +218,7 @@ def purify_queue():
         "PENDING_APOLLO_RENEWAL": 0,
         "P1": 0,
         "P2": 0,
+        "P3": 0,
         "HOLD_LOW_SCORE": 0,
         "HOLD_STALE_TRIGGER": 0,
         "HOLD_PERSON_REVIEW": 0,
@@ -325,10 +329,10 @@ def purify_queue():
             status = "HOLD_PERSON_REVIEW"
             priority = "HOLD"
             why = f"Held: person confidence is MEDIUM; {person_reason}"
-        elif score < 90.0:
+        elif score < 85.0:
             status = "HOLD_LOW_SCORE"
             priority = "HOLD"
-            why = f"Held: recalculated deterministic score {score} is below Apollo qualification threshold (>=90.0)"
+            why = f"Held: recalculated deterministic score {score} is below Apollo qualification threshold (>=85.0)"
         else:
             status = "PENDING_APOLLO_RENEWAL"
             why = f"Forensically qualified: Tier-A verified trigger, {calc_recency}d recency, {facility_linkage} facility link, {auth_class} ({person_conf} confidence)"
@@ -338,8 +342,10 @@ def purify_queue():
         if status == "PENDING_APOLLO_RENEWAL":
             if priority == "P1":
                 stats["P1"] += 1
-            else:
+            elif priority == "P2":
                 stats["P2"] += 1
+            else:
+                stats["P3"] += 1
 
         purified_item = {
             "company": comp,
@@ -395,6 +401,7 @@ def purify_queue():
     print(f"ACTIVE_APOLLO_READY:         {stats['PENDING_APOLLO_RENEWAL']}")
     print(f"  P1 (>=95):                 {stats['P1']}")
     print(f"  P2 (90–94):                {stats['P2']}")
+    print(f"  P3 (85–89):                {stats['P3']}")
     print(f"HOLD_LOW_SCORE:              {stats['HOLD_LOW_SCORE']}")
     print(f"HOLD_STALE_TRIGGER:          {stats['HOLD_STALE_TRIGGER']}")
     print(f"HOLD_PERSON_REVIEW:          {stats['HOLD_PERSON_REVIEW']}")

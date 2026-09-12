@@ -39,7 +39,7 @@ from config import settings
 from services.apollo_adapter import enrich_specific_person
 from services.contact_confidence import validate_person_name
 from services.email_validator import EMAIL_REGEX, validate_email_address
-from services.opportunity_gates import evaluate_opportunity_gates
+from services.opportunity_gates import ICP_OUTBOUND_MIN_SCORE, evaluate_opportunity_gates
 
 def is_valid_email(email: Optional[str]) -> bool:
     return bool(email and EMAIL_REGEX.match(email.strip()))
@@ -121,12 +121,15 @@ def compute_deterministic_priority_and_status(lead_score: float) -> Tuple[str, s
     """Strict Salesoorja commercial policy mapping:
     95-100 -> P1
     90-94 -> P2
-    <90 -> HOLD_LOW_SCORE
+    85-89 -> P3
+    <85 -> HOLD_LOW_SCORE
     """
     if lead_score >= 95.0:
         return "P1", STATUS_PENDING_APOLLO_RENEWAL
     elif lead_score >= 90.0:
         return "P2", STATUS_PENDING_APOLLO_RENEWAL
+    elif lead_score >= ICP_OUTBOUND_MIN_SCORE:
+        return "P3", STATUS_PENDING_APOLLO_RENEWAL
     else:
         return "HOLD", STATUS_HOLD_LOW_SCORE
 
@@ -212,7 +215,7 @@ class FastContactWaterfallService:
             return False, f"Person candidate name '{person_name}' is not a valid human person"
 
         # 3. Authority & commercial ownership
-        authority = person.get("authority_classification") or person.get("classification") or candidate_record.get("authority_class") or ""
+        authority = person.get("authority_class") or person.get("authority_classification") or person.get("classification") or candidate_record.get("authority_class") or ""
         if authority in ("COMPANY_ONLY", "UNKNOWN", "GENERAL_QUALITY"):
             return False, f"Person authority '{authority}' is insufficient for Apollo spend"
         if authority not in ALLOWED_STRONG_COMMERCIAL_CLASSES:
@@ -236,11 +239,10 @@ class FastContactWaterfallService:
         if origin and origin not in ("AUTOMATED_PIPELINE",):
             return False, f"Queue origin '{origin}' is invalid; only AUTOMATED_PIPELINE may enter Apollo queue"
 
-        # 6. Lead score threshold (score < 90 cannot enter Apollo queue)
-        if "lead_score" in candidate_record:
-            score = float(candidate_record.get("lead_score", 0) or 0)
-            if score < 90.0:
-                return False, f"Lead score {score} is below Apollo qualification threshold (>=90.0 required)"
+        # 6. Lead score threshold
+        score = float(candidate_record.get("lead_score", 0) or 0)
+        if score < ICP_OUTBOUND_MIN_SCORE:
+            return False, f"Lead score {score} is below Apollo qualification threshold (>={ICP_OUTBOUND_MIN_SCORE:.1f} required)"
 
         # 7. Trigger source & event semantics gate (if trigger source provided)
         trigger_url = candidate_record.get("trigger_source") or candidate_record.get("trigger_url") or ""
@@ -254,6 +256,46 @@ class FastContactWaterfallService:
         recency_diff = candidate_record.get("recency_diff")
         if recency_diff is not None and abs(recency_diff) > 2:
             return False, f"Recency data inconsistency detected: difference {recency_diff}d > 2d"
+
+        person_confidence = str(
+            person.get("person_confidence")
+            or person.get("apollo_person_confidence")
+            or candidate_record.get("apollo_person_confidence")
+            or ""
+        ).upper()
+        if person_confidence != "HIGH":
+            return False, f"Person confidence is {person_confidence or 'UNKNOWN'}; HIGH is required before Apollo enrichment"
+
+        employment_verified = bool(
+            person.get("employment_verified")
+            or person.get("current_employment_verified")
+            or str(person.get("current_employment") or "").upper() == "VERIFIED"
+            or candidate_record.get("current_employment_verified")
+        )
+        if not employment_verified:
+            return False, "Current employment is not verified; Apollo cannot discover or repair person identity"
+
+        person_facility = str(
+            person.get("facility_relationship")
+            or person.get("facility_classification")
+            or candidate_record.get("person_facility_relationship")
+            or ""
+        ).upper()
+        if person_facility not in {
+            "DIRECT",
+            "STRONG",
+            "FACILITY_OWNER",
+            "FACILITY_FUNCTION_OWNER",
+            "GROUP_FUNCTION_OWNER",
+        }:
+            return False, f"Person-to-facility relationship is {person_facility or 'UNKNOWN'}; DIRECT or source-backed STRONG ownership is required"
+
+        if candidate_record.get("trigger_event_semantics_verified") is not True:
+            return False, "Trigger/timing evidence has not passed deterministic verification"
+
+        timing_class = str(candidate_record.get("timing_class") or "").upper()
+        if timing_class not in {"CURRENT", "RECENT"}:
+            return False, f"Timing class is {timing_class or 'UNKNOWN'}; a current qualified buying window is required"
 
         return True, "All upstream gates passed; lead is eligible for Apollo enrichment"
 
@@ -380,7 +422,7 @@ class FastContactWaterfallService:
         # Phase 18: Apollo Night Mode Check (Subscription expired today; user renewal tomorrow)
         live_lookup_enabled = bool(get_setting_value("APOLLO_ENABLED_FOR_LIVE_LOOKUP", APOLLO_ENABLED_FOR_LIVE_LOOKUP))
         if not live_lookup_enabled:
-            authority = person.get("authority_classification") or person.get("classification") or candidate_record.get("authority_class") or ""
+            authority = person.get("authority_class") or person.get("authority_classification") or person.get("classification") or candidate_record.get("authority_class") or ""
             score = float(candidate_record.get("lead_score", 0) or 0)
             priority, queue_status = compute_deterministic_priority_and_status(score)
 
@@ -394,9 +436,7 @@ class FastContactWaterfallService:
             recency_incon = bool(candidate_record.get("recency_data_inconsistency", False) or (recency_diff and abs(recency_diff) > 2))
 
             origin = candidate_record.get("queue_origin") or "AUTOMATED_PIPELINE"
-            person_conf = candidate_record.get("apollo_person_confidence")
-            if not person_conf:
-                person_conf = "HIGH" if authority in ALLOWED_STRONG_COMMERCIAL_CLASSES else "MEDIUM"
+            person_conf = person.get("person_confidence") or person.get("apollo_person_confidence") or candidate_record.get("apollo_person_confidence")
 
             queue_item = {
                 "company": company,
@@ -410,6 +450,13 @@ class FastContactWaterfallService:
                 "linkedin_url": person.get("linkedin_url") or "",
                 "authority_class": authority,
                 "apollo_person_confidence": person_conf,
+                "current_employment_verified": bool(
+                    person.get("employment_verified")
+                    or person.get("current_employment_verified")
+                    or str(person.get("current_employment") or "").upper() == "VERIFIED"
+                    or candidate_record.get("current_employment_verified")
+                ),
+                "person_facility_relationship": person.get("facility_relationship") or person.get("facility_classification") or candidate_record.get("person_facility_relationship") or "",
                 "trigger_type": candidate_record.get("trigger_type") or candidate_record.get("event") or "",
                 "trigger_date": t_date_str,
                 "recency_days": stored_recency,
@@ -584,8 +631,8 @@ class FastContactWaterfallService:
         Strictly enforces Phase 10 Safety:
         Only processes records where:
         - status == STATUS_PENDING_APOLLO_RENEWAL
-        - lead_score >= 90.0
-        - lookup_priority in ('P1', 'P2')
+        - lead_score >= 85.0
+        - lookup_priority in ('P1', 'P2', 'P3')
         - queue_origin == 'AUTOMATED_PIPELINE'
         - trigger evidence valid (trigger_event_semantics_verified is True)
         - facility valid (trigger_to_facility in ('DIRECT', 'STRONG'))
@@ -603,6 +650,9 @@ class FastContactWaterfallService:
             trig_verified = bool(item.get("trigger_event_semantics_verified", False))
             fac_linkage = str(item.get("trigger_to_facility", "")).upper()
             person_conf = item.get("apollo_person_confidence")
+            employment_verified = bool(item.get("current_employment_verified"))
+            authority = str(item.get("authority_class") or "").upper()
+            person_facility = str(item.get("person_facility_relationship") or "").upper()
             recency = item.get("calculated_recency_days")
             if recency is None:
                 recency = item.get("recency_days")
@@ -611,12 +661,15 @@ class FastContactWaterfallService:
 
             if (
                 status == STATUS_PENDING_APOLLO_RENEWAL
-                and score >= 90.0
-                and priority in ("P1", "P2")
+                and score >= ICP_OUTBOUND_MIN_SCORE
+                and priority in ("P1", "P2", "P3")
                 and origin == "AUTOMATED_PIPELINE"
                 and trig_verified
                 and fac_linkage in ("DIRECT", "STRONG")
                 and person_conf == "HIGH"
+                and employment_verified
+                and authority in ALLOWED_STRONG_COMMERCIAL_CLASSES
+                and person_facility in {"DIRECT", "STRONG", "FACILITY_OWNER", "FACILITY_FUNCTION_OWNER", "GROUP_FUNCTION_OWNER"}
                 and not recency_inconsistent
                 and (recency is not None and (recency <= 180 or (recency <= 365 and item.get("ongoing_source"))))
             ):

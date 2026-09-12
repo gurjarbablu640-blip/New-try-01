@@ -65,10 +65,13 @@ def base_evidence(**overrides):
             "is_buying_window_active": True,
         },
         "correct_person": {
+            "name": "Anil Patil",
             "employment_verified": True,
             "duties_verified": True,
             "facility_verified": True,
             "facility_classification": "FACILITY_OWNER",
+            "authority_class": "FACILITY_OWNER",
+            "person_confidence": "HIGH",
         },
         "reachable_email": {
             "address": "head.qa@example.com",
@@ -275,10 +278,13 @@ class TightenedEvidenceGatesTests(unittest.TestCase):
         """Company-wide person with no facility evidence -> facility ownership must not be invented."""
         ev = base_evidence(
             correct_person={
+                "name": "Anil Patil",
                 "employment_verified": True,
                 "duties_verified": True,
                 "facility_verified": False,
                 "facility_classification": "COMPANY_ONLY",
+                "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+                "person_confidence": "HIGH",
             }
         )
         res = evaluate_opportunity_gates(ev, production=True)
@@ -290,11 +296,14 @@ class TightenedEvidenceGatesTests(unittest.TestCase):
         """Confirmed group functional owner -> may pass if evidence clearly establishes responsibility."""
         ev = base_evidence(
             correct_person={
+                "name": "Anil Patil",
                 "employment_verified": True,
                 "duties_verified": True,
                 "facility_verified": False,
                 "facility_classification": "GROUP_FUNCTION_OWNER",
                 "group_ownership_verified": True,
+                "authority_class": "GROUP_FUNCTION_OWNER",
+                "person_confidence": "HIGH",
             }
         )
         res = evaluate_opportunity_gates(ev, production=True)
@@ -436,4 +445,3 @@ class TightenedEvidenceGatesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

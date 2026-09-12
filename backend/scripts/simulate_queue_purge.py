@@ -284,12 +284,12 @@ def audit_all():
         elif person_conf == "MEDIUM":
             final_status = "HOLD_PERSON_REVIEW"
             final_priority = "HOLD"
-        elif new_score < 90.0:
+        elif new_score < 85.0:
             final_status = "HOLD_LOW_SCORE"
             final_priority = "HOLD"
         else:
             final_status = "PENDING_APOLLO_RENEWAL"
-            final_priority = "P1" if new_score >= 95.0 else "P2"
+            final_priority = "P1" if new_score >= 95.0 else ("P2" if new_score >= 90.0 else "P3")
 
         status_counts[final_status] = status_counts.get(final_status, 0) + 1
 

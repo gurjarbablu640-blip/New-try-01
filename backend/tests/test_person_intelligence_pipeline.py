@@ -16,6 +16,7 @@ import inspect
 import json
 import os
 import unittest
+from unittest.mock import MagicMock
 
 from services.person_intelligence_service import (
     classify_authority_class,
@@ -24,8 +25,11 @@ from services.person_intelligence_service import (
     compute_deterministic_person_score,
     extract_person_from_search_result,
     generate_person_search_queries,
+    generate_deepseek_person_queries,
     is_human_person_candidate,
+    rank_candidates_with_deepseek,
 )
+from services.llm_provider import LLMResponse
 
 
 class PersonIntelligencePipelineTests(unittest.TestCase):
@@ -150,6 +154,68 @@ class PersonIntelligencePipelineTests(unittest.TestCase):
         )
         self.assertEqual(conf, "LOW")
         self.assertLess(score, 70.0)
+
+    def test_deepseek_ranking_cannot_override_missing_evidence(self):
+        candidates = [{
+            "name": "Arun Sharma",
+            "title": "Quality Head",
+            "current_employment": "UNKNOWN",
+            "facility_relationship": "COMPANY_ONLY",
+            "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+            "person_score": 45.0,
+            "person_confidence": "LOW",
+            "source_url": "https://example.com/profile",
+            "evidence_snippet": "Quality profile with no current facility evidence",
+        }]
+        provider = MagicMock()
+        provider.complete.return_value = LLMResponse(
+            text=json.dumps({"ranked_candidates": [{
+                "name": "Arun Sharma",
+                "rank": 1,
+                "employment_assessment": "VERIFIED",
+                "facility_relationship": "DIRECT",
+                "functional_alignment": "STRONG",
+                "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+                "confidence": 0.99,
+                "reason": "Model assertion",
+            }]}),
+            usage={"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+            provider="hive",
+            model="deepseek-ai/DeepSeek-V4.1-Flash",
+        )
+        result = rank_candidates_with_deepseek(
+            company_name="Example Manufacturing",
+            facility_name="Pune Plant",
+            city="Pune",
+            commercial_trigger="Plant expansion",
+            target_functions=["Plant Quality"],
+            candidates=candidates,
+            provider=provider,
+        )
+        ranked = result["candidates"][0]
+        self.assertEqual(ranked["current_employment"], "UNKNOWN")
+        self.assertEqual(ranked["facility_relationship"], "COMPANY_ONLY")
+        self.assertEqual(ranked["person_confidence"], "LOW")
+
+    def test_deepseek_query_generation_is_bounded_and_has_no_expected_answer_field(self):
+        provider = MagicMock()
+        provider.complete.return_value = LLMResponse(
+            text=json.dumps({"queries": ["q1", "q2", "q3", "q4"]}),
+            provider="hive",
+            model="deepseek-ai/DeepSeek-V4.1-Flash",
+        )
+        result = generate_deepseek_person_queries(
+            company_name="Example Manufacturing",
+            facility_name="Pune Plant",
+            city="Pune",
+            commercial_trigger="Plant expansion",
+            target_functions=["Plant Quality"],
+            provider=provider,
+        )
+        self.assertEqual(result["queries"], ["q1", "q2", "q3"])
+        prompt = provider.complete.call_args.kwargs["messages"][0]["content"]
+        self.assertNotIn("expected_person", prompt)
+        self.assertNotIn("expected_title", prompt)
 
     def test_benchmark_zero_answer_leakage(self):
         """generate_person_search_queries must not accept or leak expected person names."""

@@ -158,8 +158,8 @@ def candidate_payload(candidate):
     from urllib.parse import urlparse
     evidence = candidate.evidence_sources or []
     import tldextract
-    extractor = tldextract.TLDExtract(suffix_list_urls=())
-    domains = {extractor(urlparse(item.get('url', '')).hostname or '').registered_domain
+    extractor = tldextract.TLDExtract(cache_dir=None, suffix_list_urls=())
+    domains = {extractor(urlparse(item.get('url', '')).hostname or '').top_domain_under_public_suffix
                for item in evidence
                if item.get('url', '').startswith(('https://', 'http://'))
                and 'mock' not in json.dumps(item).lower()}

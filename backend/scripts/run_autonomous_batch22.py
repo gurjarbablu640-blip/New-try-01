@@ -439,12 +439,12 @@ def run_batch22() -> Dict[str, Any]:
             base_score += 5.0
 
         lead_score = min(100.0, base_score)
-        priority = "P1" if lead_score >= 95.0 else ("P2" if lead_score >= 90.0 else "HOLD")
+        priority = "P1" if lead_score >= 95.0 else ("P2" if lead_score >= 90.0 else ("P3" if lead_score >= 85.0 else "HOLD"))
 
         record["lead_score"] = lead_score
         record["apollo_priority"] = priority
 
-        if lead_score >= 90.0 and priority in ("P1", "P2"):
+        if lead_score >= 85.0 and priority in ("P1", "P2", "P3"):
             record["status"] = "ACCEPTED"
             candidate_payload = {
                 "account_id": f"acc_{idx}_{int(time.time())}",

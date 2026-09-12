@@ -49,7 +49,7 @@ SCORE_WEIGHTS = {
 }
 
 # Minimum score threshold for Apollo enrichment
-APOLLO_ELIGIBLE_THRESHOLD = 0.55
+APOLLO_ELIGIBLE_THRESHOLD = 0.85
 CANDIDATE_THRESHOLD = 0.30
 
 # ── Persona → Titles Mapping ───────────────────────────────────────────
@@ -738,7 +738,7 @@ def verify_person_candidate(
     - Evidence Quality: 0.15 weight
 
     Thresholds:
-    - Composite >= 0.55: PERSON_PUBLICLY_VERIFIED
+    - Composite >= 0.85: PERSON_PUBLICLY_VERIFIED
     - Composite >= 0.30: PERSON_CANDIDATE
     - Composite < 0.30: PERSON_REJECTED
     """
@@ -871,7 +871,8 @@ def is_apollo_eligible_lead(
     Guarantees paid Apollo credits are NEVER consumed unless:
     1. Industrial trigger is verified & current.
     2. Facility linkage is DIRECT or corroborated STRONG (never AMBIGUOUS or WEAK).
-    3. Person candidate has verified current employment & relevant role (composite >= 0.60).
+    3. Person candidate has HIGH confidence, verified current employment, relevant authority,
+       and a source-backed facility relationship.
     4. Free public contact research was performed, and contact remains unverified.
     """
     # 1. Trigger Check
@@ -888,8 +889,31 @@ def is_apollo_eligible_lead(
     # 3. Person Check
     person_score = float(candidate.get("composite_score") or candidate.get("score") or candidate.get("functional_ownership_score") or 0.0)
     norm_score = person_score / 100.0 if person_score > 1.0 else person_score
-    if norm_score < 0.60:
-        return False, f"Candidate score {norm_score:.2f} is below Apollo minimum threshold (0.60)"
+    if norm_score < APOLLO_ELIGIBLE_THRESHOLD:
+        return False, f"Candidate score {norm_score:.2f} is below Apollo HIGH-confidence threshold ({APOLLO_ELIGIBLE_THRESHOLD:.2f})"
+
+    employment_verified = bool(
+        candidate.get("current_company_verified")
+        or candidate.get("employment_verified")
+        or candidate.get("current_employment_verified")
+        or str(candidate.get("current_employment") or "").upper() == "VERIFIED"
+    )
+    if not employment_verified:
+        return False, "Candidate current employment is not verified"
+
+    person_facility = str(candidate.get("facility_relationship") or candidate.get("person_facility_relationship") or "").upper()
+    if person_facility not in {"DIRECT", "STRONG", "FACILITY_OWNER", "FACILITY_FUNCTION_OWNER", "GROUP_FUNCTION_OWNER"}:
+        return False, f"Candidate person-to-facility relationship is {person_facility or 'UNKNOWN'}"
+
+    authority = str(candidate.get("authority_class") or candidate.get("authority_classification") or "").upper()
+    if authority not in {
+        "DIRECT_CALIBRATION_OWNER",
+        "METROLOGY_OWNER",
+        "STRONG_PLANT_QUALITY_OWNER",
+        "FACILITY_OWNER",
+        "GROUP_FUNCTION_OWNER",
+    }:
+        return False, f"Candidate authority is {authority or 'UNKNOWN'}; responsible-person ownership is not verified"
 
     # 4. Contact Check (Free research exhausted)
     if contact_info:

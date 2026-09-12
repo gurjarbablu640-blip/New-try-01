@@ -204,7 +204,16 @@ class TestFastContactWaterfallAndApollo(unittest.TestCase):
         valid_lead = {
             "company": "Maruti Suzuki",
             "trigger_to_facility": "STRONG",
-            "primary_person": {"name": "Sunil Sharma", "authority_classification": "STRONG_PLANT_QUALITY_OWNER"},
+            "trigger_event_semantics_verified": True,
+            "timing_class": "CURRENT",
+            "lead_score": 85.0,
+            "primary_person": {
+                "name": "Sunil Sharma",
+                "authority_classification": "STRONG_PLANT_QUALITY_OWNER",
+                "person_confidence": "HIGH",
+                "current_employment": "VERIFIED",
+                "facility_relationship": "FACILITY_FUNCTION_OWNER",
+            },
         }
         eligible, reason = self.service.is_apollo_eligible(valid_lead)
         self.assertTrue(eligible)
@@ -254,6 +263,9 @@ class TestOpportunityGatesWithNewAuthority(unittest.TestCase):
                 "employment_verified": True,
                 "duties_verified": True,
                 "classification": "STRONG_PLANT_QUALITY_OWNER",
+                "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+                "person_confidence": "HIGH",
+                "facility_relationship": "FACILITY_FUNCTION_OWNER",
             },
             "technical_capability": {"verified": True},
             "timing": {"actionable": True},

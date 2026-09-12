@@ -66,8 +66,8 @@ def main():
                         u = trig.get("url") or trig.get("source_url") or ""
                         lead_score = r.get("lead_score", 0)
                         status = r.get("status", "")
-                        # A trigger was valid if candidate scored >= 90 or entered queue
-                        is_val = (status in ("APOLLO_STAGED", "PENDING_APOLLO_RENEWAL")) and lead_score >= 90
+                        # A trigger was valid if candidate scored >= 85 and entered the qualified queue
+                        is_val = (status in ("APOLLO_STAGED", "PENDING_APOLLO_RENEWAL")) and lead_score >= 85
                         if u:
                             record_domain(u, is_val)
         except Exception as e:

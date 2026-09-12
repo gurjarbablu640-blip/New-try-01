@@ -21,6 +21,31 @@ GATE_NAMES = (
 READY_FOR_EMAIL = "READY_FOR_EMAIL"
 HOT = "HOT"
 BLOCKED = "BLOCKED"
+P1_HOT = "P1_HOT"
+P2_STRONG = "P2_STRONG"
+P3_QUALIFIED = "P3_QUALIFIED"
+HOLD_LOW_SCORE = "HOLD_LOW_SCORE"
+ICP_OUTBOUND_MIN_SCORE = 85.0
+
+ALLOWED_PERSON_AUTHORITY_CLASSES = {
+    "DIRECT_CALIBRATION_OWNER",
+    "METROLOGY_OWNER",
+    "STRONG_PLANT_QUALITY_OWNER",
+    "FACILITY_OWNER",
+    "GROUP_FUNCTION_OWNER",
+}
+
+
+def classify_icp_score(score: float) -> str:
+    """Map an ICP score to the canonical outbound qualification band."""
+    numeric_score = float(score or 0)
+    if numeric_score >= 95.0:
+        return P1_HOT
+    if numeric_score >= 90.0:
+        return P2_STRONG
+    if numeric_score >= ICP_OUTBOUND_MIN_SCORE:
+        return P3_QUALIFIED
+    return HOLD_LOW_SCORE
 
 from services.oorja_capability_service import (
     CONFIRMED_NABL_SCOPE,
@@ -377,13 +402,18 @@ def _person_passes(value: Any) -> tuple[bool, str, dict[str, Any]]:
         val_res = validate_person_name(name)
         val_status = val_res["person_name_validation"]
 
-    if val_status == "INVALID_ROLE_TEXT":
+    if val_status not in {"VALID", "PROBABLE"}:
         return False, f"Person candidate name '{name}' is invalid role or functional text (INVALID_ROLE_TEXT)", {
-            "person_name_validation": "INVALID_ROLE_TEXT",
+            "person_name_validation": val_status or "INVALID_ROLE_TEXT",
             "candidate_name": name,
         }
 
-    emp = _truth(value.get("employment_verified"))
+    employment_status = str(value.get("current_employment") or value.get("employment_status") or "").upper()
+    emp = (
+        _truth(value.get("employment_verified"))
+        or _truth(value.get("current_employment_verified"))
+        or employment_status == "VERIFIED"
+    )
     duties = _truth(value.get("duties_verified"))
     if not (emp and duties):
         missing = []
@@ -395,12 +425,11 @@ def _person_passes(value: Any) -> tuple[bool, str, dict[str, Any]]:
             "person_name_validation": val_status or "UNKNOWN",
         }
 
-    # Person-to-facility linkage classification:
-    # FACILITY_OWNER, GROUP_FUNCTION_OWNER, FUNCTIONALLY_RELEVANT, COMPANY_ONLY, UNKNOWN
     classification = str(
         value.get("facility_classification")
         or value.get("classification")
         or value.get("person_facility_classification")
+        or value.get("facility_relationship")
         or ""
     ).upper()
 
@@ -411,6 +440,36 @@ def _person_passes(value: Any) -> tuple[bool, str, dict[str, Any]]:
             classification = "GROUP_FUNCTION_OWNER"
         else:
             classification = "COMPANY_ONLY"
+
+    confidence = str(value.get("person_confidence") or value.get("apollo_person_confidence") or "").upper()
+    if confidence != "HIGH":
+        return False, f"Person confidence is {confidence or 'UNKNOWN'}; HIGH is required", {
+            "classification": classification,
+            "person_confidence": confidence or "UNKNOWN",
+            "person_name_validation": val_status,
+        }
+
+    authority = str(
+        value.get("authority_class")
+        or value.get("authority_classification")
+        or value.get("commercial_authority_class")
+        or ""
+    ).upper()
+    if not authority and classification in ALLOWED_PERSON_AUTHORITY_CLASSES:
+        authority = classification
+    if not authority and classification == "FACILITY_FUNCTION_OWNER":
+        from services.person_intelligence_service import classify_authority_class
+        authority = classify_authority_class(
+            str(value.get("title") or value.get("designation") or ""),
+            str(value.get("evidence_snippet") or value.get("authority_evidence") or ""),
+        )
+    if authority not in ALLOWED_PERSON_AUTHORITY_CLASSES:
+        return False, f"Person authority '{authority or 'UNKNOWN'}' is not commercially sufficient", {
+            "classification": classification,
+            "authority_class": authority or "UNKNOWN",
+            "person_confidence": confidence,
+            "person_name_validation": val_status,
+        }
 
     if classification == "COMPANY_ONLY":
         return False, "Person has company-level title only; plant facility ownership is not proven", {
@@ -434,14 +493,26 @@ def _person_passes(value: Any) -> tuple[bool, str, dict[str, Any]]:
         }
     elif classification in (
         "FACILITY_OWNER",
+        "FACILITY_FUNCTION_OWNER",
         "GROUP_FUNCTION_OWNER",
+        "DIRECT",
+        "STRONG",
         "DIRECT_CALIBRATION_OWNER",
         "METROLOGY_OWNER",
         "STRONG_PLANT_QUALITY_OWNER",
     ):
+        if classification == "GROUP_FUNCTION_OWNER" and not _truth(value.get("group_ownership_verified")):
+            return False, "Group function ownership is not source-verified", {
+                "classification": classification,
+                "authority_class": authority,
+                "person_confidence": confidence,
+                "person_name_validation": val_status,
+            }
         return True, f"Person verified as {classification}", {
             "classification": classification,
-            "person_name_validation": val_status or "VALID",
+            "authority_class": authority,
+            "person_confidence": confidence,
+            "person_name_validation": val_status,
         }
     elif classification == "GENERAL_QUALITY":
         return False, "Generic Quality Engineer at unknown site (GENERAL_QUALITY / HOLD)", {
@@ -748,14 +819,15 @@ def evaluate_opportunity_gates(evidence: Mapping[str, Any], *, production: bool 
 
     score = float(evidence.get("score") or evidence.get("icp_score") or 0)
     all_passed = all(g.passed for g in results)
-    ready = all_passed and score >= 90 and not blocked
+    icp_band = classify_icp_score(score)
+    ready = all_passed and score >= ICP_OUTBOUND_MIN_SCORE and not blocked
     status = HOT if ready and score >= 95 else READY_FOR_EMAIL if ready else BLOCKED
     if blocked:
         reason = f"Synthetic, mock, demo, or test evidence (provenance: {provenance}) cannot qualify a production opportunity"
     elif not all_passed:
         reason = "Required opportunity gate(s) failed: " + ", ".join(g.name for g in results if not g.passed)
-    elif score < 90:
-        reason = f"Score ({score:g}) is below production readiness threshold (90)"
+    elif score < ICP_OUTBOUND_MIN_SCORE:
+        reason = f"Score ({score:g}) is below production readiness threshold ({ICP_OUTBOUND_MIN_SCORE:g})"
     else:
         reason = "All seven evidence gates passed"
 
@@ -764,6 +836,7 @@ def evaluate_opportunity_gates(evidence: Mapping[str, Any], *, production: bool 
         "ready_for_email": ready,
         "hot": status == HOT,
         "score": score,
+        "icp_band": icp_band,
         "provenance": provenance,
         "reason": reason,
         "gates": gate_details,
@@ -888,7 +961,15 @@ def evaluate_apollo_credit_gate(evidence: Mapping[str, Any]) -> dict[str, Any]:
         "reason": f"Candidate '{candidate_name}' is {name_val_status}" if human_pass else f"Candidate name '{candidate_name}' is {name_val_status} (not a real human name)",
     }
 
-    # G. Person facility classification
+    # G. Person verification, facility relationship, confidence, and authority
+    person_pass, person_reason, person_meta = _person_passes(person_dict)
+    criteria["verified_responsible_person"] = {
+        "passed": person_pass,
+        "reason": person_reason,
+        **person_meta,
+    }
+
+    # H. Person facility classification
     person_class = str(
         person_dict.get("facility_classification")
         or person_dict.get("classification")
@@ -904,7 +985,16 @@ def evaluate_apollo_credit_gate(evidence: Mapping[str, Any]) -> dict[str, Any]:
     if person_class in {"COMPANY_ONLY", "UNKNOWN", "INVALID_ROLE_TEXT"}:
         class_pass = False
         class_reason = f"Person classification '{person_class}' cannot trigger Apollo (requires plant or group authority)"
-    elif person_class in {"FACILITY_OWNER", "GROUP_FUNCTION_OWNER"}:
+    elif person_class in {
+        "FACILITY_OWNER",
+        "FACILITY_FUNCTION_OWNER",
+        "GROUP_FUNCTION_OWNER",
+        "DIRECT_CALIBRATION_OWNER",
+        "METROLOGY_OWNER",
+        "STRONG_PLANT_QUALITY_OWNER",
+        "DIRECT",
+        "STRONG",
+    }:
         class_pass = True
         class_reason = f"Person is verified as {person_class}"
     elif person_class == "FUNCTIONALLY_RELEVANT":
@@ -922,7 +1012,16 @@ def evaluate_apollo_credit_gate(evidence: Mapping[str, Any]) -> dict[str, Any]:
         "reason": class_reason,
     }
 
-    # H. Missing direct contact info
+    score = float(evidence.get("score") or evidence.get("icp_score") or 0)
+    score_pass = score >= ICP_OUTBOUND_MIN_SCORE
+    criteria["icp_score"] = {
+        "passed": score_pass,
+        "score": score,
+        "band": classify_icp_score(score),
+        "reason": f"ICP score {score:g} meets enrichment threshold" if score_pass else f"ICP score {score:g} is below {ICP_OUTBOUND_MIN_SCORE:g}",
+    }
+
+    # I. Missing direct contact info
     email_val = _evidence_value(evidence, "reachable_email")
     email_dict = email_val if isinstance(email_val, Mapping) else {}
     curr_addr = str(email_dict.get("address") or email_dict.get("email") or "").strip()
@@ -945,7 +1044,7 @@ def evaluate_apollo_credit_gate(evidence: Mapping[str, Any]) -> dict[str, Any]:
 
     all_passed = (
         trig_pass and tf_pass and fac_pass and cap_pass and timing_pass
-        and human_pass and class_pass and needs_contact
+        and human_pass and person_pass and class_pass and score_pass and needs_contact
     )
 
     if all_passed:
@@ -954,7 +1053,7 @@ def evaluate_apollo_credit_gate(evidence: Mapping[str, Any]) -> dict[str, Any]:
     else:
         status = "NOT_QUALIFIED"
         failed = [k for k, v in criteria.items() if not v["passed"]]
-        failed_reasons = [criteria[k]["reason"] for k in failed[:2]]
+        failed_reasons = [criteria[k]["reason"] for k in failed]
         reason = f"Apollo gate blocked ({', '.join(failed)}): {'; '.join(failed_reasons)}"
 
     return {
