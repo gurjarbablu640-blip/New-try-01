@@ -25,7 +25,7 @@ def compile_morning_report_data():
 
     # Queue stats
     active_queue = [q for q in queue if q.get("status") == "PENDING_APOLLO_RENEWAL"]
-    held_queue = [q for q in queue if q.get("status") == "HOLD_STALE_TRIGGER"]
+    held_queue = [q for q in queue if str(q.get("status", "")).startswith("HOLD")]
     p1_count = sum(1 for q in active_queue if q.get("lookup_priority") == "P1")
     p2_count = sum(1 for q in active_queue if q.get("lookup_priority") == "P2")
 
@@ -42,10 +42,11 @@ def compile_morning_report_data():
         t_class = item.get("timing_class")
         if t_class in recency_summary:
             recency_summary[t_class] += 1
-        if item.get("status") == "HOLD_STALE_TRIGGER":
+        if str(item.get("status", "")).startswith("HOLD"):
             recency_summary["stale_rejected"] += 1
         if t_class == "RECENT" and item.get("ongoing_source"):
             recency_summary["recent_with_ongoing_proof"] += 1
+
 
     report_payload = {
         "timestamp": datetime.now(timezone.utc).isoformat(),

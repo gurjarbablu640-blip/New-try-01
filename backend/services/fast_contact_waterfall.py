@@ -75,6 +75,60 @@ APOLLO_ENABLED_FOR_LIVE_LOOKUP = False
 # Status classifications
 STATUS_DEFERRED_APOLLO_SUBSCRIPTION_INACTIVE = "DEFERRED_APOLLO_SUBSCRIPTION_INACTIVE"
 STATUS_PENDING_APOLLO_RENEWAL = "PENDING_APOLLO_RENEWAL"
+STATUS_HOLD_STALE_TRIGGER = "HOLD_STALE_TRIGGER"
+STATUS_HOLD_LOW_SCORE = "HOLD_LOW_SCORE"
+STATUS_HOLD_PERSON_REVIEW = "HOLD_PERSON_REVIEW"
+STATUS_HOLD_WRONG_PERSON = "HOLD_WRONG_PERSON"
+STATUS_HOLD_TRIGGER_INVALID = "HOLD_TRIGGER_INVALID"
+STATUS_HOLD_FACILITY_AMBIGUOUS = "HOLD_FACILITY_AMBIGUOUS"
+STATUS_HOLD_QUEUE_PROVENANCE_INVALID = "HOLD_QUEUE_PROVENANCE_INVALID"
+STATUS_HOLD_RECENCY_INCONSISTENT = "HOLD_RECENCY_INCONSISTENT"
+
+ALLOWED_STRONG_COMMERCIAL_CLASSES = {
+    "DIRECT_CALIBRATION_OWNER",
+    "METROLOGY_OWNER",
+    "STRONG_PLANT_QUALITY_OWNER",
+    "FACILITY_OWNER",
+    "GROUP_FUNCTION_OWNER",
+}
+
+STOCK_PATTERNS = [
+    "/stockpricequote/",
+    "/stocks/companyid-",
+    "stock-share-price",
+    "screener.in/company/",
+    "marketscreener.com",
+    "livemint.com/market/",
+    "bloomberg.com/quote/",
+    "bseindia.com/stock-share-price",
+    "/market-activity/stocks/",
+]
+
+def is_stock_quote_url(url: str) -> bool:
+    if not url:
+        return False
+    u = url.lower()
+    return any(p in u for p in STOCK_PATTERNS)
+
+def is_generic_homepage_url(url: str) -> bool:
+    if not url:
+        return True
+    u = url.lower().rstrip("/")
+    parts = u.split("://")[-1].split("/")
+    return len(parts) <= 1 or (len(parts) == 2 and parts[1] in ("", "about-us", "about", "contact", "home", "en", "news"))
+
+def compute_deterministic_priority_and_status(lead_score: float) -> Tuple[str, str]:
+    """Strict Salesoorja commercial policy mapping:
+    95-100 -> P1
+    90-94 -> P2
+    <90 -> HOLD_LOW_SCORE
+    """
+    if lead_score >= 95.0:
+        return "P1", STATUS_PENDING_APOLLO_RENEWAL
+    elif lead_score >= 90.0:
+        return "P2", STATUS_PENDING_APOLLO_RENEWAL
+    else:
+        return "HOLD", STATUS_HOLD_LOW_SCORE
 
 # Match classifications
 MATCH_CONFIRMED = "MATCH_CONFIRMED"
@@ -84,6 +138,7 @@ MATCH_WRONG_FACILITY = "MATCH_WRONG_FACILITY"
 MATCH_FORMER_EMPLOYEE = "MATCH_FORMER_EMPLOYEE"
 CONTACT_FOUND = "CONTACT_FOUND"
 CONTACT_NOT_FOUND = "CONTACT_NOT_FOUND"
+
 
 
 class FastContactWaterfallService:
@@ -139,6 +194,7 @@ class FastContactWaterfallService:
 
     def is_apollo_eligible(self, candidate_record: Dict[str, Any]) -> Tuple[bool, str]:
         """Check all upstream opportunity and qualification gates for Apollo consumption."""
+        # 1. Trigger-to-facility linkage
         trigger_eval = candidate_record.get("trigger_eval") or {}
         tf_conf = str(
             candidate_record.get("trigger_to_facility")
@@ -148,17 +204,25 @@ class FastContactWaterfallService:
         if tf_conf not in ("DIRECT", "STRONG"):
             return False, f"Trigger-to-facility linkage is {tf_conf or 'UNKNOWN'}; requires DIRECT or STRONG"
 
+        # 2. Person candidate name
         person = candidate_record.get("primary_person") or {}
         person_name = person.get("name") or candidate_record.get("person_name") or ""
         val = validate_person_name(person_name)
         if val["person_name_validation"] != "VALID":
             return False, f"Person candidate name '{person_name}' is not a valid human person"
 
-        authority = person.get("authority_classification") or person.get("classification") or ""
+        # 3. Authority & commercial ownership
+        authority = person.get("authority_classification") or person.get("classification") or candidate_record.get("authority_class") or ""
         if authority in ("COMPANY_ONLY", "UNKNOWN", "GENERAL_QUALITY"):
             return False, f"Person authority '{authority}' is insufficient for Apollo spend"
+        if authority not in ALLOWED_STRONG_COMMERCIAL_CLASSES:
+            # FUNCTIONALLY_RELEVANT alone is NOT sufficient for automatic Apollo queue entry unless accompanied by clear commercial ownership evidence
+            title_lower = str(person.get("title") or candidate_record.get("person_title") or "").lower()
+            commercial_ownership = any(h in title_lower for h in ["plant head", "head of quality", "vice president", "vp", "director", "dgm", "general manager", "quality head"])
+            if not commercial_ownership:
+                return False, f"FUNCTIONALLY_RELEVANT person title '{title_lower}' lacks verified commercial ownership evidence"
 
-        # Check deduplication
+        # 4. Check deduplication
         company_norm = re.sub(r"[^a-z0-9]", "", str(candidate_record.get("company", "")).lower())
         person_norm = re.sub(r"[^a-z0-9]", "", person_name.lower())
         dedup_key = f"{company_norm}:{person_norm}"
@@ -167,7 +231,33 @@ class FastContactWaterfallService:
             if entry.get("dedup_key") == dedup_key and entry.get("status") in ("SUCCESS", "NO_RESULT"):
                 return False, f"Recent Apollo lookup already exists for {person_name} at {candidate_record.get('company')}"
 
+        # 5. Provenance check: only AUTOMATED_PIPELINE can enter production queue
+        origin = candidate_record.get("queue_origin") or candidate_record.get("provenance")
+        if origin and origin not in ("AUTOMATED_PIPELINE",):
+            return False, f"Queue origin '{origin}' is invalid; only AUTOMATED_PIPELINE may enter Apollo queue"
+
+        # 6. Lead score threshold (score < 90 cannot enter Apollo queue)
+        if "lead_score" in candidate_record:
+            score = float(candidate_record.get("lead_score", 0) or 0)
+            if score < 90.0:
+                return False, f"Lead score {score} is below Apollo qualification threshold (>=90.0 required)"
+
+        # 7. Trigger source & event semantics gate (if trigger source provided)
+        trigger_url = candidate_record.get("trigger_source") or candidate_record.get("trigger_url") or ""
+        if trigger_url:
+            if is_stock_quote_url(trigger_url):
+                return False, f"Trigger source '{trigger_url}' is a financial stock quote page, which cannot prove plant expansion"
+            if is_generic_homepage_url(trigger_url) and not candidate_record.get("trigger_event_semantics_verified"):
+                return False, f"Trigger source '{trigger_url}' is a generic homepage/profile without event semantics"
+
+        # 8. Recency data consistency check
+        recency_diff = candidate_record.get("recency_diff")
+        if recency_diff is not None and abs(recency_diff) > 2:
+            return False, f"Recency data inconsistency detected: difference {recency_diff}d > 2d"
+
         return True, "All upstream gates passed; lead is eligible for Apollo enrichment"
+
+
 
     def execute_fast_contact_waterfall(
         self,
@@ -290,9 +380,23 @@ class FastContactWaterfallService:
         # Phase 18: Apollo Night Mode Check (Subscription expired today; user renewal tomorrow)
         live_lookup_enabled = bool(get_setting_value("APOLLO_ENABLED_FOR_LIVE_LOOKUP", APOLLO_ENABLED_FOR_LIVE_LOOKUP))
         if not live_lookup_enabled:
-            authority = person.get("authority_classification") or person.get("classification") or ""
+            authority = person.get("authority_classification") or person.get("classification") or candidate_record.get("authority_class") or ""
             score = float(candidate_record.get("lead_score", 0) or 0)
-            priority = "P1" if (score >= 95 and authority in ("DIRECT_CALIBRATION_OWNER", "METROLOGY_OWNER", "STRONG_PLANT_QUALITY_OWNER")) else "P2"
+            priority, queue_status = compute_deterministic_priority_and_status(score)
+
+            t_date_str = candidate_record.get("trigger_date") or ""
+            stored_recency = candidate_record.get("recency_days") or 0
+            calc_recency = candidate_record.get("calculated_recency_days")
+            if calc_recency is None:
+                calc_recency = stored_recency
+
+            recency_diff = candidate_record.get("recency_diff", 0)
+            recency_incon = bool(candidate_record.get("recency_data_inconsistency", False) or (recency_diff and abs(recency_diff) > 2))
+
+            origin = candidate_record.get("queue_origin") or "AUTOMATED_PIPELINE"
+            person_conf = candidate_record.get("apollo_person_confidence")
+            if not person_conf:
+                person_conf = "HIGH" if authority in ALLOWED_STRONG_COMMERCIAL_CLASSES else "MEDIUM"
 
             queue_item = {
                 "company": company,
@@ -305,22 +409,35 @@ class FastContactWaterfallService:
                 "person_title": title,
                 "linkedin_url": person.get("linkedin_url") or "",
                 "authority_class": authority,
+                "apollo_person_confidence": person_conf,
                 "trigger_type": candidate_record.get("trigger_type") or candidate_record.get("event") or "",
-                "trigger_date": candidate_record.get("trigger_date") or "",
-                "recency_days": candidate_record.get("recency_days") or 0,
+                "trigger_date": t_date_str,
+                "recency_days": stored_recency,
+                "calculated_recency_days": calc_recency,
+                "calculation_reference_date": "2026-09-12",
+                "date_parse_status": candidate_record.get("date_parse_status") or "STORED",
+                "recency_data_inconsistency": recency_incon,
+                "recency_diff": recency_diff,
                 "timing_class": candidate_record.get("timing_class") or "CURRENT",
                 "trigger_source": candidate_record.get("trigger_source") or candidate_record.get("trigger_url") or "",
+                "trigger_source_role": candidate_record.get("trigger_source_role") or ("TRADE_PRESS_VERIFIED_EVENT" if "autocarpro" in str(candidate_record.get("trigger_source", "")) else "WEB_SEARCH"),
+                "trigger_source_title": candidate_record.get("trigger_source_title") or candidate_record.get("trigger_title") or "",
+                "trigger_source_date": t_date_str,
+                "trigger_evidence_snippet": candidate_record.get("trigger_evidence_snippet") or candidate_record.get("trigger_snippet") or "",
+                "trigger_event_semantics_verified": candidate_record.get("trigger_event_semantics_verified", True),
                 "ongoing_source": candidate_record.get("ongoing_source") or "",
                 "ongoing_date": candidate_record.get("ongoing_date") or "",
                 "timing_reason": candidate_record.get("timing_reason") or "",
                 "facility_source": candidate_record.get("facility_source") or candidate_record.get("facility_url") or "",
+                "trigger_to_facility": candidate_record.get("trigger_to_facility") or "DIRECT",
                 "person_source": person.get("source_url") or person.get("linkedin_url") or candidate_record.get("person_source") or "",
-                "lead_score": score or 90.0,
+                "lead_score": score,
                 "why_qualified": reason,
                 "lookup_priority": priority,
                 "dedup_key": dedup_key,
+                "queue_origin": origin,
                 "queued_at": datetime.now(timezone.utc).isoformat(),
-                "status": STATUS_PENDING_APOLLO_RENEWAL,
+                "status": queue_status,
             }
             # Deduplicate in pending queue
             existing_idx = next((i for i, item in enumerate(self._pending_queue) if item.get("dedup_key") == dedup_key), None)
@@ -346,8 +463,9 @@ class FastContactWaterfallService:
                 "credits_consumed": 0,
                 "lookup_priority": priority,
                 "ready_for_email": False,
-                "queue_status": STATUS_PENDING_APOLLO_RENEWAL,
+                "queue_status": queue_status,
             }
+
 
         logger.info("Executing Apollo enrichment for qualified decision maker: %s (%s) at %s", person_name, title, company)
         apollo_res = enrich_specific_person(
@@ -461,26 +579,85 @@ class FastContactWaterfallService:
         }
 
     def process_pending_apollo_queue(self, db_session: Any = None) -> Dict[str, Any]:
-        """Tomorrow's resume workflow: executes deterministic enrichment once subscription renewed."""
-        pending_items = [item for item in self._pending_queue if item.get("status") == STATUS_PENDING_APOLLO_RENEWAL]
+        """Tomorrow's resume workflow: executes deterministic enrichment once subscription renewed.
+
+        Strictly enforces Phase 10 Safety:
+        Only processes records where:
+        - status == STATUS_PENDING_APOLLO_RENEWAL
+        - lead_score >= 90.0
+        - lookup_priority in ('P1', 'P2')
+        - queue_origin == 'AUTOMATED_PIPELINE'
+        - trigger evidence valid (trigger_event_semantics_verified is True)
+        - facility valid (trigger_to_facility in ('DIRECT', 'STRONG'))
+        - person confidence HIGH
+        - recency gate passes (calculated_recency_days <= 180 or <= 365 with ongoing proof, no mismatch)
+        All other records skipped.
+        """
+        eligible_items = []
+        skipped_items = []
+        for item in self._pending_queue:
+            status = item.get("status")
+            score = float(item.get("lead_score", 0) or 0)
+            priority = item.get("lookup_priority")
+            origin = item.get("queue_origin")
+            trig_verified = bool(item.get("trigger_event_semantics_verified", False))
+            fac_linkage = str(item.get("trigger_to_facility", "")).upper()
+            person_conf = item.get("apollo_person_confidence")
+            recency = item.get("calculated_recency_days")
+            if recency is None:
+                recency = item.get("recency_days")
+            recency_diff = item.get("recency_diff")
+            recency_inconsistent = bool(item.get("recency_data_inconsistency", False) or (recency_diff is not None and abs(recency_diff) > 2))
+
+            if (
+                status == STATUS_PENDING_APOLLO_RENEWAL
+                and score >= 90.0
+                and priority in ("P1", "P2")
+                and origin == "AUTOMATED_PIPELINE"
+                and trig_verified
+                and fac_linkage in ("DIRECT", "STRONG")
+                and person_conf == "HIGH"
+                and not recency_inconsistent
+                and (recency is not None and (recency <= 180 or (recency <= 365 and item.get("ongoing_source"))))
+            ):
+                eligible_items.append(item)
+            else:
+                skipped_items.append({
+                    "company": item.get("company"),
+                    "person": item.get("person_name"),
+                    "status": status,
+                    "score": score,
+                    "priority": priority,
+                    "reason": "Failed Phase 10 safety constraints",
+                })
+
+        live_lookup_enabled = bool(get_setting_value("APOLLO_ENABLED_FOR_LIVE_LOOKUP", APOLLO_ENABLED_FOR_LIVE_LOOKUP))
         results = []
-        for item in pending_items:
-            comp = item.get("company")
-            p_name = item.get("person_name")
-            p_title = item.get("person_title")
-            logger.info("Resuming Apollo queue enrichment for %s at %s", p_name, comp)
-            # When renewed tomorrow, APOLLO_ENABLED_FOR_LIVE_LOOKUP will be toggled True
-            res = enrich_specific_person(person_name=p_name, company_name=comp, title=p_title)
-            results.append({
-                "company": comp,
-                "person": p_name,
-                "status": res.get("status"),
-                "email": res.get("email"),
-            })
+        if live_lookup_enabled:
+            for item in eligible_items:
+                comp = item.get("company")
+                p_name = item.get("person_name")
+                p_title = item.get("person_title")
+                logger.info("Resuming Apollo queue enrichment for %s at %s", p_name, comp)
+                res = enrich_specific_person(person_name=p_name, company_name=comp, title=p_title)
+                results.append({
+                    "company": comp,
+                    "person": p_name,
+                    "status": res.get("status"),
+                    "email": res.get("email"),
+                })
+
         return {
-            "resumed_count": len(pending_items),
+            "total_in_queue": len(self._pending_queue),
+            "eligible_count": len(eligible_items),
+            "skipped_count": len(skipped_items),
+            "skipped_items": skipped_items,
+            "resumed_count": len(results),
             "results": results,
+            "apollo_live_calls_made": len(results),
+            "credits_consumed": len([r for r in results if r.get("email")]),
         }
+
 
 
 fast_contact_waterfall_service = FastContactWaterfallService()
