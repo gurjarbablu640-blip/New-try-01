@@ -260,7 +260,7 @@ def run_batch23() -> Dict[str, Any]:
                     continue
 
                 # Date truth gate (must have date and must not be stale > 365d)
-                date_info = extract_event_date(body_text[:4000], title=title, now_dt=NOW_DT)
+                date_info = extract_event_date(body_text[:4000], title=title, now_dt=NOW_DT, url=url)
                 recency_status = date_info.get("recency_status", "UNKNOWN")
                 recency_days = date_info.get("recency_days", 999)
 
@@ -276,7 +276,8 @@ def run_batch23() -> Dict[str, Any]:
                     "event_type": fetch_res.get("trigger_type", sem_res.get("trigger_type")),
                     "event_semantics_score": sem_res.get("score", 1.0),
                     "evidence_quote": fetch_res.get("source_body_event_snippet", snippet[:200]),
-                    "trigger_date": date_info.get("trigger_date"),
+                    "trigger_date": date_info.get("trigger_date") or date_info.get("event_date"),
+                    "date_role": date_info.get("date_role", "UNKNOWN"),
                     "recency_status": recency_status,
                     "recency_days": recency_days,
                     "body_text": body_text[:4000],
@@ -419,11 +420,51 @@ def run_batch23() -> Dict[str, Any]:
                 "is_placeholder_role": True,
             }
 
-        # ── Commercial Scoring & Priority Classification ──
-        base_trigger_score = 90.0 if best_event["recency_status"] == "CURRENT" else 85.0
-        fac_bonus = 5.0 if facility_qualified and facility_confidence >= 0.7 else 0.0
-        person_bonus = 5.0 if qualified_person and not qualified_person.get("is_placeholder_role") else 0.0
-        lead_score = min(100.0, base_trigger_score + fac_bonus + person_bonus)
+        # ── Deterministic Multi-Component Commercial Scoring from Zero ──
+        # Component 1: Trigger Validity & Event Type (0-25)
+        ev_type = best_event.get("event_type", "UNKNOWN")
+        trigger_val_score = 25.0 if ev_type in ("COMMISSIONING", "NEW_PLANT") else 20.0
+
+        # Component 2: Trigger Recency (0-25, negative penalty for stale)
+        rec_status = best_event.get("recency_status", "UNKNOWN")
+        rec_days = best_event.get("recency_days", 999)
+        if rec_status == "CURRENT" and rec_days <= 180:
+            recency_score = 25.0
+        elif rec_status == "RECENT" and rec_days <= 365:
+            recency_score = 15.0
+        elif rec_status == "STALE" or rec_days > 365:
+            recency_score = -30.0  # Explicit stale trigger penalty
+        else:
+            recency_score = 0.0
+
+        # Component 3: Source Quality (0-15)
+        s_class = best_event.get("source_class", "UNKNOWN")
+        source_score = 15.0 if s_class in ("REGULATORY_FILING", "OFFICIAL_COMPANY_RELEASE", "TIER_A_NEWS") else 10.0
+
+        # Component 4: Facility Linkage & Precision (0-20)
+        fac_linkage = fac_res.get("linkage", "WEAK")
+        if facility_confidence >= 0.8 or fac_linkage == "DIRECT":
+            facility_score = 20.0
+        elif facility_confidence >= 0.7 or fac_linkage == "STRONG":
+            facility_score = 15.0
+        elif facility_qualified:
+            facility_score = 5.0
+        else:
+            facility_score = 0.0
+
+        # Component 5: Decision Maker Verification & Authority (0-15)
+        # CRITICAL: Placeholder roles receive ZERO score
+        if qualified_person and not qualified_person.get("is_placeholder_role"):
+            role_fn = qualified_person.get("functional_role", "")
+            if role_fn in ("OPERATIONS_LEADERSHIP", "PLANT_OPERATIONS"):
+                person_score = 15.0
+            else:
+                person_score = 10.0
+        else:
+            person_score = 0.0
+
+        raw_score = trigger_val_score + recency_score + source_score + facility_score + person_score
+        lead_score = max(0.0, min(100.0, raw_score))
 
         record["lead_score"] = lead_score
 

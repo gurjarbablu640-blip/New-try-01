@@ -510,22 +510,147 @@ def is_company_grounded_in_text(company_name: str, text: str, url: str = "") -> 
 DATE_PATTERNS = [
     # YYYY-MM-DD or YYYY/MM/DD
     r"\b(20[12]\d[-/]\d{2}[-/]\d{2})\b",
-    # DD Month YYYY or Month DD, YYYY
-    r"\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*,?\s+20[12]\d)\b",
-    r"\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+20[12]\d)\b",
+    # DD Month YYYY or Month DD, YYYY (supporting ordinals and compact commas like 13th May 2026, Sep 24,2024)
+    r"\b(\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*,?\s*20[12]\d)\b",
+    r"\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*\d{1,2},?\s*20[12]\d)\b",
     # Month YYYY
     r"\b((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+20[12]\d)\b",
     # Relative: X days/weeks/months ago
     r"\b(\d+\s+(?:days?|weeks?|months?|hours?)\s+ago)\b",
-    # Bare Year: 2018-2027
-    r"\b(20[12]\d)\b",
 ]
 
 FUTURE_PLAN_PATTERNS = [
-    r"\b(?:planned|target|expected|scheduled|aims|slated|by fiscal|by)\s+(?:to be|for|by|in)?\s*(?:commissioned|completed|ready|operational|operationalize|202[7-9])\b",
-    r"\bcommissioning\s+(?:planned|scheduled|by)\s+(?:in|by)?\s*202[7-9]\b",
-    r"\bcompletion\s+by\s+202[7-9]\b",
+    r"\b(?:planned|target|expected|scheduled|aims|slated|by fiscal|by)\s+(?:to be|for|by|in)?\s*(?:commissioned|completed|completion|ready|operational|operationalize|202[7-9])\b",
+    r"\b(?:commissioning|completion)\s+(?:planned|scheduled|by|in)?\s*(?:in|by)?\s*202[7-9]\b",
+    r"\bcompletion\s+(?:by|in)\s+202[7-9]\b",
 ]
+
+
+DATE_ROLE_PRIORITY = {
+    "START_OF_PRODUCTION_DATE": 100,
+    "COMMISSIONING_DATE": 90,
+    "EVENT_DATE": 80,
+    "ANNOUNCEMENT_DATE": 70,
+    "PUBLICATION_DATE": 60,
+    "UPDATED_DATE": 40,
+    "PLANNED_COMPLETION_DATE": 30,
+    "FUTURE_TARGET_DATE": 20,
+    "UNKNOWN": 10,
+}
+
+
+def classify_date_role(context: str, date_str: str = "", now_dt: datetime | None = None) -> str:
+    """Classify the commercial and semantic role of an extracted date.
+
+    Possible return values:
+    - START_OF_PRODUCTION_DATE: Date commercial production or operations began.
+    - COMMISSIONING_DATE: Date plant/press/line was commissioned or inaugurated.
+    - EVENT_DATE: Exact date the event occurred.
+    - ANNOUNCEMENT_DATE: Date company or board announced capex, expansion, or MoU.
+    - PUBLICATION_DATE: Original publication/byline date of the source article.
+    - UPDATED_DATE: Article revision/updated timestamp.
+    - PLANNED_COMPLETION_DATE: Target future completion date for capex/project.
+    - FUTURE_TARGET_DATE: Any date occurring after reference date without explicit plan context.
+    - UNKNOWN: Role cannot be reliably determined.
+    """
+    now_dt = now_dt or datetime(2026, 9, 12, tzinfo=timezone.utc)
+    clean_ctx = context.lower() if context else ""
+
+    # Check if date itself is parsed and in the future
+    is_future = False
+    if date_str:
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d %b %Y", "%d %B %Y", "%B %d %Y", "%b %d %Y", "%B %Y", "%b %Y", "%Y"):
+            try:
+                p_dt = datetime.strptime(date_str.replace(",", "").strip(), fmt).replace(tzinfo=timezone.utc)
+                if p_dt > now_dt:
+                    is_future = True
+                break
+            except Exception:
+                pass
+
+    if is_future:
+        if any(w in clean_ctx for w in ["planned", "expected", "scheduled", "target", "by", "aims to", "completion", "operational by"]):
+            return "PLANNED_COMPLETION_DATE"
+        return "FUTURE_TARGET_DATE"
+
+    # Stock price / market capitalization dates are NOT commercial events
+    if any(re.search(pat, clean_ctx) for pat in [
+        r"(?:stock|trading|touched|52\s+week\s+high|shares?|pe\s+ratio|market\s+cap)",
+    ]):
+        if "high of" in clean_ctx or "touched" in clean_ctx or "trading at" in clean_ctx:
+            return "UNKNOWN"
+
+    # Start of production
+    if any(re.search(pat, clean_ctx) for pat in [
+        r"(?:commenced|commence|began|started|starts|commencing)\s+(?:commercial\s+)?production",
+        r"became\s+(?:fully\s+)?operational",
+        r"commenced\s+(?:commercial\s+)?operations",
+        r"operational\s+on\b",
+        r"commercial\s+production\s+from\b",
+        r"trial\s+(?:runs?|production)\s+(?:started|commenced)",
+    ]):
+        return "START_OF_PRODUCTION_DATE"
+
+    # Commissioning / Inauguration
+    if any(re.search(pat, clean_ctx) for pat in [
+        r"(?:commissioned|commissions|inaugurated|inaugurates|inauguration|dedicates?)\s+(?:on|in|the|its|a)\b",
+        r"commissioning\s+(?:date|ceremony|of\s+(?:the\s+)?(?:new\s+)?(?:plant|facility|line|unit|press))",
+        r"inauguration\s+(?:on|of|date)",
+        r"inaugurates\s+(?:world-class|new|titanium|plant|facility)",
+    ]):
+        return "COMMISSIONING_DATE"
+
+    # Check if date_str itself is part of a timestamp pattern like 2026-09-12 06:13:45 or updated/revision
+    if (date_str and re.search(re.escape(date_str) + r"\s+\d{2}:\d{2}", clean_ctx)) or any(re.search(pat, clean_ctx) for pat in [
+        r"(?:updated|last\s+updated|revised|modified)\s*[:\s]",
+        r"\bupdate\s*:\s*",
+    ]):
+        return "UPDATED_DATE"
+
+    # Announcement / Capex approval
+    if any(re.search(pat, clean_ctx) for pat in [
+        r"(?:announced|announces|board\s+approved?|approves?|unveiled?|signed\s+mou)\b",
+        r"announced\s+plans\b",
+        r"reports?\s+(?:strong\s+)?q\d\b",
+        r"(?:awarded|bags?\s+order|received\s+(?:letter\s+of\s+award|contract|order))\b",
+        r"board\s+approves\s+.*capex\b",
+        r"announced\s+a\s+strategic\s+investment\b",
+        r"mumbai,\s*\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
+    ]):
+        return "ANNOUNCEMENT_DATE"
+
+    # Planned completion
+    if any(re.search(pat, clean_ctx) for pat in [
+        r"(?:planned|expected|scheduled|aims?\s+to\s+complete|target(?:ed)?)\s+(?:to\s+be\s+completed|commissioning|by|in|within)",
+        r"within\s+\d+\s+months\b",
+        r"target\s+(?:date|year|quarter)\b",
+    ]):
+        return "PLANNED_COMPLETION_DATE"
+
+    # Publication / Byline
+    if any(re.search(pat, clean_ctx) for pat in [
+        r"(?:published|posted|dateline)\s*[:\s]",
+        r"\b(?:ist|pdt|est|utc|gmt)\b",
+        r"\bby\s+[A-Z][a-z]+",
+        r"\bdesk\b",
+        r"-->",
+        r"\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?\b",
+        r"mumbai\s*\(?.*?\)?\s*\|",
+        r"new\s+delhi\s*\|",
+    ]):
+        return "PUBLICATION_DATE"
+
+    # Event date
+    if any(re.search(pat, clean_ctx) for pat in [
+        r"\bon\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)?\s*,?\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{1,2})",
+        r"\bvisited\b",
+        r"\bheld\s+on\b",
+        r"\bconducted\s+on\b",
+        r"\bmeeting\s+held\s+on\b",
+    ]):
+        return "EVENT_DATE"
+
+    return "UNKNOWN"
 
 
 def extract_event_date(
@@ -533,24 +658,68 @@ def extract_event_date(
     title: str = "",
     now_dt: datetime | None = None,
     publication_date: str = "",
+    url: str = "",
 ) -> Dict[str, Any]:
     """Extract event publication/action date and compute recency status deterministically.
 
     Disambiguates publication_date, event_date, and planned_completion_date.
     Future planned completion dates (e.g. 2028 commissioning) are NOT used as trigger_date,
     ensuring recency_days is NEVER negative.
+    Trunctates unrelated sidebar/footer/related sections to prevent leakage of today's date.
+    Uses classify_date_role to prioritize START_OF_PRODUCTION_DATE, COMMISSIONING_DATE,
+    EVENT_DATE, and ANNOUNCEMENT_DATE over generic UPDATED_DATE or website timestamps.
     """
     from datetime import timedelta
-    combined_text = f"{text} {title}".strip()
+
     now_dt = now_dt or datetime(2026, 9, 12, tzinfo=timezone.utc)
     now_dt_iso = now_dt.strftime("%Y-%m-%d")
 
+    # 1. Truncate sidebar/footer sections that cause date contamination
+    clean_text = text or ""
+    m_split = re.search(
+        r'\b(?:Related\s+Articles?|Related:|Discover\s+more\s+from|MOST\s+VISITED|Latest\s+Projects|Recent\s+News)\b',
+        clean_text,
+        re.IGNORECASE,
+    )
+    if m_split:
+        clean_text = clean_text[:m_split.start()]
+
+    combined_text = f"{clean_text} {title}".strip()
     has_future_plan = any(re.search(pat, combined_text, re.IGNORECASE) for pat in FUTURE_PLAN_PATTERNS)
 
-    # Collect all candidate dates found in combined text
-    found_dates = []
+    candidates = []
 
-    # Check relative date
+    # 2. Check URL for explicit publication date (/YYYY/MM/DD/ or /YYYY/MM/ or /YYYYMMDD/)
+    if url:
+        m_url = re.search(r'/(\d{4})/(\d{2})(?:/(\d{2}))?/', url)
+        if m_url:
+            y, m = int(m_url.group(1)), int(m_url.group(2))
+            d = int(m_url.group(3)) if m_url.group(3) else 1
+            u_dt = datetime(y, m, d, tzinfo=timezone.utc)
+            if u_dt <= now_dt:
+                candidates.append({
+                    "dt": u_dt,
+                    "dt_str": u_dt.strftime("%Y-%m-%d"),
+                    "role": "PUBLICATION_DATE",
+                    "role_priority": DATE_ROLE_PRIORITY["PUBLICATION_DATE"],
+                    "source": "URL_PATH",
+                    "pos": 0,
+                })
+        else:
+            m_url2 = re.search(r'/(\d{4})(\d{2})(\d{2})/', url)
+            if m_url2:
+                u_dt2 = datetime(int(m_url2.group(1)), int(m_url2.group(2)), int(m_url2.group(3)), tzinfo=timezone.utc)
+                if u_dt2 <= now_dt:
+                    candidates.append({
+                        "dt": u_dt2,
+                        "dt_str": u_dt2.strftime("%Y-%m-%d"),
+                        "role": "PUBLICATION_DATE",
+                        "role_priority": DATE_ROLE_PRIORITY["PUBLICATION_DATE"],
+                        "source": "URL_PATH",
+                        "pos": 0,
+                    })
+
+    # 3. Check relative date
     m_rel = re.search(r"(\d+)\s+(day|week|month|hour)s?\s+ago", combined_text, re.IGNORECASE)
     if m_rel:
         val = int(m_rel.group(1))
@@ -563,30 +732,71 @@ def extract_event_date(
             dt = now_dt - timedelta(weeks=val)
         elif unit == "month":
             dt = now_dt - timedelta(days=val * 30)
-        found_dates.append((dt, dt.strftime("%Y-%m-%d"), False))
+        candidates.append({
+            "dt": dt,
+            "dt_str": dt.strftime("%Y-%m-%d"),
+            "role": "PUBLICATION_DATE",
+            "role_priority": DATE_ROLE_PRIORITY["PUBLICATION_DATE"],
+            "source": "RELATIVE_DATE",
+            "pos": m_rel.start(),
+        })
 
+    # 4. Search for regex date patterns in clean text
     for pat in DATE_PATTERNS:
-        for m in re.finditer(pat, combined_text, re.IGNORECASE):
+        for m in re.finditer(pat, clean_text, re.IGNORECASE):
             raw_str = m.group(1).strip()
-            clean_str = raw_str.replace(",", "")
+            clean_str = re.sub(r'(\d+)(?:st|nd|rd|th)', r'\1', raw_str).replace(',', ' ')
+            clean_str = re.sub(r'\s+', ' ', clean_str).strip()
+
+            # Filter out masthead current-date artifacts if present on the same line
+            line_start = clean_text.rfind('\n', 0, m.start())
+            line_start = 0 if line_start == -1 else line_start + 1
+            line_end = clean_text.find('\n', m.end())
+            line_end = len(clean_text) if line_end == -1 else line_end
+            line_text = clean_text[line_start:line_end].lower()
+
+            if any(h in line_text for h in ["latest news", "advertise with us", "hot press news", "sparsh week"]):
+                continue
+
+            start_ctx = max(0, m.start() - 60)
+            end_ctx = min(len(clean_text), m.end() + 60)
+            ctx = clean_text[start_ctx:end_ctx]
+
             for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d %b %Y", "%d %B %Y", "%B %d %Y", "%b %d %Y", "%B %Y", "%b %Y", "%Y"):
                 try:
                     p_dt = datetime.strptime(clean_str, fmt).replace(tzinfo=timezone.utc)
-                    found_dates.append((p_dt, clean_str, p_dt > now_dt))
+                    role = classify_date_role(ctx, clean_str, now_dt=now_dt)
+                    candidates.append({
+                        "dt": p_dt,
+                        "dt_str": p_dt.strftime("%Y-%m-%d"),
+                        "role": role,
+                        "role_priority": DATE_ROLE_PRIORITY.get(role, 10),
+                        "source": "BODY_TEXT",
+                        "pos": m.start(),
+                    })
                     break
                 except (ValueError, Exception):
                     pass
 
-    if not found_dates and publication_date:
+    # 5. Add publication_date parameter if provided and no candidates yet
+    if not candidates and publication_date:
         try:
             p_dt = datetime.strptime(publication_date.split("T")[0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            found_dates.append((p_dt, publication_date, p_dt > now_dt))
+            candidates.append({
+                "dt": p_dt,
+                "dt_str": publication_date.split("T")[0],
+                "role": "PUBLICATION_DATE",
+                "role_priority": DATE_ROLE_PRIORITY["PUBLICATION_DATE"],
+                "source": "METADATA",
+                "pos": 0,
+            })
         except Exception:
             pass
 
-    if not found_dates:
+    if not candidates:
         return {
             "event_date": "",
+            "trigger_date": "",
             "publication_date": publication_date,
             "planned_completion_date": "",
             "recency_days": 999,
@@ -595,52 +805,71 @@ def extract_event_date(
             "ongoing_status": "DATE_UNKNOWN",
             "recency_status": "DATE_UNKNOWN",
             "has_date": False,
+            "date_role": "UNKNOWN",
+            "date_source": "NONE",
             "is_future_planned_milestone": False,
             "date_parse_status": "DATE_NOT_FOUND",
         }
 
-    # Separate future dates from current/past dates
-    past_or_current = [d for d in found_dates if not d[2]]
-    future_dates = [d for d in found_dates if d[2]]
+    # Separate future / planned completion dates
+    valid_past = [c for c in candidates if c["dt"] <= now_dt and c["role"] not in ("PLANNED_COMPLETION_DATE", "FUTURE_TARGET_DATE")]
+    future_or_planned = [c for c in candidates if c["dt"] > now_dt or c["role"] in ("PLANNED_COMPLETION_DATE", "FUTURE_TARGET_DATE")]
 
     planned_completion_date = ""
     is_future_milestone = False
-    if future_dates and (has_future_plan or past_or_current or publication_date):
-        latest_future = max(future_dates, key=lambda x: x[0])
-        planned_completion_date = latest_future[0].strftime("%Y-%m-%d")
+    if future_or_planned:
+        latest_future = max(future_or_planned, key=lambda x: x["dt"])
+        planned_completion_date = latest_future["dt_str"]
         is_future_milestone = True
+    elif has_future_plan:
+        m_fut = re.search(r"\b(?:completion|commissioning|ready|operational|completed|scheduled\s+for(?:\s+completion)?)\s+(?:in|by|for)?\s*(202[7-9])\b", combined_text, re.IGNORECASE)
+        if m_fut:
+            planned_completion_date = f"{m_fut.group(1)}-12-31"
+            is_future_milestone = True
 
-    # Determine event_date and recency
-    if past_or_current:
-        primary_dt, _, _ = max(past_or_current, key=lambda x: x[0])
-        effective_event_date = primary_dt.strftime("%Y-%m-%d")
-        recency_days = max(0, (now_dt - primary_dt).days)
-    elif publication_date:
-        try:
-            pub_dt = datetime.strptime(publication_date.split("T")[0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            effective_event_date = pub_dt.strftime("%Y-%m-%d")
-            recency_days = max(0, (now_dt - pub_dt).days)
-        except Exception:
-            effective_event_date = now_dt_iso
-            recency_days = 0
-    elif is_future_milestone:
-        effective_event_date = now_dt_iso
-        recency_days = 0
-    else:
-        primary_dt, _, _ = future_dates[0]
+    if not valid_past:
+        if is_future_milestone:
+            return {
+                "event_date": planned_completion_date,
+                "trigger_date": planned_completion_date,
+                "publication_date": publication_date,
+                "planned_completion_date": planned_completion_date,
+                "recency_days": 999,
+                "calculated_recency_days": 999,
+                "calculation_reference_date": now_dt_iso,
+                "ongoing_status": "STALE",
+                "recency_status": "STALE",
+                "has_date": True,
+                "date_role": "PLANNED_COMPLETION_DATE",
+                "date_source": "BODY_TEXT",
+                "is_future_planned_milestone": True,
+                "date_parse_status": "FUTURE_PLANNED_MILESTONE",
+            }
         return {
-            "event_date": primary_dt.strftime("%Y-%m-%d"),
+            "event_date": "",
+            "trigger_date": "",
             "publication_date": publication_date,
             "planned_completion_date": "",
             "recency_days": 999,
             "calculated_recency_days": 999,
             "calculation_reference_date": now_dt_iso,
-            "ongoing_status": "STALE",
-            "recency_status": "STALE",
-            "has_date": True,
+            "ongoing_status": "DATE_UNKNOWN",
+            "recency_status": "DATE_UNKNOWN",
+            "has_date": False,
+            "date_role": "UNKNOWN",
+            "date_source": "NONE",
             "is_future_planned_milestone": False,
-            "date_parse_status": "FUTURE_DATE_INCONSISTENT",
+            "date_parse_status": "DATE_NOT_FOUND",
         }
+
+    # Sort valid_past by:
+    # 1. role priority (descending)
+    # 2. position in text (earlier in text usually byline/dateline/lead paragraph)
+    valid_past.sort(key=lambda x: (-x["role_priority"], x["pos"]))
+    best = valid_past[0]
+
+    effective_event_date = best["dt_str"]
+    recency_days = max(0, (now_dt - best["dt"]).days)
 
     if recency_days <= 180:
         rec_status = "CURRENT"
@@ -651,6 +880,7 @@ def extract_event_date(
 
     return {
         "event_date": effective_event_date,
+        "trigger_date": effective_event_date,
         "publication_date": publication_date or effective_event_date,
         "planned_completion_date": planned_completion_date,
         "recency_days": recency_days,
@@ -659,8 +889,10 @@ def extract_event_date(
         "ongoing_status": rec_status,
         "recency_status": rec_status,
         "has_date": True,
+        "date_role": best["role"],
+        "date_source": best["source"],
         "is_future_planned_milestone": is_future_milestone,
-        "date_parse_status": "FUTURE_PLANNED_MILESTONE" if is_future_milestone else "VALID",
+        "date_parse_status": "VALID",
     }
 
 
