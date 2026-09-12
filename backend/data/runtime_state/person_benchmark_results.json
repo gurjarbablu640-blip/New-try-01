@@ -1,0 +1,171 @@
+{
+  "timestamp": "2026-09-12T08:15:20.181751+00:00",
+  "metrics": {
+    "KNOWN_PERSON_CASES": 5,
+    "PERSON_FOUND": 1,
+    "CORRECT_PRIMARY_PERSON": 1,
+    "CORRECT_PERSON_IN_TOP3": 1,
+    "CURRENT_EMPLOYMENT_VERIFIED": 1,
+    "FACILITY_RELATION_VERIFIED": 0,
+    "HIGH_CONFIDENCE_PERSON": 0,
+    "PERSON_DISCOVERY_RECALL": 20.0,
+    "TOP1_ACCURACY": 20.0,
+    "TOP3_RECALL": 20.0,
+    "HIGH_CONFIDENCE_RATE": 0.0
+  },
+  "failure_funnel": {
+    "NO_PERSON_SEARCH_RESULT": 0,
+    "NON_HUMAN_EXTRACTION": 0,
+    "OLD_EMPLOYMENT": 0,
+    "EMPLOYMENT_UNKNOWN": 1,
+    "FACILITY_UNKNOWN": 2,
+    "FUNCTION_UNKNOWN": 0,
+    "GROUP_ROLE_AMBIGUOUS": 0,
+    "TITLE_TOO_GENERIC": 0,
+    "SOURCE_TOO_OLD": 0,
+    "LINKEDIN_AUTH_REQUIRED": 0,
+    "SEARCH_ENGINE_NO_RESULT": 0,
+    "OTHER": 1
+  },
+  "engine_yield": {
+    "searxng_bing": {
+      "queries": 55,
+      "linkedin_hits": 275,
+      "human_candidates": 65,
+      "verified_employment": 33,
+      "facility_linked": 1
+    },
+    "searxng_duckduckgo": {
+      "queries": 0,
+      "linkedin_hits": 0,
+      "human_candidates": 0,
+      "verified_employment": 0,
+      "facility_linked": 0
+    }
+  },
+  "case_results": [
+    {
+      "case_id": "CASE-01",
+      "company": "Maruti Suzuki",
+      "expected_person": "Atul Jain",
+      "found": false,
+      "matched_candidate": null,
+      "top_candidate": {
+        "name": "SUNIL JOSHI",
+        "title": "Maruti Suzuki India Limited",
+        "company": "Maruti Suzuki",
+        "facility": "Hansalpur Manufacturing Complex",
+        "current_employment": "VERIFIED",
+        "facility_relationship": "COMPANY_ONLY",
+        "authority_class": "FUNCTIONALLY_RELEVANT",
+        "person_score": 54.0,
+        "person_confidence": "LOW",
+        "source_url": "https://in.linkedin.com/in/sunil-joshi1990",
+        "source_type": "LINKEDIN_SEARCH_SNIPPET",
+        "evidence_snippet": "12+ years experience in New product and vendor development, Supplier quality assurance\u2026 \u00b7 Experience: Maruti Suzuki India Limited \u00b7 Education: Govind Ballabh Pant Krishi Evam Praudyogik Vishwavidyalaya \u00b7 Location: Gurgaon \u00b7 353 connections on LinkedI"
+      },
+      "total_candidates": 5
+    },
+    {
+      "case_id": "CASE-02",
+      "company": "Valeo India",
+      "expected_person": "Abhijit Biswal",
+      "found": false,
+      "matched_candidate": null,
+      "top_candidate": {
+        "name": "Sarang Mandlik",
+        "title": "Vice President Quality Assurance - Rieter",
+        "company": "Valeo India",
+        "facility": "Sanand Plant",
+        "current_employment": "UNKNOWN",
+        "facility_relationship": "GROUP_FUNCTION_OWNER",
+        "authority_class": "GROUP_FUNCTION_OWNER",
+        "person_score": 66.0,
+        "person_confidence": "LOW",
+        "source_url": "https://www.linkedin.com/in/sarang-mandlik-1399461b",
+        "source_type": "LINKEDIN_SEARCH_SNIPPET",
+        "evidence_snippet": "Vice President Quality Assurance at Rieter - India Operations. 3K followers 500+ connections.Heading Quality for Valeo PES - Division Pune and responsible for 4 Verticals of Quality Assurance i.e Customer Quality , In-process Quality , Supplier Quali"
+      },
+      "total_candidates": 5
+    },
+    {
+      "case_id": "CASE-03",
+      "company": "Kehems Technologies",
+      "expected_person": "Ravi Singh",
+      "found": true,
+      "matched_candidate": {
+        "name": "Yuvraj Singh jadam",
+        "title": "Kehems Technologies Pvt. Ltd.",
+        "company": "Kehems Technologies",
+        "facility": "Indore Plant",
+        "current_employment": "VERIFIED",
+        "facility_relationship": "COMPANY_ONLY",
+        "authority_class": "UNKNOWN",
+        "person_score": 42.0,
+        "person_confidence": "LOW",
+        "source_url": "https://in.linkedin.com/in/yuvmede",
+        "source_type": "LINKEDIN_SEARCH_SNIPPET",
+        "evidence_snippet": "Experience: Kehems Technologies Pvt. Ltd. \u00b7 Education: Govt.Yuvraj Singh can introduce you to 10+ people at Kehems Technologies Pvt. Ltd. Email or phone."
+      },
+      "top_candidate": {
+        "name": "Yuvraj Singh jadam",
+        "title": "Kehems Technologies Pvt. Ltd.",
+        "company": "Kehems Technologies",
+        "facility": "Indore Plant",
+        "current_employment": "VERIFIED",
+        "facility_relationship": "COMPANY_ONLY",
+        "authority_class": "UNKNOWN",
+        "person_score": 42.0,
+        "person_confidence": "LOW",
+        "source_url": "https://in.linkedin.com/in/yuvmede",
+        "source_type": "LINKEDIN_SEARCH_SNIPPET",
+        "evidence_snippet": "Experience: Kehems Technologies Pvt. Ltd. \u00b7 Education: Govt.Yuvraj Singh can introduce you to 10+ people at Kehems Technologies Pvt. Ltd. Email or phone."
+      },
+      "total_candidates": 5
+    },
+    {
+      "case_id": "CASE-04",
+      "company": "Exide Energy Solutions",
+      "expected_person": "Vijayaraghavan Manian",
+      "found": false,
+      "matched_candidate": null,
+      "top_candidate": {
+        "name": "Prakash Singh",
+        "title": "Exide Energy Solutions Ltd",
+        "company": "Exide Energy Solutions",
+        "facility": "Bengaluru Giga Factory",
+        "current_employment": "VERIFIED",
+        "facility_relationship": "COMPANY_ONLY",
+        "authority_class": "UNKNOWN",
+        "person_score": 42.0,
+        "person_confidence": "LOW",
+        "source_url": "https://in.linkedin.com/in/prakash-singh-58207520",
+        "source_type": "LINKEDIN_SEARCH_SNIPPET",
+        "evidence_snippet": "\u00b7 Experience: Exide Energy Solutions Ltd \u00b7 Education: Indian Institute of Management Ahmedabad \u00b7 Location: Bengaluru \u00b7 500+ connections on LinkedIn.View mutual connections with Prakash. Prakash can introduce you to 10+ people at Exide Energy Solution"
+      },
+      "total_candidates": 5
+    },
+    {
+      "case_id": "CASE-05",
+      "company": "Aarti Industries",
+      "expected_person": "Dharmendra Chouhan",
+      "found": false,
+      "matched_candidate": null,
+      "top_candidate": {
+        "name": "HIMANSHU BHAVSAR",
+        "title": "Deputy Manager Quality",
+        "company": "Aarti Industries",
+        "facility": "Dahej Complex",
+        "current_employment": "VERIFIED",
+        "facility_relationship": "FUNCTIONALLY_RELEVANT",
+        "authority_class": "FUNCTIONALLY_RELEVANT",
+        "person_score": 69.0,
+        "person_confidence": "LOW",
+        "source_url": "https://in.linkedin.com/in/himanshu-bhavsar-39000062",
+        "source_type": "LINKEDIN_SEARCH_SNIPPET",
+        "evidence_snippet": "Assistant Quality Manager at Aarti Industries Ltd. \u00b7 Experience: Aarti Industries Ltd. \u00b7 Education: Parul Institute of Engineering and Technology \u00b7 Location: Vadodara \u00b7 130 connections on LinkedIn. View HIMANSHU BHAVSAR\u2019s profile on LinkedIn, a profe"
+      },
+      "total_candidates": 5
+    }
+  ]
+}

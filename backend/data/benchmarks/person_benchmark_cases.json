@@ -1,0 +1,47 @@
+[
+  {
+    "id": "CASE-01",
+    "company": "Maruti Suzuki",
+    "facility": "Hansalpur Manufacturing Complex",
+    "city": "Hansalpur",
+    "function_context": "Plant Operations & Quality",
+    "expected_person": "Atul Jain",
+    "expected_title": "Vice President & Plant Head"
+  },
+  {
+    "id": "CASE-02",
+    "company": "Valeo India",
+    "facility": "Sanand Plant",
+    "city": "Sanand",
+    "function_context": "Quality & Metrology",
+    "expected_person": "Abhijit Biswal",
+    "expected_title": "Quality Manager"
+  },
+  {
+    "id": "CASE-03",
+    "company": "Kehems Technologies",
+    "facility": "Indore Plant",
+    "city": "Indore",
+    "function_context": "Plant Quality Assurance",
+    "expected_person": "Ravi Singh",
+    "expected_title": "Plant Quality Assurance Head"
+  },
+  {
+    "id": "CASE-04",
+    "company": "Exide Energy Solutions",
+    "facility": "Bengaluru Giga Factory",
+    "city": "Bengaluru",
+    "function_context": "Head of Quality",
+    "expected_person": "Vijayaraghavan Manian",
+    "expected_title": "Head of Quality"
+  },
+  {
+    "id": "CASE-05",
+    "company": "Aarti Industries",
+    "facility": "Dahej Complex",
+    "city": "Dahej",
+    "function_context": "Quality Assurance",
+    "expected_person": "Dharmendra Chouhan",
+    "expected_title": "Quality Head"
+  }
+]
