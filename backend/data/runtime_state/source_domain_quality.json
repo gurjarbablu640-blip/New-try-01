@@ -1,0 +1,111 @@
+{
+  "moneycontrol.com": {
+    "results_seen": 35,
+    "valid_trigger_count": 0,
+    "invalid_trigger_count": 35,
+    "acceptance_rate": 0.0,
+    "sample_urls": [
+      "https://www.moneycontrol.com/india/stockpricequote/auto-ancillaries-auto-truckmotorcycle-parts/samvardhanamothersoninternational/MSS01",
+      "https://www.moneycontrol.com/company-notices/fiemindustries/notices/FIE/",
+      "https://www.moneycontrol.com/india/stockpricequote/aerospacedefence/mtartechnologies/MT15"
+    ]
+  },
+  "economictimes.indiatimes.com": {
+    "results_seen": 4,
+    "valid_trigger_count": 0,
+    "invalid_trigger_count": 4,
+    "acceptance_rate": 0.0,
+    "sample_urls": [
+      "https://economictimes.indiatimes.com/lumax-auto-technologies-ltd/stocks/companyid-18774.cms",
+      "https://economictimes.indiatimes.com/company/stelmec-limited/U31200MH2000PLC124565",
+      "https://economictimes.indiatimes.com/news/new-updates/jaspal-rana-death-reason-what-happened-to-asian-games-gold-medalist-renowned-shooter-and-manu-bhakers-coach/articleshow/131673863.cms"
+    ]
+  },
+  "business-standard.com": {
+    "results_seen": 4,
+    "valid_trigger_count": 0,
+    "invalid_trigger_count": 4,
+    "acceptance_rate": 0.0,
+    "sample_urls": [
+      "https://www.business-standard.com/markets/capital-market-news/jamna-auto-industries-consolidated-net-profit-rises-6-05-in-the-june-2026-quarter-126080701571_1.html",
+      "https://www.business-standard.com/markets/capital-market-news/escorts-kubota-sells-10-072-tractors-in-august-26-126090100271_1.html",
+      "https://www.business-standard.com/markets/capital-market-news/federal-mogul-goetze-india-ltd-leads-losers-in-b-group-126090400646_1.html"
+    ]
+  },
+  "autocarpro.in": {
+    "results_seen": 3,
+    "valid_trigger_count": 1,
+    "invalid_trigger_count": 2,
+    "acceptance_rate": 0.3333,
+    "sample_urls": [
+      "https://www.autocarpro.in/news/maruti-suzuki-starts-production-at-hansalpur-facilitys-4th-line-total-capacity-now-at-29-million-units-133812",
+      "https://www.autocarpro.in/news/exide-to-commercialize-li-ion-cell-manufacturing-with-6gwh-capacity-by-fy26-end-123530",
+      "https://www.autocarpro.in/"
+    ]
+  },
+  "linkedin.com": {
+    "results_seen": 2,
+    "valid_trigger_count": 0,
+    "invalid_trigger_count": 2,
+    "acceptance_rate": 0.0,
+    "sample_urls": [
+      "https://www.linkedin.com/posts/imsahilsayyad_indiainvestment-specialtychemicals-manufacturing-activity-7435619065768919040-B1Wk",
+      "https://www.linkedin.com/posts/prabodha-acharya-76009514_as-jsw-group-implements-the-first-large-activity-7394588181439954944-wqoK"
+    ]
+  },
+  "thehindubusinessline.com": {
+    "results_seen": 2,
+    "valid_trigger_count": 0,
+    "invalid_trigger_count": 2,
+    "acceptance_rate": 0.0,
+    "sample_urls": [
+      "https://www.thehindubusinessline.com/markets/stock-markets/q1-results-today-live-updates-elecon-engineering-company-waaaree-renewable-technologies-gk-energy-yash-highvoltage-results-10-july-2026/article71205197.ece",
+      "https://www.thehindubusinessline.com/stocks/tvs-srichakra-ltd/news/"
+    ]
+  },
+  "dixoninfo.com": {
+    "results_seen": 1,
+    "valid_trigger_count": 0,
+    "invalid_trigger_count": 1,
+    "acceptance_rate": 0.0,
+    "sample_urls": [
+      "https://dixoninfo.com/"
+    ]
+  },
+  "cnbctv18.com": {
+    "results_seen": 1,
+    "valid_trigger_count": 0,
+    "invalid_trigger_count": 1,
+    "acceptance_rate": 0.0,
+    "sample_urls": [
+      "https://www.cnbctv18.com/market/earnings/skf-india-q1-results-pune-eyes-12-pc-revenue-growth-plans-500-crore-capex-19968487.htm"
+    ]
+  },
+  "in.linkedin.com": {
+    "results_seen": 1,
+    "valid_trigger_count": 0,
+    "invalid_trigger_count": 1,
+    "acceptance_rate": 0.0,
+    "sample_urls": [
+      "https://in.linkedin.com/company/cipla"
+    ]
+  },
+  "ndtv.com": {
+    "results_seen": 1,
+    "valid_trigger_count": 0,
+    "invalid_trigger_count": 1,
+    "acceptance_rate": 0.0,
+    "sample_urls": [
+      "https://www.ndtv.com/india"
+    ]
+  },
+  "sportstar.thehindu.com": {
+    "results_seen": 1,
+    "valid_trigger_count": 0,
+    "invalid_trigger_count": 1,
+    "acceptance_rate": 0.0,
+    "sample_urls": [
+      "https://sportstar.thehindu.com/cricket/england-vs-pakistan-live-score-3rd-test-day-3-updates-scorecard-highlights-commentary/article71455469.ece"
+    ]
+  }
+}

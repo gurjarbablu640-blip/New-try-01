@@ -132,6 +132,53 @@ SOURCE_ROLE_DISCOVERY_ONLY = "DISCOVERY_ONLY"
 SOURCE_ROLE_IRRELEVANT = "IRRELEVANT"
 SOURCE_ROLE_UNTRUSTED = "UNTRUSTED"
 
+# ── 16 Deterministic Source Classes (Phase 2) ─────────────────────────────────
+SOURCE_CLASS_OFFICIAL_PRESS_RELEASE = "OFFICIAL_PRESS_RELEASE"
+SOURCE_CLASS_OFFICIAL_INVESTOR_RELEASE = "OFFICIAL_INVESTOR_RELEASE"
+SOURCE_CLASS_STOCK_EXCHANGE_FILING = "STOCK_EXCHANGE_FILING"
+SOURCE_CLASS_GOVERNMENT_SOURCE = "GOVERNMENT_SOURCE"
+SOURCE_CLASS_REPUTABLE_BUSINESS_NEWS = "REPUTABLE_BUSINESS_NEWS"
+SOURCE_CLASS_REPUTABLE_INDUSTRY_NEWS = "REPUTABLE_INDUSTRY_NEWS"
+SOURCE_CLASS_COMPANY_CAREERS = "COMPANY_CAREERS"
+SOURCE_CLASS_HIRING_PAGE = "HIRING_PAGE"
+SOURCE_CLASS_PROFESSIONAL_PROFILE = "PROFESSIONAL_PROFILE"
+SOURCE_CLASS_STOCK_QUOTE = "STOCK_QUOTE"
+SOURCE_CLASS_FINANCIAL_AGGREGATOR = "FINANCIAL_AGGREGATOR"
+SOURCE_CLASS_COMPANY_HOMEPAGE = "COMPANY_HOMEPAGE"
+SOURCE_CLASS_DIRECTORY = "DIRECTORY"
+SOURCE_CLASS_SEO_CONTENT = "SEO_CONTENT"
+SOURCE_CLASS_SOCIAL_POST = "SOCIAL_POST"
+SOURCE_CLASS_UNKNOWN = "UNKNOWN"
+
+# Hard reject classes for trigger evidence (cannot prove plant capex/expansion)
+TRIGGER_HARD_REJECT_CLASSES: set[str] = {
+    SOURCE_CLASS_STOCK_QUOTE,
+    SOURCE_CLASS_FINANCIAL_AGGREGATOR,
+    SOURCE_CLASS_COMPANY_HOMEPAGE,
+    SOURCE_CLASS_DIRECTORY,
+    SOURCE_CLASS_SEO_CONTENT,
+}
+
+# Source quality weights for ranking (Phase 8)
+SOURCE_QUALITY_WEIGHTS: dict[str, float] = {
+    SOURCE_CLASS_OFFICIAL_PRESS_RELEASE: 1.0,
+    SOURCE_CLASS_OFFICIAL_INVESTOR_RELEASE: 1.0,
+    SOURCE_CLASS_STOCK_EXCHANGE_FILING: 1.0,
+    SOURCE_CLASS_GOVERNMENT_SOURCE: 1.0,
+    SOURCE_CLASS_REPUTABLE_BUSINESS_NEWS: 0.85,
+    SOURCE_CLASS_REPUTABLE_INDUSTRY_NEWS: 0.85,
+    SOURCE_CLASS_COMPANY_CAREERS: 0.6,
+    SOURCE_CLASS_HIRING_PAGE: 0.6,
+    SOURCE_CLASS_PROFESSIONAL_PROFILE: 0.5,
+    SOURCE_CLASS_SOCIAL_POST: 0.2,
+    SOURCE_CLASS_UNKNOWN: 0.3,
+    SOURCE_CLASS_STOCK_QUOTE: 0.0,
+    SOURCE_CLASS_FINANCIAL_AGGREGATOR: 0.0,
+    SOURCE_CLASS_COMPANY_HOMEPAGE: 0.0,
+    SOURCE_CLASS_DIRECTORY: 0.0,
+    SOURCE_CLASS_SEO_CONTENT: 0.0,
+}
+
 # Which source roles are accepted for each claim type
 CLAIM_TYPE_ALLOWED_ROLES: dict[str, set[str]] = {
     "MANUFACTURING_TRIGGER": {SOURCE_ROLE_PRIMARY_TRIGGER, SOURCE_ROLE_CORROBORATING_TRIGGER},
@@ -158,6 +205,48 @@ UNTRUSTED_DOMAINS: set[str] = {
 
 # Kept for backward-compatibility with tests importing this name
 DISALLOWED_TRIGGER_DOMAINS = IRRELEVANT_DOMAINS | UNTRUSTED_DOMAINS
+
+# Domains categorized as financial aggregators
+FINANCIAL_AGGREGATOR_DOMAINS: set[str] = {
+    "tofler.in", "zaubacorp.com", "zauba.com", "instafinancials.com",
+    "company360.in", "quickcompany.in", "crunchbase.com", "groww.in/stocks",
+}
+
+# Domains categorized as directories
+DIRECTORY_DOMAINS: set[str] = {
+    "indiamart.com", "tradeindia.com", "justdial.com", "yellowpages.in",
+    "exportersindia.com", "infobanc.com", "tradekey.com",
+}
+
+# Domains categorized as SEO content / syndicated report aggregators
+SEO_CONTENT_DOMAINS: set[str] = {
+    "marketresearchfuture.com", "transparencymarketresearch.com",
+    "reportsanddata.com", "openpr.com", "prlog.org", "issuewire.com",
+    "einpresswire.com", "marketsandmarkets.com", "grandviewresearch.com",
+}
+
+# Reputable Indian / Global business news domains
+REPUTABLE_BUSINESS_NEWS_DOMAINS: set[str] = {
+    "business-standard.com", "livemint.com", "economictimes.indiatimes.com",
+    "thehindubusinessline.com", "financialexpress.com", "moneycontrol.com",
+    "businesstoday.in", "fortuneindia.com", "cnbctv18.com", "reuters.com",
+    "bloomberg.com", "ndtv.com", "thehindu.com", "timesofindia.indiatimes.com",
+}
+
+# Reputable Indian / Global industry-specific news domains
+REPUTABLE_INDUSTRY_NEWS_DOMAINS: set[str] = {
+    "autocarpro.in", "autocarindia.com", "evreporter.com", "pv-tech.org",
+    "pharmabiz.com", "expresspharma.in", "electronicsforu.com", "automotiveworld.com",
+    "chemweek.com", "steelguru.com", "manufacturingtodayindia.com", "epcworld.in",
+    "projectstoday.com", "crnasia.com", "sahi.com",
+}
+
+# Government / statutory project & investment domains
+GOVERNMENT_DOMAINS: set[str] = {
+    "pib.gov.in", "dpiit.gov.in", "sebi.gov.in", "mca.gov.in", "midc.in",
+    "tidco.com", "investindia.gov.in", "makeinindia.com", "gidc.gujarat.gov.in",
+    "riico.co.in", "kiadb.in", "siidcul.com",
+}
 
 # Domain → default source role
 _DOMAIN_ROLE_MAP: dict[str, str] = {
@@ -232,6 +321,141 @@ _JOB_BOARD_DOMAINS = {
 }
 
 
+def classify_source_class(
+    url: str,
+    domain: str = "",
+    official_domain: str = "",
+    title: str = "",
+    snippet: str = "",
+) -> str:
+    """Classify a source into one of the 16 deterministic classes BEFORE LLM analysis."""
+    if not (url or "").strip() and not (domain or "").strip():
+        return SOURCE_CLASS_UNKNOWN
+
+    clean_domain = (domain or extract_domain(url) or "").lower().replace("www.", "")
+    clean_official = (official_domain or "").lower().replace("www.", "")
+    url_lower = (url or "").lower()
+    parsed = urllib.parse.urlparse(url_lower)
+    path = parsed.path
+
+
+    # 1. Stock Quote / Share price tickers (HARD REJECT for triggers)
+    if "screener.in" in clean_domain:
+        return SOURCE_CLASS_STOCK_QUOTE
+    if any(p in url_lower for p in [
+        "/stockpricequote/", "/stocks/companyid", "/market-capitalisation/",
+        "/share-price-today", "stock-price", "/stocks/", "/stock-share-price/",
+        "/get-quotes/", "trendlyne.com/equity", "marketsmithindia.com",
+        "market-stats",
+    ]):
+        if any(d in clean_domain for d in [
+            "moneycontrol.com", "economictimes.indiatimes.com", "bseindia.com",
+            "nseindia.com", "livemint.com", "financialexpress.com", "trendlyne.com"
+        ]):
+            return SOURCE_CLASS_STOCK_QUOTE
+        # Generic stock ticker pattern
+        if "/stocks/" in url_lower or "/stockpricequote/" in url_lower:
+            return SOURCE_CLASS_STOCK_QUOTE
+
+    # 2. Financial Aggregators (HARD REJECT for triggers)
+    if any(clean_domain == fa or clean_domain.endswith("." + fa) for fa in FINANCIAL_AGGREGATOR_DOMAINS):
+        return SOURCE_CLASS_FINANCIAL_AGGREGATOR
+
+    # 3. Directories (HARD REJECT for triggers)
+    if any(clean_domain == dd or clean_domain.endswith("." + dd) for dd in DIRECTORY_DOMAINS):
+        return SOURCE_CLASS_DIRECTORY
+
+    # 4. SEO / Syndicated Market Reports (HARD REJECT for triggers)
+    if any(clean_domain == sd or clean_domain.endswith("." + sd) for sd in SEO_CONTENT_DOMAINS):
+        return SOURCE_CLASS_SEO_CONTENT
+    if "marketwatch.com/press-release" in url_lower:
+        return SOURCE_CLASS_SEO_CONTENT
+
+    # 5. Stock Exchange Filings
+    if "bseindia.com" in clean_domain:
+        if any(p in path for p in ["/xml-data/corpfiling/", "/corporates/", "/corporate-actions/"]):
+            return SOURCE_CLASS_STOCK_EXCHANGE_FILING
+    if "nseindia.com" in clean_domain:
+        if any(p in path for p in ["/companies-listing/corporate-filings/", "/corporates/"]):
+            return SOURCE_CLASS_STOCK_EXCHANGE_FILING
+
+    # 6. Government Sources
+    if clean_domain.endswith(".gov.in") or clean_domain.endswith(".nic.in"):
+        return SOURCE_CLASS_GOVERNMENT_SOURCE
+    if any(clean_domain == gd or clean_domain.endswith("." + gd) for gd in GOVERNMENT_DOMAINS):
+        return SOURCE_CLASS_GOVERNMENT_SOURCE
+
+    # 7. Official Company Domain Classifications
+    if clean_official and (clean_domain == clean_official or clean_domain.endswith("." + clean_official)):
+        # Press release
+        if any(p in path for p in ["/press-release", "/press_release", "/pressrelease", "/news", "/media", "/announcement"]):
+            return SOURCE_CLASS_OFFICIAL_PRESS_RELEASE
+        # Investor release
+        if any(p in path for p in ["/investor", "/investors", "/annual-report", "/financials", "/disclosure"]):
+            return SOURCE_CLASS_OFFICIAL_INVESTOR_RELEASE
+        # Careers
+        if any(p in path for p in ["/career", "/careers", "/jobs", "/job", "/work-with-us"]):
+            return SOURCE_CLASS_COMPANY_CAREERS
+        # Homepage / generic profile (HARD REJECT for triggers)
+        if path in ("", "/", "/index.html", "/index.php") or any(p in path for p in ["/about", "/contact", "/overview", "/profile"]):
+            return SOURCE_CLASS_COMPANY_HOMEPAGE
+
+    # Generic bare domain or about-us for non-news websites (HARD REJECT for triggers)
+    if path in ("", "/", "/index.html", "/index.php") and clean_domain and clean_domain not in REPUTABLE_BUSINESS_NEWS_DOMAINS and clean_domain not in REPUTABLE_INDUSTRY_NEWS_DOMAINS:
+        return SOURCE_CLASS_COMPANY_HOMEPAGE
+    if any(p in path for p in ["/about-us", "/about", "/contact-us", "/contact", "/company-profile"]) and clean_domain and clean_domain not in REPUTABLE_BUSINESS_NEWS_DOMAINS:
+        return SOURCE_CLASS_COMPANY_HOMEPAGE
+
+
+    # 8. Professional Profiles & Social Posts
+    if "linkedin.com" in clean_domain:
+        if "/in/" in path:
+            return SOURCE_CLASS_PROFESSIONAL_PROFILE
+        if "/jobs/" in path or "/job/" in path:
+            return SOURCE_CLASS_HIRING_PAGE
+        return SOURCE_CLASS_SOCIAL_POST
+
+    if any(clean_domain == jb or clean_domain.endswith("." + jb) for jb in _JOB_BOARD_DOMAINS):
+        return SOURCE_CLASS_HIRING_PAGE
+
+    if any(d in clean_domain for d in ["twitter.com", "x.com", "facebook.com", "instagram.com", "threads.net", "youtube.com", "reddit.com", "quora.com"]):
+        return SOURCE_CLASS_SOCIAL_POST
+
+    # 9. Reputable Industry News
+    if any(clean_domain == ind or clean_domain.endswith("." + ind) for ind in REPUTABLE_INDUSTRY_NEWS_DOMAINS):
+        return SOURCE_CLASS_REPUTABLE_INDUSTRY_NEWS
+
+    # 10. Reputable Business News
+    if any(clean_domain == bn or clean_domain.endswith("." + bn) for bn in REPUTABLE_BUSINESS_NEWS_DOMAINS):
+        return SOURCE_CLASS_REPUTABLE_BUSINESS_NEWS
+
+    # Global press release paths on arbitrary domains
+    if any(p in path for p in ["/press-release", "/press_release", "/pressrelease", "/news-release"]):
+        return SOURCE_CLASS_OFFICIAL_PRESS_RELEASE
+
+    return SOURCE_CLASS_UNKNOWN
+
+
+def is_source_allowed_for_trigger(
+    url: str,
+    domain: str = "",
+    official_domain: str = "",
+    title: str = "",
+    snippet: str = "",
+) -> Tuple[bool, str, str]:
+    """Check whether a discovered source URL is deterministically permitted as a trigger source.
+
+    Returns:
+        (is_allowed, source_class, reason)
+    """
+    src_class = classify_source_class(
+        url=url, domain=domain, official_domain=official_domain, title=title, snippet=snippet
+    )
+    if src_class in TRIGGER_HARD_REJECT_CLASSES:
+        return False, src_class, f"Deterministic hard reject: {src_class} cannot prove plant capex or expansion"
+    return True, src_class, f"Source class {src_class} is allowed for trigger evaluation"
+
+
 def classify_source_role(
     url: str,
     domain: str,
@@ -240,11 +464,8 @@ def classify_source_role(
 ) -> str:
     """Classify the role of a source based on domain, URL path, and snippet context.
 
-    The same domain can serve different roles:
-    - linkedin.com/in/john-doe  -> PERSON_EMPLOYMENT_SOURCE
-    - linkedin.com/company/foo  -> DISCOVERY_ONLY
-    - naukri.com job with "calibration" in snippet -> HIRING_SIGNAL_SOURCE
-    - play.google.com           -> IRRELEVANT (always)
+    Enforces path-level classification so that stock quotes or homepages on reputable
+    domains are NEVER promoted to trigger evidence.
     """
     clean_domain = (domain or "").lower().replace("www.", "")
     url_lower = (url or "").lower()
@@ -261,6 +482,17 @@ def classify_source_role(
         clean_d = d.replace("www.", "")
         if clean_domain == clean_d or clean_domain.endswith("." + clean_d):
             return SOURCE_ROLE_UNTRUSTED
+
+    # Deterministic source class check: reject stock quotes and homepages from trigger roles
+    src_class = classify_source_class(url, domain=clean_domain, snippet=snippet)
+    if src_class == SOURCE_CLASS_STOCK_QUOTE:
+        return SOURCE_ROLE_COMPANY_EXISTENCE
+    if src_class in (SOURCE_CLASS_FINANCIAL_AGGREGATOR, SOURCE_CLASS_DIRECTORY):
+        return SOURCE_ROLE_COMPANY_EXISTENCE
+    if src_class == SOURCE_CLASS_COMPANY_HOMEPAGE:
+        return SOURCE_ROLE_COMPANY_EXISTENCE
+    if src_class == SOURCE_CLASS_SEO_CONTENT:
+        return SOURCE_ROLE_DISCOVERY_ONLY
 
     # LinkedIn: path-based classification
     if "linkedin.com" in clean_domain:

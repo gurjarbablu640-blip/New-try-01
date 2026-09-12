@@ -247,7 +247,21 @@ class ResearchProviderRouter:
             "http://searxng:8080",
             "http://localhost:8080",
         ]
+        if os.name == "nt":
+            try:
+                import subprocess
+                wsl_out = subprocess.check_output(
+                    ["wsl", "-d", "docker-desktop", "-e", "ip", "addr", "show", "eth0"],
+                    timeout=2,
+                    stderr=subprocess.DEVNULL,
+                ).decode("utf-8", errors="ignore")
+                m = re.search(r"inet\s+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)", wsl_out)
+                if m:
+                    candidate_urls.append(f"http://{m.group(1)}:8080")
+            except Exception:
+                pass
         candidate_urls = list(dict.fromkeys(u for u in candidate_urls if u))
+
         for base in candidate_urls:
             url = f"{base}/search"
             params = {

@@ -69,7 +69,7 @@ class DeepFacilityResolver:
         snippets = evidence_snippets or []
         combined_text = f"{trigger_text} {' '.join(snippets)}".lower()
 
-        # Step 1: Detect explicit industrial corridor / cluster mention in trigger
+        # Step 1: Detect explicit industrial corridor / cluster mention in TRIGGER TEXT directly
         detected_cluster = None
         for cluster_key, cluster_meta in INDUSTRIAL_CLUSTERS.items():
             if cluster_key in trigger_lower:
@@ -89,32 +89,24 @@ class DeepFacilityResolver:
                 "linkage_confidence": "DIRECT",
                 "linkage_evidence": f"Trigger event explicitly specifies {cluster_key.title()} ({cluster_meta['type']})",
                 "facility_verified": True,
+                "trigger_facility": facility_name,
+                "known_company_facility": f"{company_name} {known_city or ''}".strip(),
             }
 
-        # Step 2: Corroborate city and plant keyword in snippets
         target_city = (known_city or "").lower()
         target_state = (known_state or "").lower()
 
-        # Check if snippets identify exact plant address
-        plant_match = re.search(r'(?:plant|facility|unit|works|factory|branch)\s*(?:at|in|no\.?|location:?)\s*([A-Za-z0-9\s,\-]+?(?:city|corridor|estate|midc|sipcot|gidc|phase|sector|road|nagar|puram|dist|district))', combined_text, re.I)
-        if plant_match and target_city and (target_city in combined_text or any(target_city in c_meta["city"].lower() for c_meta in INDUSTRIAL_CLUSTERS.values())):
-            plant_detail = plant_match.group(0).strip().title()
-            return {
-                "facility_name": f"{company_name} - {plant_detail}",
-                "facility_address": f"{plant_detail}, {known_city.title() if known_city else 'India'}",
-                "city": known_city.title() if known_city else "",
-                "state": known_state.title() if known_state else "",
-                "linkage_confidence": "STRONG",
-                "linkage_evidence": f"Independent documentation confirms plant at {plant_detail} aligning with {known_city}",
-                "facility_verified": True,
-            }
+        # Step 2: Trigger text mentions city/state and corroborating evidence specifies the exact plant
+        trigger_mentions_city = target_city and (target_city in trigger_lower)
+        trigger_mentions_cluster = any(c_key in trigger_lower for c_key in INDUSTRIAL_CLUSTERS)
 
-        # Step 3: Check if known cluster appears in snippets (secondary evidence)
+        # Step 2: Corroborating evidence in snippets or trigger matches industrial cluster
         for cluster_key, cluster_meta in INDUSTRIAL_CLUSTERS.items():
             if cluster_key in combined_text:
                 aliases = [a.lower() for a in cluster_meta.get("aliases", [cluster_meta["city"].lower()])]
                 city_matches = target_city in aliases or target_city == cluster_meta["city"].lower()
                 if not target_city or city_matches or (target_state and target_state in cluster_meta["state"].lower()):
+                    is_trigger_linked = trigger_mentions_city or trigger_mentions_cluster
                     return {
                         "facility_name": f"{company_name} Manufacturing Unit, {cluster_key.title()}",
                         "facility_address": f"{cluster_key.title()} {cluster_meta['type']}, {cluster_meta['city']}, {cluster_meta['state']}",
@@ -124,9 +116,30 @@ class DeepFacilityResolver:
                         "linkage_confidence": "STRONG",
                         "linkage_evidence": f"Documentation corroborates active manufacturing at {cluster_key.title()} in {cluster_meta['city']}",
                         "facility_verified": True,
+                        "trigger_facility": f"{company_name} Manufacturing Unit, {cluster_key.title()}" if is_trigger_linked else None,
+                        "known_company_facility": f"{company_name} Manufacturing Unit, {cluster_key.title()}",
                     }
 
-        # Step 4: Weak linkage — corporate trigger or city match without plant proof
+        if trigger_mentions_city or trigger_mentions_cluster:
+            # Check if snippets or trigger identify exact plant address
+            plant_match = re.search(r'(?:plant|facility|unit|works|factory|branch)\s*(?:at|in|no\.?|location:?)\s*([A-Za-z0-9\s,\-]+?(?:city|corridor|estate|midc|sipcot|gidc|phase|sector|road|nagar|puram|dist|district))', combined_text, re.I)
+            if plant_match:
+                plant_detail = plant_match.group(0).strip().title()
+                return {
+                    "facility_name": f"{company_name} - {plant_detail}",
+                    "facility_address": f"{plant_detail}, {known_city.title() if known_city else 'India'}",
+                    "city": known_city.title() if known_city else "",
+                    "state": known_state.title() if known_state else "",
+                    "linkage_confidence": "STRONG",
+                    "linkage_evidence": f"Trigger references {target_city.title()} and documentation confirms plant at {plant_detail}",
+                    "facility_verified": True,
+                    "trigger_facility": f"{company_name} - {plant_detail}",
+                    "known_company_facility": f"{company_name} {known_city or ''}".strip(),
+                }
+
+
+        # Step 3: Seed list / directory knows company has a facility, but trigger is corporate-only
+        # This prevents corporate triggers from falsely inheriting DIRECT/STRONG linkage to seed plants
         if known_city:
             return {
                 "facility_name": f"{company_name} ({known_city.title()} Operations)",
@@ -135,8 +148,10 @@ class DeepFacilityResolver:
                 "state": known_state.title() if known_state else "",
                 "industrial_cluster": None,
                 "linkage_confidence": "WEAK",
-                "linkage_evidence": f"Company operates in {known_city.title()}, but trigger is corporate-level without specific plant linkage",
+                "linkage_evidence": f"Static seed data confirms operations in {known_city.title()}, but trigger text contains zero facility/location evidence",
                 "facility_verified": False,
+                "trigger_facility": None,
+                "known_company_facility": f"{company_name} ({known_city.title()} Operations)",
             }
 
         # Step 5: Unknown

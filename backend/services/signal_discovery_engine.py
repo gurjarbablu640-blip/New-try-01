@@ -536,26 +536,41 @@ def generate_industrial_trigger_query(company_name: str) -> str:
 def generate_secondary_capex_query(company_name: str) -> str:
     """Generate a targeted industrial capex and capacity milestone query for reference year 2026."""
     clean_name = re.sub(r"\b(Limited|Ltd\.?|Pvt\.?|Private|LLP|Inc\.?)\b", "", company_name, flags=re.IGNORECASE).strip()
-    return f'"{clean_name}" (capex OR "plant expansion" OR commissioning OR "new unit" OR "manufacturing") "2026"'
+    return (
+        f'"{clean_name}" ("capacity expansion" OR "commissioning" OR "new line" OR "new plant" OR "capex") "2026" '
+        f'-stock -share-price -market-cap -screener -dividend'
+    )
 
 
 def filter_negative_financial_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Filter out pure stock/share price articles from trigger results while preserving genuine industrial capex news."""
+    """Strictly filter out stock/share price quote pages, aggregators, and non-event financial articles.
+
+    Enforces deterministic hard rejects on URLs and strips generic ticker/market noise.
+    Never falls back to returning rejected results.
+    """
+    from services.source_verification_pipeline import (
+        classify_source_class,
+        TRIGGER_HARD_REJECT_CLASSES,
+    )
+    from services.trigger_discovery_service import evaluate_event_semantics
+
     clean_results = []
     for r in results:
-        combo = (r.get("title", "") + " " + r.get("snippet", "")).lower()
-        is_pure_financial = (
-            any(fin in combo for fin in [
-                "share price", "stock price", "price target", "target price",
-                "buy rating", "brokerage recommendation", "nse live", "bse live",
-                "quarterly profit", "sensex today", "nifty 50"
-            ])
-            and not any(ind in combo for ind in [
-                "plant", "capex", "commission", "facility", "expansion",
-                "factory", "line", "production", "capacity", "laboratory", "metrology"
-            ])
-        )
-        if not is_pure_financial:
-            clean_results.append(r)
-    return clean_results if clean_results else results
+        url = r.get("url", "")
+        title = r.get("title", "")
+        snippet = r.get("content", "") or r.get("snippet", "")
+
+        # 1. Deterministic URL classification gate
+        src_class = classify_source_class(url, title=title, snippet=snippet)
+        if src_class in TRIGGER_HARD_REJECT_CLASSES:
+            continue
+
+        # 2. Check event semantics
+        sem_eval = evaluate_event_semantics(snippet, title=title)
+        if sem_eval["is_generic_financial"] and not sem_eval["is_verified"]:
+            continue
+
+        clean_results.append(r)
+
+    return clean_results
 
