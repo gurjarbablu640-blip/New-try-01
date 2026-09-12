@@ -1,0 +1,285 @@
+{
+  "metadata": {
+    "version": "1.0",
+    "description": "Standardized Trigger Recall & Precision Benchmark for Salesoorja",
+    "created_at": "2026-09-12T11:45:00Z",
+    "positive_count": 16,
+    "negative_count": 16
+  },
+  "known_positives": [
+    {
+      "id": "kp_01",
+      "company": "Maruti Suzuki India Limited",
+      "sector": "Automotive OEM",
+      "expected_trigger_class": "COMMISSIONING_AND_CAPACITY_EXPANSION",
+      "approximate_event_period": "2026-Q3",
+      "expected_facility": "Hansalpur, Gujarat",
+      "why_known_positive": "Commercial production started at 4th assembly line in Hansalpur plant, taking SMG capacity to 1M units."
+    },
+    {
+      "id": "kp_02",
+      "company": "Diamond Power Infrastructure Limited",
+      "sector": "Power Cables & Conductors",
+      "expected_trigger_class": "CAPEX_PLANT_EXPANSION",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "Vadodara, Gujarat",
+      "why_known_positive": "Major manufacturing capex and modernization announced for power transmission conductor lines in Vadodara."
+    },
+    {
+      "id": "kp_03",
+      "company": "DN Solutions India",
+      "sector": "CNC Machine Tools & Precision Machinery",
+      "expected_trigger_class": "NEW_FACILITY_TECH_CENTER",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "Bengaluru, Karnataka",
+      "why_known_positive": "Inauguration and expansion of new technical and machining center in Bengaluru."
+    },
+    {
+      "id": "kp_04",
+      "company": "Novonesis",
+      "sector": "Industrial Enzymes & Biosolutions",
+      "expected_trigger_class": "CAPEX_FACILITY_EXPANSION",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "Chakan, Pune, Maharashtra",
+      "why_known_positive": "Commercial production expansion and capex at Chakan biosolutions manufacturing plant."
+    },
+    {
+      "id": "kp_05",
+      "company": "Lumino Industries Limited",
+      "sector": "Aluminium Conductors & HT Cables",
+      "expected_trigger_class": "NEW_PRODUCTION_LINE_EXPANSION",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "Kolkata, West Bengal",
+      "why_known_positive": "Capacity ramp-up and new manufacturing lines for specialized transmission cables."
+    },
+    {
+      "id": "kp_06",
+      "company": "Hero Future Energies",
+      "sector": "Renewable Energy & Clean Tech",
+      "expected_trigger_class": "CLEAN_TECH_PLANT_CAPEX",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "India",
+      "why_known_positive": "Commissioning of renewable facilities and green hydrogen production capex."
+    },
+    {
+      "id": "kp_07",
+      "company": "Exide Energy Solutions Limited",
+      "sector": "Lithium-ion Battery Cells",
+      "expected_trigger_class": "GIGAFACTORY_CAPEX_EXPANSION",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "Devanahalli, Bengaluru, Karnataka",
+      "why_known_positive": "Multi-gigawatt lithium cell manufacturing gigafactory setup in Devanahalli."
+    },
+    {
+      "id": "kp_08",
+      "company": "Tata Electronics Private Limited",
+      "sector": "Precision Electronics Components & Semiconductors",
+      "expected_trigger_class": "NEW_PLANT_COMMISSIONING",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "Hosur, Tamil Nadu",
+      "why_known_positive": "Major manufacturing plant expansion for precision smartphone enclosures and electronic components."
+    },
+    {
+      "id": "kp_09",
+      "company": "Dixon Technologies (India) Limited",
+      "sector": "Electronic Manufacturing Services",
+      "expected_trigger_class": "NEW_MANUFACTURING_FACILITY",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "Oragadam, Tamil Nadu / Noida, UP",
+      "why_known_positive": "MoU and plant construction for smartphone and consumer electronics assembly lines."
+    },
+    {
+      "id": "kp_010",
+      "company": "Sona BLW Precision Forgings Limited",
+      "sector": "EV Driveline Systems & Precision Forging",
+      "expected_trigger_class": "CAPACITY_RAMP_UP",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "IMT Manesar, Gurugram, Haryana",
+      "why_known_positive": "Capacity expansion and new production line for EV traction motors and differential assemblies."
+    },
+    {
+      "id": "kp_011",
+      "company": "JSW Steel Limited",
+      "sector": "Integrated Steel Manufacturing",
+      "expected_trigger_class": "BLAST_FURNACE_CAPEX_EXPANSION",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "Vijayanagar, Ballari, Karnataka",
+      "why_known_positive": "Commissioning of 5 MTPA brownfield expansion at Vijayanagar steel works."
+    },
+    {
+      "id": "kp_012",
+      "company": "Ambuja Cements Limited",
+      "sector": "Cement & Building Materials",
+      "expected_trigger_class": "CLINKER_LINE_COMMISSIONING",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "Bhatapara, Chhattisgarh",
+      "why_known_positive": "Commercial production commissioning of new clinker production line."
+    },
+    {
+      "id": "kp_013",
+      "company": "CEAT Limited",
+      "sector": "Tyres & Rubber Products",
+      "expected_trigger_class": "CAPACITY_EXPANSION_CAPEX",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "Sriperumbudur, Chennai, Tamil Nadu",
+      "why_known_positive": "Capex approval and commissioning of radial passenger car tyre expansion."
+    },
+    {
+      "id": "kp_014",
+      "company": "Uno Minda Limited",
+      "sector": "Automotive Lighting & Tier-1 Components",
+      "expected_trigger_class": "NEW_PLANT_COMMISSIONING",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "Farukhnagar, Haryana",
+      "why_known_positive": "Commissioning of greenfield manufacturing plant for 4W automotive lighting."
+    },
+    {
+      "id": "kp_015",
+      "company": "Hindalco Industries Limited",
+      "sector": "Aluminium Smelting & Rolling",
+      "expected_trigger_class": "SMELTER_CAPACITY_EXPANSION",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "Aditya Aluminium, Sambalpur, Odisha",
+      "why_known_positive": "Capacity expansion and new railway wagon extrusion line commissioning."
+    },
+    {
+      "id": "kp_016",
+      "company": "Bharat Forge Limited",
+      "sector": "Forging & Machined Heavy Engineering",
+      "expected_trigger_class": "DEFENSE_AND_AERO_FACILITY_CAPEX",
+      "approximate_event_period": "2024-2026",
+      "expected_facility": "Chakan, Pune, Maharashtra",
+      "why_known_positive": "New manufacturing lines and modernization for e-mobility and aerospace precision forgings."
+    }
+  ],
+  "known_negatives": [
+    {
+      "id": "kn_01",
+      "company": "Maruti Suzuki India Limited",
+      "test_url": "https://www.moneycontrol.com/india/stockpricequote/auto-cars-jeeps/marutisuzukiindia/MS24",
+      "test_title": "Maruti Suzuki Share Price, Maruti Suzuki Stock Price, Stock Analysis",
+      "test_snippet": "Maruti Suzuki India Ltd. share price today, Live NSE/BSE stock price, market cap, financial report, ratio, balance sheet.",
+      "expected_rejection_reason": "HARD_REJECT_CLASS_STOCK_QUOTE"
+    },
+    {
+      "id": "kn_02",
+      "company": "Dixon Technologies",
+      "test_url": "https://www.screener.in/company/DIXON/consolidated/",
+      "test_title": "Dixon Technologies (India) Ltd financial results and price chart",
+      "test_snippet": "Market Cap Rs 85,000 Cr, Current Price, High / Low, Stock P/E, Book Value, Dividend Yield, ROCE, ROE.",
+      "expected_rejection_reason": "HARD_REJECT_CLASS_STOCK_QUOTE"
+    },
+    {
+      "id": "kn_03",
+      "company": "Sona BLW Precision Forgings Limited",
+      "test_url": "https://economictimes.indiatimes.com/sona-blw-precision-forgings-ltd/stocks/companyid-543300.cms",
+      "test_title": "Sona BLW Precision Forgings Ltd. Share Price Today, Live Stock Price",
+      "test_snippet": "Get Sona BLW Precision Forgings Ltd. live share price, historical charts, volume, market capitalization and stock performance.",
+      "expected_rejection_reason": "HARD_REJECT_CLASS_STOCK_QUOTE"
+    },
+    {
+      "id": "kn_04",
+      "company": "Tata Motors Limited",
+      "test_url": "https://www.tatamotors.com/",
+      "test_title": "Tata Motors: Leading Automobile Manufacturer in India",
+      "test_snippet": "Welcome to Tata Motors, India's largest automobile company producing passenger vehicles, commercial trucks, and electric buses.",
+      "expected_rejection_reason": "HARD_REJECT_CLASS_COMPANY_HOMEPAGE"
+    },
+    {
+      "id": "kn_05",
+      "company": "JSW Steel Limited",
+      "test_url": "https://www.jswsteel.in/about-us",
+      "test_title": "About Us | Leading Steel Producer in India | JSW Steel",
+      "test_snippet": "JSW Steel is the flagship business of the diversified US$ 23 billion JSW Group, manufacturing a wide range of steel products.",
+      "expected_rejection_reason": "HARD_REJECT_CLASS_COMPANY_HOMEPAGE"
+    },
+    {
+      "id": "kn_06",
+      "company": "Ambuja Cements Limited",
+      "test_url": "https://www.livemint.com/market/mark-to-market/ambuja-cements-q1-net-profit-rises-15-percent-1171829381.html",
+      "test_title": "Ambuja Cements Q1 results: Net profit rises 15% to Rs 645 crore",
+      "test_snippet": "Ambuja Cements reported a 15% rise in consolidated net profit driven by operational efficiencies, lower fuel costs and robust market volumes.",
+      "expected_rejection_reason": "NO_EVENT_SEMANTICS"
+    },
+    {
+      "id": "kn_07",
+      "company": "Bharat Forge Limited",
+      "test_url": "https://www.bseindia.com/corporates/anndet_new.aspx?newsid=123456",
+      "test_title": "Bharat Forge Limited - Outcome of Board Meeting for Dividend Payment",
+      "test_snippet": "Board of Directors declared an interim dividend of Rs 2.50 per equity share for the financial year. Record date fixed for dividend payout.",
+      "expected_rejection_reason": "NO_EVENT_SEMANTICS"
+    },
+    {
+      "id": "kn_08",
+      "company": "Old Stale Plant Setup",
+      "test_url": "https://www.thehindubusinessline.com/companies/old-factory-commissioned-in-2018/article12345.ece",
+      "test_title": "Company commissions new manufacturing facility in Pune",
+      "test_snippet": "Published: May 14, 2018. The company has successfully commissioned its new manufacturing line at Pune with an investment of Rs 100 crore.",
+      "expected_rejection_reason": "STALE_TRIGGER"
+    },
+    {
+      "id": "kn_09",
+      "company": "Industrial Spares India",
+      "test_url": "https://www.indiamart.com/industrial-spares-india/aboutus.html",
+      "test_title": "Industrial Spares India - Wholesaler of Bearings & Valves",
+      "test_snippet": "Verified Supplier on IndiaMART. Contact us for bulk deals, supplier price list, wholesale industrial components.",
+      "expected_rejection_reason": "HARD_REJECT_CLASS_DIRECTORY"
+    },
+    {
+      "id": "kn_10",
+      "company": "ABC Precision Engineering Private Limited",
+      "test_url": "https://www.zaubacorp.com/company/ABC-PRECISION-ENGINEERING-PRIVATE-LIMITED/U29100MH2010PTC123456",
+      "test_title": "ABC Precision Engineering Private Limited - Company Information",
+      "test_snippet": "Corporate Identification Number (CIN) U29100MH2010PTC123456. Registered office address in Mumbai Maharashtra.",
+      "expected_rejection_reason": "HARD_REJECT_CLASS_FINANCIAL_AGGREGATOR"
+    },
+    {
+      "id": "kn_11",
+      "company": "XYZ Motors",
+      "test_url": "https://indiankanoon.org/doc/987654321/",
+      "test_title": "XYZ Motors vs Commercial Tax Officer on 12 August 2025",
+      "test_snippet": "High Court judgment regarding assessment of state entry tax and penalties under section 14 of the Commercial Tax Act.",
+      "expected_rejection_reason": "DISALLOWED_DOMAIN"
+    },
+    {
+      "id": "kn_12",
+      "company": "Automotive Hub",
+      "test_url": "https://www.amazon.in/Automotive-Car-Accessories/b?ie=UTF8&node=5257471031",
+      "test_title": "Car Accessories & Automotive Parts: Buy online at low prices in India",
+      "test_snippet": "Explore wide selection of car accessories, floor mats, car covers, wiper blades, and tyres with free delivery.",
+      "expected_rejection_reason": "DISALLOWED_DOMAIN"
+    },
+    {
+      "id": "kn_13",
+      "company": "Hero Cycles",
+      "test_url": "https://www.espncricinfo.com/series/ipl-2026-hero-cup-match-summary",
+      "test_title": "Match Report: India wins final at Wankhede Stadium",
+      "test_snippet": "Hero Cup cricket tournament summary, batting scores, bowler stats, and player of the match award presentation.",
+      "expected_rejection_reason": "DISALLOWED_DOMAIN"
+    },
+    {
+      "id": "kn_14",
+      "company": "Dixon Electronics",
+      "test_url": "https://www.dixons.co.uk/store-locator/london",
+      "test_title": "Dixons Carphone Store Locator - UK High Street Electronics",
+      "test_snippet": "Find Dixons Travel and electronics retail stores across London Heathrow airport terminals and United Kingdom.",
+      "expected_rejection_reason": "WRONG_ENTITY"
+    },
+    {
+      "id": "kn_15",
+      "company": "Hindalco Industries",
+      "test_url": "https://www.businesstoday.in/markets/company-stocks/story/hindalco-share-price-target-brokerage-gives-buy-call-456789",
+      "test_title": "Hindalco share price target: Brokerage sees 20% upside; maintain buy",
+      "test_snippet": "Motilal Oswal maintains buy rating on Hindalco Industries with target price of Rs 750 based on strong LME aluminium spot pricing.",
+      "expected_rejection_reason": "FINANCIAL_NOISE_REJECT"
+    },
+    {
+      "id": "kn_16",
+      "company": "Global Automotive Plastics",
+      "test_url": "https://www.openpr.com/news/12345678/automotive-plastics-market-trends-and-forecast-2032.html",
+      "test_title": "Automotive Plastics Market Size Worth USD 68 Billion by 2032",
+      "test_snippet": "Syndicated market research report by Market Research Future covering CAGR growth, key players, regional segments and forecast.",
+      "expected_rejection_reason": "HARD_REJECT_CLASS_SEO_CONTENT"
+    }
+  ]
+}

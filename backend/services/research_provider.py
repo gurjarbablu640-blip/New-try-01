@@ -237,21 +237,21 @@ class ResearchProviderRouter:
             "error": error,
         }
 
-    def _search_searxng(
-        self, query: str, num_results: int = 5
-    ) -> tuple[list[ResearchResult], str, Optional[str]]:
-        """Search via self-hosted SearXNG instance."""
-        candidate_urls = [
-            os.environ.get("SEARXNG_BASE_URL", "").rstrip("/"),
-            str(getattr(settings, "SEARXNG_BASE_URL", "")).rstrip("/"),
-            "http://searxng:8080",
-            "http://localhost:8080",
-        ]
+    _cached_searxng_base: Optional[str] = None
+
+    def _get_candidate_searxng_urls(self) -> list[str]:
+        """Return candidate SearXNG base URLs in priority order."""
+        if getattr(self, "_cached_searxng_base", None):
+            return [self._cached_searxng_base]
+        if getattr(ResearchProviderRouter, "_cached_searxng_base", None):
+            return [ResearchProviderRouter._cached_searxng_base]
+
+        candidate_urls = []
         if os.name == "nt":
             try:
                 import subprocess
                 wsl_out = subprocess.check_output(
-                    ["wsl", "-d", "docker-desktop", "-e", "ip", "addr", "show", "eth0"],
+                    ["wsl", "-d", "docker-desktop", "-e", "/bin/sh", "-c", "ip addr show eth0"],
                     timeout=2,
                     stderr=subprocess.DEVNULL,
                 ).decode("utf-8", errors="ignore")
@@ -260,7 +260,25 @@ class ResearchProviderRouter:
                     candidate_urls.append(f"http://{m.group(1)}:8080")
             except Exception:
                 pass
-        candidate_urls = list(dict.fromkeys(u for u in candidate_urls if u))
+
+        candidate_urls.extend([
+            os.environ.get("SEARXNG_BASE_URL", "").rstrip("/"),
+            str(getattr(settings, "SEARXNG_BASE_URL", "")).rstrip("/"),
+            "http://searxng:8080",
+            "http://localhost:8080",
+        ])
+        return list(dict.fromkeys(u for u in candidate_urls if u))
+
+    def get_searxng_base_url(self) -> Optional[str]:
+        """Detect and return the working SearXNG base URL."""
+        candidates = self._get_candidate_searxng_urls()
+        return candidates[0] if candidates else None
+
+    def _search_searxng(
+        self, query: str, num_results: int = 5
+    ) -> tuple[list[ResearchResult], str, Optional[str]]:
+        """Search via self-hosted SearXNG instance."""
+        candidate_urls = self._get_candidate_searxng_urls()
 
         for base in candidate_urls:
             url = f"{base}/search"
@@ -274,6 +292,8 @@ class ResearchProviderRouter:
             try:
                 resp = requests.get(url, params=params, timeout=16)
                 if resp.status_code == 200:
+                    ResearchProviderRouter._cached_searxng_base = base
+                    self._cached_searxng_base = base
                     data = resp.json()
                     raw_results = data.get("results", [])
                     results = []
@@ -294,6 +314,7 @@ class ResearchProviderRouter:
                 logger.debug("SearXNG connection failed: %s", type(e).__name__)
                 continue
         return [], PROVIDER_ERROR, "SearXNG unavailable"
+
 
     def _search_google(
         self, query: str, num_results: int

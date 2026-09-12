@@ -150,12 +150,12 @@ def classify_source_tier(url: str, domain: str = "", official_domain: str = "") 
 # ── Event Semantics Verification ──────────────────────────────────────────────
 EVENT_ACTION_PATTERNS = [
     # Capex / Plant / Line Events
-    (r"\b(will invest|is investing|invests|invested|investment of|investment planned|investment amount|investing in|capex of|capex planned|approved capex)\b", "CAPACITY_EXPANSION", 1.0),
-    (r"\b(commissioned|will commission|commissioning|inaugurated|opened|opening of|commencing operations|commence operations|commencement timing|starts production|started production)\b", "COMMISSIONING", 1.0),
-    (r"\b(new plant|new manufacturing plant|new factory|new facility|construction of(?: [a-z]+)* plant|setting up plant|sets up plant|greenfield plant|second plant|third plant)\b", "NEW_PLANT", 1.0),
-    (r"\b(new line|new manufacturing line|new assembly line|new production line|production line|new smt line|new press line)\b", "NEW_LINE", 1.0),
-    (r"\b(expanding|expanding plant|plant expansion|expanding capacity|capacity expansion|capacity increased|facility expansion|expanding manufacturing)\b", "PLANT_EXPANSION", 1.0),
-    (r"\b(new equipment|new machinery|production equipment|testing equipment)\b", "NEW_EQUIPMENT", 0.95),
+    (r"\b(will invest|is investing|invests|invested|investment of|investment planned|investment amount|investing in|capex of|capex planned|approved capex|capex investment|capital expenditure of|announces? capex|announced capex)\b", "CAPACITY_EXPANSION", 1.0),
+    (r"\b(commissions?|commissioned|will commission|to commission|commissioning of (?:a |the |its |their )?(?:new )?(?:plant|facility|factory|unit|line|project|capacity|expansion|furnace|kiln|smelter|reactor)|inaugurate[ds]?|inauguration|inaugurating|opened|opening of|commencing operations|commence operations|commencement timing|starts? production|started production|commercial production)\b", "COMMISSIONING", 1.0),
+    (r"\b(new plant|new manufacturing plant|new factory|new facility|construction of(?: [a-z]+)* plant|greenfield plant|second plant|third plant|fourth plant|sets? up(?:\s+[a-zA-Z0-9\-\.]+){0,6}\s+(?:plant|facility|factory|unit|line)|to set up(?:\s+[a-zA-Z0-9\-\.]+){0,6}\s+(?:plant|facility|factory|unit|line)|to build(?:\s+[a-zA-Z0-9\-\.]+){0,6}\s+(?:plant|facility|factory|unit|line))\b", "NEW_PLANT", 1.0),
+    (r"\b(new line|new manufacturing line|new assembly line|new production line|production line|new smt line|new press line|fourth unit|fourth line|new unit|additional unit|additional line)\b", "NEW_LINE", 1.0),
+    (r"\b(expanding|expanding plant|plant expansion|expanding capacity|capacity expansion|capacity increased|capacity ramp-?up|facility expansion|expanding manufacturing|expands? capacity|capacity expanded)\b", "PLANT_EXPANSION", 1.0),
+    (r"\b(new equipment|new machinery|production equipment|testing equipment|machining center|tech center)\b", "NEW_EQUIPMENT", 0.95),
     (r"\b(new lab|new laboratory|metrology lab|calibration lab|testing lab|quality laboratory|qc lab|qa lab)\b", "NEW_LAB", 1.0),
     (r"\b(commercial production|production commenced|commences production|ramp up|ramping up|production ramp)\b", "ORDER_RAMP_UP", 0.95),
     (r"\b(order awarded|bagged order|won contract|oem approval|oem nomination|customer approval)\b", "CUSTOMER_OEM_APPROVAL", 0.9),
@@ -264,13 +264,16 @@ def fetch_and_verify_source_content(
     url: str,
     search_title: str = "",
     search_snippet: str = "",
-    timeout: int = 6,
+    timeout: int = 10,
 ) -> Dict[str, Any]:
     """Fetch public page content and verify whether event semantics actually exist in source text.
 
-    If snippet appeared to suggest an expansion but fetched page does not contain event semantics:
-    flags REJECT_SEARCH_SNIPPET_FALSE_POSITIVE.
+    Supports:
+    - Standard HTML pages with realistic browser headers
+    - Targeted PDF extraction (BSE/NSE announcements, investor decks) via pypdf
+    - Browser escalation hook for anti-bot blocked promising sources (Tier A/B)
     """
+    import io
     import requests
     retrieved_at = datetime.now(timezone.utc).isoformat()
     clean_url = (url or "").strip()
@@ -290,17 +293,41 @@ def fetch_and_verify_source_content(
             "source_body_text": "",
         }
 
+    browser_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8",
+        "Accept-Language": "en-IN,en-US;q=0.9,en;q=0.8",
+    }
+
     try:
         resp = requests.get(
             clean_url,
-            headers={
-                "User-Agent": "Salesoorja-Research/1.0 (Commercial Trigger Verification)",
-                "Accept": "text/html,application/xhtml+xml",
-            },
+            headers=browser_headers,
             timeout=timeout,
             allow_redirects=True,
             stream=True,
         )
+
+        # ── Browser Escalation Hook for Anti-Bot Blocks on Promising Sources ──
+        if resp.status_code in (403, 429, 503):
+            from services.source_verification_pipeline import (
+                classify_source_class,
+                TRIGGER_HARD_REJECT_CLASSES,
+            )
+            src_class = classify_source_class(clean_url, title=search_title, snippet=search_snippet)
+            if src_class not in TRIGGER_HARD_REJECT_CLASSES:
+                # Promising legitimate source (Tier A/B news, exchange filing, official domain)
+                # Escalate with session & retry headers
+                try:
+                    s = requests.Session()
+                    s.headers.update(browser_headers)
+                    s.headers.update({"Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24"', "Sec-Ch-Ua-Mobile": "?0", "Sec-Ch-Ua-Platform": '"Windows"'})
+                    resp_retry = s.get(clean_url, timeout=timeout + 2, allow_redirects=True, stream=True)
+                    if resp_retry.status_code == 200:
+                        resp = resp_retry
+                except Exception:
+                    pass
+
         if resp.status_code != 200:
             return {
                 "verified": False,
@@ -317,21 +344,61 @@ def fetch_and_verify_source_content(
                 "source_body_text": "",
             }
 
-        content_bytes = b""
-        for chunk in resp.iter_content(chunk_size=10240):
-            content_bytes += chunk
-            if len(content_bytes) >= 51200:
-                break
+        content_type = resp.headers.get("Content-Type", "").lower()
+        is_pdf = "application/pdf" in content_type or clean_url.lower().split("?")[0].endswith(".pdf")
 
-        html_text = content_bytes.decode("utf-8", errors="replace")
-        title_m = re.search(r"<title[^>]*>([^<]+)</title>", html_text, re.IGNORECASE)
-        source_title = title_m.group(1).strip() if title_m else search_title
+        if is_pdf:
+            # ── PDF Handling via pypdf ──
+            try:
+                import pypdf
+                pdf_bytes = b""
+                for chunk in resp.iter_content(chunk_size=32768):
+                    pdf_bytes += chunk
+                    if len(pdf_bytes) >= 5 * 1024 * 1024:  # 5MB cap
+                        break
+                
+                reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+                total_pages = len(reader.pages)
+                extracted_pages_text = []
+                trigger_keywords = ["capex", "expansion", "commissioning", "plant", "facility", "manufacturing", "crore", "line", "production"]
+                
+                for p_idx, page in enumerate(reader.pages):
+                    try:
+                        p_txt = page.extract_text() or ""
+                        p_txt_lower = p_txt.lower()
+                        if any(kw in p_txt_lower for kw in trigger_keywords):
+                            extracted_pages_text.append(p_txt)
+                        elif p_idx < 3:
+                            extracted_pages_text.append(p_txt)
+                        if len(" ".join(extracted_pages_text)) >= 20000:
+                            break
+                    except Exception:
+                        continue
+                
+                clean_text = " ".join(extracted_pages_text)
+                clean_text = re.sub(r"\s+", " ", clean_text).strip()
+                source_title = search_title or (f"PDF Document ({total_pages} pages)")
+            except Exception as pdf_err:
+                logger.warning(f"PDF extraction error on {clean_url}: {pdf_err}")
+                clean_text = ""
+                source_title = search_title
+        else:
+            # ── HTML Handling ──
+            content_bytes = b""
+            for chunk in resp.iter_content(chunk_size=16384):
+                content_bytes += chunk
+                if len(content_bytes) >= 262144:  # 256KB buffer
+                    break
 
-        clean_html = re.sub(r"<(script|style|nav|footer|header)[^>]*>.*?</\1>", " ", html_text, flags=re.DOTALL | re.IGNORECASE)
-        clean_text = re.sub(r"<[^>]+>", " ", clean_html)
-        clean_text = re.sub(r"\s+", " ", clean_text).strip()
+            html_text = content_bytes.decode("utf-8", errors="replace")
+            title_m = re.search(r"<title[^>]*>([^<]+)</title>", html_text, re.IGNORECASE)
+            source_title = title_m.group(1).strip() if title_m else search_title
 
-        sem_eval = evaluate_event_semantics(clean_text[:10000], title=source_title)
+            clean_html = re.sub(r"<(script|style|nav|footer|header)[^>]*>.*?</\1>", " ", html_text, flags=re.DOTALL | re.IGNORECASE)
+            clean_text = re.sub(r"<[^>]+>", " ", clean_html)
+            clean_text = re.sub(r"\s+", " ", clean_text).strip()
+
+        sem_eval = evaluate_event_semantics(clean_text[:12000], title=source_title)
         snippet_eval = evaluate_event_semantics(search_snippet, title=search_title)
 
         if not sem_eval["is_verified"]:
@@ -415,6 +482,27 @@ def is_quote_grounded(quote: str, source_text: str) -> bool:
     s_alpha = re.sub(r"[^\w\s]", "", s_norm)
     if q_alpha and len(q_alpha) > 12 and q_alpha in s_alpha:
         return True
+    return False
+
+
+def is_company_grounded_in_text(company_name: str, text: str, url: str = "") -> bool:
+    """Verifies that the target company is actually mentioned in the source title, snippet, URL, or body."""
+    if not company_name:
+        return True
+
+    clean = re.sub(r"\b(Limited|Ltd\.?|Pvt\.?|Private|LLP|Inc\.?|Corporation|Corp\.?)\b", "", company_name, flags=re.IGNORECASE).strip()
+    clean_lower = clean.lower()
+
+    tokens = [t for t in re.findall(r"\b[a-zA-Z]{4,}\b", clean_lower) if t not in ("india", "company", "group", "industries", "enterprises", "solutions")]
+
+    combined = f"{text} {url}".lower()
+
+    if clean_lower in combined:
+        return True
+
+    if tokens and any(t in combined for t in tokens):
+        return True
+
     return False
 
 
@@ -750,3 +838,40 @@ EVENT_FIRST_SEARCH_QUERIES = [
 def generate_event_first_discovery_queries() -> List[str]:
     """Generates the Phase 11 event-first discovery query list."""
     return list(EVENT_FIRST_SEARCH_QUERIES)
+
+
+def should_escalate_to_browser(url: str, status_code: int) -> bool:
+    """Evaluates whether an HTTP request failure warrants browser escalation.
+
+    Only Tier A or B domains with anti-bot/rate-limiting response codes (403, 429, 503)
+    are escalated. Hard-rejected domains (social media, SEO, directories) are NEVER escalated.
+    """
+    if status_code not in (403, 429, 503):
+        return False
+    tier = classify_source_tier(url)
+    return tier in (SOURCE_TIER_A, SOURCE_TIER_B)
+
+
+def extract_pdf_capex_text(pdf_bytes: bytes, max_pages: int = 25) -> str:
+    """Extracts targeted text from a PDF stream focusing on capex, plant, expansion, or commissioning sections."""
+    try:
+        import io
+        import pypdf
+        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+        total_pages = len(reader.pages)
+        pages_to_check = min(total_pages, max_pages)
+
+        extracted_sections = []
+        keywords = ("capex", "capital expenditure", "plant", "commissioning", "expansion", "facility", "capacity", "project", "inaugurat")
+
+        for i in range(pages_to_check):
+            page_text = reader.pages[i].extract_text() or ""
+            text_lower = page_text.lower()
+            if any(kw in text_lower for kw in keywords):
+                extracted_sections.append(page_text)
+                if len(extracted_sections) >= 5:
+                    break
+        return "\n\n".join(extracted_sections)
+    except Exception as exc:
+        logger.warning(f"Failed to parse PDF bytes: {exc}")
+        return ""

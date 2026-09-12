@@ -1,0 +1,539 @@
+{
+  "timestamp": "2026-09-12T06:55:49.997589+00:00",
+  "benchmark_summary": {
+    "known_positives_total": 16,
+    "rediscovered_events_total": 16,
+    "discovery_recall": 1.0,
+    "discovery_recall_percent": "100.0%",
+    "current_opportunity_passes": 10,
+    "current_opportunity_recall": 0.625,
+    "current_opportunity_recall_percent": "62.5%",
+    "known_negatives_total": 16,
+    "correctly_rejected_negatives": 16,
+    "false_positives": 0,
+    "false_positive_leakage": 0,
+    "precision": 1.0,
+    "precision_percent": "100.0%",
+    "f1": 1.0,
+    "f1_percent": "100.0%"
+  },
+  "execution_gate": {
+    "passed": true,
+    "threshold": "DISCOVERY_RECALL >= 70% AND FALSE_POSITIVES == 0",
+    "decision": "SAFE_TO_SCALE_DISCOVERY = YES"
+  },
+  "failure_funnel": {
+    "SEARCH_ENGINE_NO_RESULT": 0,
+    "QUERY_NOT_SPECIFIC_ENOUGH": 0,
+    "SOURCE_RANK_TOO_LOW": 0,
+    "SOURCE_FETCH_FAILURE": 0,
+    "PDF_NOT_PARSED": 0,
+    "EVENT_SEMANTICS_FALSE_REJECT": 0,
+    "ENTITY_FALSE_REJECT": 0,
+    "DATE_EXTRACTION_FAILURE": 0,
+    "CORRECTLY_REJECTED_STALE": 6
+  },
+  "query_family_yield": {
+    "pass_1": {
+      "queries": 48,
+      "results": 288,
+      "valid_candidates": 13
+    },
+    "pass_2": {
+      "queries": 12,
+      "results": 72,
+      "valid_candidates": 3
+    },
+    "pass_3": {
+      "queries": 0,
+      "results": 0,
+      "valid_candidates": 0
+    },
+    "gemini_expansion": {
+      "queries": 0,
+      "results": 0,
+      "valid_candidates": 0
+    }
+  },
+  "search_engine_health": [
+    {
+      "engine": "bing",
+      "enabled": true,
+      "live": true,
+      "queries_tested": 4,
+      "successful_queries": 4,
+      "total_results": 36,
+      "useful_trigger_hits": 6,
+      "errors": 0,
+      "rate_limits": 0,
+      "timeouts": 0,
+      "avg_latency_sec": 0.503
+    },
+    {
+      "engine": "bing news",
+      "enabled": true,
+      "live": true,
+      "queries_tested": 4,
+      "successful_queries": 4,
+      "total_results": 27,
+      "useful_trigger_hits": 21,
+      "errors": 0,
+      "rate_limits": 0,
+      "timeouts": 0,
+      "avg_latency_sec": 0.651
+    },
+    {
+      "engine": "yandex",
+      "enabled": true,
+      "live": true,
+      "queries_tested": 4,
+      "successful_queries": 4,
+      "total_results": 60,
+      "useful_trigger_hits": 46,
+      "errors": 0,
+      "rate_limits": 0,
+      "timeouts": 0,
+      "avg_latency_sec": 1.182
+    },
+    {
+      "engine": "google",
+      "enabled": true,
+      "live": false,
+      "queries_tested": 4,
+      "successful_queries": 4,
+      "total_results": 0,
+      "useful_trigger_hits": 0,
+      "errors": 0,
+      "rate_limits": 0,
+      "timeouts": 0,
+      "avg_latency_sec": 0.039
+    },
+    {
+      "engine": "duckduckgo",
+      "enabled": true,
+      "live": false,
+      "queries_tested": 4,
+      "successful_queries": 4,
+      "total_results": 0,
+      "useful_trigger_hits": 0,
+      "errors": 0,
+      "rate_limits": 0,
+      "timeouts": 0,
+      "avg_latency_sec": 0.223
+    },
+    {
+      "engine": "yahoo",
+      "enabled": true,
+      "live": false,
+      "queries_tested": 4,
+      "successful_queries": 4,
+      "total_results": 0,
+      "useful_trigger_hits": 0,
+      "errors": 0,
+      "rate_limits": 0,
+      "timeouts": 0,
+      "avg_latency_sec": 0.366
+    },
+    {
+      "engine": "qwant",
+      "enabled": true,
+      "live": false,
+      "queries_tested": 4,
+      "successful_queries": 4,
+      "total_results": 0,
+      "useful_trigger_hits": 0,
+      "errors": 0,
+      "rate_limits": 0,
+      "timeouts": 0,
+      "avg_latency_sec": 0.447
+    }
+  ],
+  "positive_results": [
+    {
+      "id": "kp_01",
+      "company": "Maruti Suzuki India Limited",
+      "discovery_status": "PASS",
+      "production_timing_status": "PASS",
+      "failure_reason": null,
+      "discovered_event": {
+        "url": "https://blog.gaadikey.com/maruti-suzuki-commences-commercial-production-at-second-kharkhoda-plant",
+        "title": "Maruti Suzuki Commences Commercial Production at Second Kharkhoda Plant - GaadiKey",
+        "trigger_type": "COMMISSIONING",
+        "evidence": "Maruti Suzuki Commences Commercial Production at Second Kharkhoda Plant - GaadiKey window.ezstandalone = window.ezstandalone || {}; ezstandalone.cmd = ezstandalone.cmd || []; --> Bikes Hero Honda",
+        "date": null,
+        "recency_status": "CURRENT",
+        "recency_days": 117,
+        "facility": "Maruti Suzuki India Limited HSIIDC IMT, Manesar",
+        "discovered_via_pass": "pass_1"
+      }
+    },
+    {
+      "id": "kp_02",
+      "company": "Diamond Power Infrastructure Limited",
+      "discovery_status": "PASS",
+      "production_timing_status": "PASS",
+      "failure_reason": null,
+      "discovered_event": {
+        "url": "https://www.wirecable.in/diamond-power-infrastructure-4/",
+        "title": "Diamond Power Infrastructure Commissions 1,500 MT/Month Copper Cable Line - Wire &amp; Cable India",
+        "trigger_type": "COMMISSIONING",
+        "evidence": "Diamond Power Infrastructure Commissions 1,500 MT/Month Copper Cable Line - Wire &amp; Cable India September 12, 2026 Facebook Twitter Linkedin Youtube Email Whatsapp Primary Menu Search for",
+        "date": null,
+        "recency_status": "CURRENT",
+        "recency_days": 0,
+        "facility": "Diamond Power Infrastructure Limited MPIDC Industrial Area, Pithampur",
+        "discovered_via_pass": "pass_1"
+      }
+    },
+    {
+      "id": "kp_03",
+      "company": "DN Solutions India",
+      "discovery_status": "PASS",
+      "production_timing_status": "PASS",
+      "failure_reason": null,
+      "discovered_event": {
+        "url": "https://www.thehindubusinessline.com/companies/korean-based-dn-solutions-opens-first-india-plant-in-bengaluru-with-600crore-investment/article71392314.ece",
+        "title": "Korean-based DN Solutions opens first India plant in Bengaluru with \u20b9600\u00a0crore investment - The HinduBusinessLine",
+        "trigger_type": "CAPACITY_EXPANSION",
+        "evidence": "\u2019ve achieved one of the highest market shares among global machine tool companies. We will continue investing in India for the long term.\u201d He added, \u201cIndia clearly has the potential to become a global manufacturing powerhouse. Its large and expanding domestic ma",
+        "date": null,
+        "recency_status": "CURRENT",
+        "recency_days": 17,
+        "facility": "DN Solutions India (Bengaluru Operations)",
+        "discovered_via_pass": "pass_1"
+      }
+    },
+    {
+      "id": "kp_04",
+      "company": "Novonesis",
+      "discovery_status": "PASS",
+      "production_timing_status": "PASS",
+      "failure_reason": null,
+      "discovered_event": {
+        "url": "https://www.thehindu.com/business/Industry/denmarks-novonesis-to-invest-6660-crore-in-maharashtra-facility-expansion/article71420303.ece",
+        "title": "Denmark\u2019s Novonesis to invest \u20b96,660 crore in Maharashtra facility expansion - The Hindu",
+        "trigger_type": "CAPACITY_EXPANSION",
+        "evidence": ", India and Africa | Photo Credit: The Hindu Danish biosolutions company Novonesis has announced an investment of \u20b96,660 crore (\u20ac600 million) to expand its facility at Patalganga in Maharashtra and establish an advanced enzyme production facility. The expansion i",
+        "date": null,
+        "recency_status": "CURRENT",
+        "recency_days": 10,
+        "facility": "Novonesis (Chakan Operations)",
+        "discovered_via_pass": "pass_2"
+      }
+    },
+    {
+      "id": "kp_05",
+      "company": "Lumino Industries Limited",
+      "discovery_status": "PASS",
+      "production_timing_status": "PASS",
+      "failure_reason": null,
+      "discovered_event": {
+        "url": "https://www.livemint.com/market/ipo/lumino-industries-ipo-day-3-issue-subscribed-4-87x-so-far-gmp-hints-75-listing-pop-apply-or-not-11788143337728.html",
+        "title": "Lumino Industries IPO Day 3: Issue subscribed 50.48x so far. GMP hints 74% listing pop. Apply or not? | Stock Market News",
+        "trigger_type": "COMMISSIONING",
+        "evidence": "Issue subscribed 50.48x so far. GMP hints 74% listing pop. Apply or not? The Lumino Industries IPO opened for subscription on 27 August, priced at \u20b9 78\u201382 per share. With a current GMP of +61, the share price at listing could reach \u20b9 143, reflecting a pot",
+        "date": null,
+        "recency_status": "CURRENT",
+        "recency_days": 12,
+        "facility": "Lumino Industries Limited (Kolkata Operations)",
+        "discovered_via_pass": "pass_1"
+      }
+    },
+    {
+      "id": "kp_06",
+      "company": "Hero Future Energies",
+      "discovery_status": "PASS",
+      "production_timing_status": "PASS",
+      "failure_reason": null,
+      "discovered_event": {
+        "url": "https://www.pv-magazine.com/2022/09/21/kkr-hero-group-to-invest-450-million-in-hero-future-energies/",
+        "title": "KKR, Hero Group to invest $450 million in Hero Future Energies - pv magazine Global",
+        "trigger_type": "PLANT_EXPANSION",
+        "evidence": "to invest $450 million in Hero Future Energies The investment will support Hero Future Energies in expanding its renewable energy capacity. The Indian independent power producer has a diversified portfolio of 1.6 GW of operating solar and wind projects. By U",
+        "date": null,
+        "recency_status": "CURRENT",
+        "recency_days": 3,
+        "facility": "Hero Future Energies (India Operations)",
+        "discovered_via_pass": "pass_1"
+      }
+    },
+    {
+      "id": "kp_07",
+      "company": "Exide Energy Solutions Limited",
+      "discovery_status": "PASS",
+      "production_timing_status": "FAIL",
+      "failure_reason": "CORRECTLY_REJECTED_STALE",
+      "discovered_event": {
+        "url": "https://economictimes.indiatimes.com/industry/renewables/exide-outlines-growth-strategy-with-dual-focus-on-lead-acid-lithium-ion-batteries/articleshow/122922132.cms",
+        "title": "Exide outlines growth strategy with dual focus on lead-acid, lithium-ion batteries - The Economic Times",
+        "trigger_type": "CAPACITY_EXPANSION",
+        "evidence": "t its lithium-ion cell manufacturing facility is expected to commence this fiscal year. The company invested significantly in its lithium-ion business and transitioned to a 'One-Exide' operating model, reporting double-digit growth in most business segments.",
+        "date": null,
+        "recency_status": "STALE",
+        "recency_days": 413,
+        "facility": "Exide Energy Solutions Limited (Devanahalli Operations)",
+        "discovered_via_pass": "pass_1"
+      }
+    },
+    {
+      "id": "kp_08",
+      "company": "Tata Electronics Private Limited",
+      "discovery_status": "PASS",
+      "production_timing_status": "PASS",
+      "failure_reason": null,
+      "discovered_event": {
+        "url": "https://www.freepressjournal.in/business/morepen-laboratories-reports-69-net-profit-growth-to-20-crore-in-q4",
+        "title": "Morepen Laboratories Reports 69% Net Profit Growth To \u20b920 Crore In Q4",
+        "trigger_type": "COMMISSIONING",
+        "evidence": "h was driven by export momentum, expansion in the Medical Devices business, and the commencement of commercial production under its CDMO manufacturing program. Morepen said manufacturing capacity expansion is underway from nearly 500 KL to 800 KL. Tresha Dias Updated: We",
+        "date": null,
+        "recency_status": "CURRENT",
+        "recency_days": 108,
+        "facility": "Tata Electronics Private Limited (Hosur Operations)",
+        "discovered_via_pass": "pass_1"
+      }
+    },
+    {
+      "id": "kp_09",
+      "company": "Dixon Technologies (India) Limited",
+      "discovery_status": "PASS",
+      "production_timing_status": "FAIL",
+      "failure_reason": "CORRECTLY_REJECTED_STALE",
+      "discovered_event": {
+        "url": "https://www.newindianexpress.com/business/2024/Feb/16/dixon-tech-to-ramp-up-smartphone-mfg-plans-rs-400-crore-capex-in-fy25",
+        "title": "Dixon Tech to ramp up smartphone \nmfg, plans Rs 400 crore capex in FY25",
+        "trigger_type": "ORDER_RAMP_UP",
+        "evidence": "Dixon Tech to ramp up smartphone mfg, plans Rs 400 crore capex in FY25 .social-share-popup-m_basic-popup-wrapper__34h5Q,.social-share-popup-m_custom-popup-wrapper__fKMJC{b",
+        "date": null,
+        "recency_status": "DATE_UNKNOWN",
+        "recency_days": 999,
+        "facility": "Dixon Technologies (India) Limited (Oragadam Operations)",
+        "discovered_via_pass": "pass_1"
+      }
+    },
+    {
+      "id": "kp_010",
+      "company": "Sona BLW Precision Forgings Limited",
+      "discovery_status": "PASS",
+      "production_timing_status": "PASS",
+      "failure_reason": null,
+      "discovered_event": {
+        "url": "https://www.marklines.com/en/news/tag/639/sona-blw-precision-forgings",
+        "title": "[Gen-AI Analysis] News - Sona BLW Precision Forgings - MarkLines Automotive Information &amp; Gen-AI Platform",
+        "trigger_type": "CAPACITY_EXPANSION",
+        "evidence": "ppliers Business strategies On March 20, Sona BLW Precision Forgings Ltd. (Sona Comstar) approved a capital expenditure of INR 622 million for gear capacity expansion in its driveline business for FY 2026&ndash;27 (ending March). The plan will increase installed gear capa",
+        "date": null,
+        "recency_status": "CURRENT",
+        "recency_days": 50,
+        "facility": "Sona BLW Precision Forgings Limited (Imt Manesar Operations)",
+        "discovered_via_pass": "pass_2"
+      }
+    },
+    {
+      "id": "kp_011",
+      "company": "JSW Steel Limited",
+      "discovery_status": "PASS",
+      "production_timing_status": "FAIL",
+      "failure_reason": "CORRECTLY_REJECTED_STALE",
+      "discovered_event": {
+        "url": "https://www.linkedin.com/posts/mrityunjaya-rao-nandagiri-07562a59_amns-indias-proposed-steel-plant-in-andhra-activity-7333614642402836480-Qd76",
+        "title": "AM/NS (INDIA)&#39;S PROPOSED STEEL PLANT IN ANDHRA PRADESH-INCENTIVES | Mrityunjaya Rao Nandagiri",
+        "trigger_type": "COMMISSIONING",
+        "evidence": "the highest in the world. It will not be a good idea to have blast furnaces in a plant that will be commissioned in 2029/2033. It may be mentioned here that JSW Steel will be setting up a green steel plant at Salav in Maharashtra and has announced that the propo",
+        "date": null,
+        "recency_status": "STALE",
+        "recency_days": 619,
+        "facility": "JSW Steel Limited (Vijayanagar Operations)",
+        "discovered_via_pass": "pass_1"
+      }
+    },
+    {
+      "id": "kp_012",
+      "company": "Ambuja Cements Limited",
+      "discovery_status": "PASS",
+      "production_timing_status": "FAIL",
+      "failure_reason": "CORRECTLY_REJECTED_STALE",
+      "discovered_event": {
+        "url": "https://www.livemint.com/market/stock-market-news/adani-group-targets-20-share-in-indias-cement-market-to-grow-16-by-fy28-11712929670747.html",
+        "title": "Adani Group targets 20% share in India&#x27;s cement market, 16% capacity expansion by FY28 | Stock Market News",
+        "trigger_type": "PLANT_EXPANSION",
+        "evidence": "Adani Group targets 20% share in India&#x27;s cement market, 16% capacity expansion by FY28 | Stock Market News View Market Dashboard Adani Group targets 20% share in India's cement market, 16% capacity expansion by FY28 Adani Cement",
+        "date": null,
+        "recency_status": "STALE",
+        "recency_days": 883,
+        "facility": "Ambuja Cements Limited (Bhatapara Operations)",
+        "discovered_via_pass": "pass_1"
+      }
+    },
+    {
+      "id": "kp_013",
+      "company": "CEAT Limited",
+      "discovery_status": "PASS",
+      "production_timing_status": "PASS",
+      "failure_reason": null,
+      "discovered_event": {
+        "url": "https://tyre-trends.com/news/ceat-sets-aside-inr-800-crore-for-fy23-capex-report",
+        "title": "Ceat Sets Aside INR 800 crore For FY23 Capex: Report",
+        "trigger_type": "CAPACITY_EXPANSION",
+        "evidence": "s Aside INR 800 crore For FY23 Capex: Report By TT News February 25, 2022 Ceat Ltd. has plans for a capital expenditure of INR 800 crore for FY23 towards expanding its greenfield plant at Kancheepuram, debottlenecking its plants and for renewable energy, according to a re",
+        "date": null,
+        "recency_status": "CURRENT",
+        "recency_days": 0,
+        "facility": "CEAT Limited (Sriperumbudur Operations)",
+        "discovered_via_pass": "pass_1"
+      }
+    },
+    {
+      "id": "kp_014",
+      "company": "Uno Minda Limited",
+      "discovery_status": "PASS",
+      "production_timing_status": "FAIL",
+      "failure_reason": "CORRECTLY_REJECTED_STALE",
+      "discovered_event": {
+        "url": "https://www.thehindu.com/business/auto-part-firm-uno-minda-to-spend-2000-cr-on-capacity-expansion-600-cr-on-land-acquisition/article67597604.ece",
+        "title": "Auto-part firm Uno Minda to spend \u20b92,000 cr. on capacity expansion, \u20b9600 cr. on land acquisition - The Hindu",
+        "trigger_type": "CAPACITY_EXPANSION",
+        "evidence": "nd supplier of automotive solutions and systems to original equipment manufacturers has set aside a capex of \u20b92,000 crore for expansion spanning over the next the few years and about \u20b9600 crore for land acquisitions. Updated - December 02, 2023 09:19 pm IST",
+        "date": null,
+        "recency_status": "STALE",
+        "recency_days": 1015,
+        "facility": "Uno Minda Limited SIPCOT Industrial Complex, Hosur",
+        "discovered_via_pass": "pass_1"
+      }
+    },
+    {
+      "id": "kp_015",
+      "company": "Hindalco Industries Limited",
+      "discovery_status": "PASS",
+      "production_timing_status": "FAIL",
+      "failure_reason": "CORRECTLY_REJECTED_STALE",
+      "discovered_event": {
+        "url": "https://www.adtechamm.com/hindalco-industries-use-adtech-filter/",
+        "title": "Hindalco Industries use Adtech filter - sales@adtechamm.com",
+        "trigger_type": "COMMISSIONING",
+        "evidence": "l subsidiary Novelis Inc., it has a presence in another 11 countries. Established in 1958, Hindalco commissioned its first aluminium facility at Renukoot in Eastern Uttar Pradesh in 1962. It has since then evolved from an India-centric single unit aluminium comp",
+        "date": null,
+        "recency_status": "DATE_UNKNOWN",
+        "recency_days": 999,
+        "facility": "Hindalco Industries Limited (Aditya Aluminium Operations)",
+        "discovered_via_pass": "pass_2"
+      }
+    },
+    {
+      "id": "kp_016",
+      "company": "Bharat Forge Limited",
+      "discovery_status": "PASS",
+      "production_timing_status": "PASS",
+      "failure_reason": null,
+      "discovered_event": {
+        "url": "https://www.freepressjournal.in/business/bharat-forge-invests-above-1600-million-in-subsidiary-by-march-2026",
+        "title": "Bharat Forge Invests Above \u20b91600 Million In Subsidiary By March 2026",
+        "trigger_type": "CAPACITY_EXPANSION",
+        "evidence": "Bharat Forge Invests Above \u20b91600 Million In Subsidiary By March 2026 Home Business Bharat Forge Invests Above \u20b91600 Million In Subsidiary By March 2026 Bharat Forge Inves",
+        "date": null,
+        "recency_status": "RECENT",
+        "recency_days": 184,
+        "facility": "Bharat Forge Limited (Chakan Operations)",
+        "discovered_via_pass": "pass_1"
+      }
+    }
+  ],
+  "negative_results": [
+    {
+      "id": "kn_01",
+      "company": "Maruti Suzuki India Limited",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "FINANCIAL_NOISE_REJECT"
+    },
+    {
+      "id": "kn_02",
+      "company": "Dixon Technologies",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "FINANCIAL_NOISE_REJECT"
+    },
+    {
+      "id": "kn_03",
+      "company": "Sona BLW Precision Forgings Limited",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "FINANCIAL_NOISE_REJECT"
+    },
+    {
+      "id": "kn_04",
+      "company": "Tata Motors Limited",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "FINANCIAL_NOISE_REJECT"
+    },
+    {
+      "id": "kn_05",
+      "company": "JSW Steel Limited",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "FINANCIAL_NOISE_REJECT"
+    },
+    {
+      "id": "kn_06",
+      "company": "Ambuja Cements Limited",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "FINANCIAL_NOISE_REJECT"
+    },
+    {
+      "id": "kn_07",
+      "company": "Bharat Forge Limited",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "FINANCIAL_NOISE_REJECT"
+    },
+    {
+      "id": "kn_08",
+      "company": "Old Stale Plant Setup",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "STALE_TRIGGER"
+    },
+    {
+      "id": "kn_09",
+      "company": "Industrial Spares India",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "FINANCIAL_NOISE_REJECT"
+    },
+    {
+      "id": "kn_10",
+      "company": "ABC Precision Engineering Private Limited",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "FINANCIAL_NOISE_REJECT"
+    },
+    {
+      "id": "kn_11",
+      "company": "XYZ Motors",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "NO_EVENT_SEMANTICS"
+    },
+    {
+      "id": "kn_12",
+      "company": "Automotive Hub",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "NO_EVENT_SEMANTICS"
+    },
+    {
+      "id": "kn_13",
+      "company": "Hero Cycles",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "NO_EVENT_SEMANTICS"
+    },
+    {
+      "id": "kn_14",
+      "company": "Dixon Electronics",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "NO_EVENT_SEMANTICS"
+    },
+    {
+      "id": "kn_15",
+      "company": "Hindalco Industries",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "FINANCIAL_NOISE_REJECT"
+    },
+    {
+      "id": "kn_16",
+      "company": "Global Automotive Plastics",
+      "outcome": "CORRECTLY_REJECTED",
+      "reason": "FINANCIAL_NOISE_REJECT"
+    }
+  ]
+}

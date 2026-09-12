@@ -574,3 +574,88 @@ def filter_negative_financial_results(results: List[Dict[str, Any]]) -> List[Dic
 
     return clean_results
 
+
+def generate_adaptive_trigger_queries(
+    company_name: str,
+    sector: str = "",
+    hub: str = "",
+    official_domain: str = "",
+) -> Dict[str, List[str]]:
+    """Generate adaptive 3-pass search queries for industrial trigger recovery.
+
+    PASS 1: High-yield company and core industrial event queries
+    PASS 2: Facility, corridor, city, and sector-specific variants
+    PASS 3: Official domain, BSE/NSE exchange filings, and corporate newsroom searches
+    """
+    clean_name = re.sub(r"\b(Limited|Ltd\.?|Pvt\.?|Private|LLP|Inc\.?)\b", "", company_name, flags=re.IGNORECASE).strip()
+    full_name = company_name.strip()
+
+    # Pass 1: High-yield event queries (uncluttered booleans that SearXNG engines handle reliably)
+    pass1 = [
+        f'"{clean_name}" "new plant" OR "plant expansion" OR "commissioning" -stock -share',
+        f'"{clean_name}" "commercial production" OR "capacity expansion" -stock',
+        f'"{clean_name}" "capex" "manufacturing" -brokerage -screener',
+    ]
+
+    # Pass 2: Specific facility / corridor / sector / equipment queries
+    pass2 = []
+    if hub:
+        pass2.append(f'"{clean_name}" "{hub}" plant OR facility OR expansion -stock')
+    if sector:
+        pass2.append(f'"{clean_name}" "{sector}" manufacturing OR commissioning -stock')
+    pass2.append(f'"{clean_name}" ("new unit" OR "assembly line" OR "inaugurated" OR "new line") manufacturing -stock')
+    pass2.append(f'"{clean_name}" ("machinery" OR "equipment" OR "metrology lab" OR "quality lab") -stock')
+
+    # Pass 3: Regulatory / exchange filings / official disclosures / press releases
+    pass3 = [
+        f'"{clean_name}" (site:bseindia.com OR site:nseindia.com) ("expansion" OR "commissioning" OR "commercial production" OR "capex")',
+        f'"{clean_name}" ("press release" OR "investor presentation" OR "annual report") ("commissioning" OR "new facility" OR "plant expansion")',
+    ]
+    if official_domain:
+        clean_dom = official_domain.lower().replace("https://", "").replace("http://", "").split("/")[0].replace("www.", "")
+        pass3.append(f'site:{clean_dom} ("commissioning" OR "expansion" OR "manufacturing" OR "new plant" OR "press release")')
+
+    return {
+        "pass_1": pass1,
+        "pass_2": pass2,
+        "pass_3": pass3,
+    }
+
+
+def expand_trigger_queries_with_gemini(
+    company_name: str,
+    sector: str = "",
+    hub: str = "",
+    max_queries: int = 3,
+) -> List[str]:
+    """Generate up to 3 targeted industrial search queries using Gemini if deterministic passes fail.
+
+    Strictly capped at max_queries (3) per company. Skips cleanly if key unavailable.
+    """
+    import os
+    try:
+        from services.settings_manager import get_setting_value
+    except ImportError:
+        get_setting_value = lambda k, d=None: os.environ.get(k, d)
+    gemini_key = str(os.environ.get("GEMINI_API_KEY", "") or get_setting_value("GEMINI_API_KEY", "")).strip()
+    if not gemini_key or gemini_key.startswith("mock_") or gemini_key.startswith("YOUR_"):
+        return []
+
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=gemini_key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        prompt = (
+            f"Generate {max_queries} concise Google search queries to find recent factory expansions, new plants, "
+            f"commissioning, or capex for {company_name} (Sector: {sector}, Location: {hub}). "
+            f"Focus on manufacturing milestones. Exclude stock prices. Return only the {max_queries} queries, one per line."
+        )
+        response = model.generate_content(prompt)
+        lines = [line.strip().strip('"') for line in response.text.strip().split("\n") if line.strip()]
+        valid_queries = [q for q in lines if len(q) > 10][:max_queries]
+        return valid_queries
+    except Exception as e:
+        logger.debug(f"Gemini query expansion skipped: {e}")
+        return []
+
+

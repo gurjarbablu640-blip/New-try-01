@@ -1,0 +1,93 @@
+[
+  {
+    "engine": "bing",
+    "enabled": true,
+    "live": true,
+    "queries_tested": 4,
+    "successful_queries": 4,
+    "total_results": 36,
+    "useful_trigger_hits": 6,
+    "errors": 0,
+    "rate_limits": 0,
+    "timeouts": 0,
+    "avg_latency_sec": 0.503
+  },
+  {
+    "engine": "bing news",
+    "enabled": true,
+    "live": true,
+    "queries_tested": 4,
+    "successful_queries": 4,
+    "total_results": 27,
+    "useful_trigger_hits": 21,
+    "errors": 0,
+    "rate_limits": 0,
+    "timeouts": 0,
+    "avg_latency_sec": 0.651
+  },
+  {
+    "engine": "yandex",
+    "enabled": true,
+    "live": true,
+    "queries_tested": 4,
+    "successful_queries": 4,
+    "total_results": 60,
+    "useful_trigger_hits": 46,
+    "errors": 0,
+    "rate_limits": 0,
+    "timeouts": 0,
+    "avg_latency_sec": 1.182
+  },
+  {
+    "engine": "google",
+    "enabled": true,
+    "live": false,
+    "queries_tested": 4,
+    "successful_queries": 4,
+    "total_results": 0,
+    "useful_trigger_hits": 0,
+    "errors": 0,
+    "rate_limits": 0,
+    "timeouts": 0,
+    "avg_latency_sec": 0.039
+  },
+  {
+    "engine": "duckduckgo",
+    "enabled": true,
+    "live": false,
+    "queries_tested": 4,
+    "successful_queries": 4,
+    "total_results": 0,
+    "useful_trigger_hits": 0,
+    "errors": 0,
+    "rate_limits": 0,
+    "timeouts": 0,
+    "avg_latency_sec": 0.223
+  },
+  {
+    "engine": "yahoo",
+    "enabled": true,
+    "live": false,
+    "queries_tested": 4,
+    "successful_queries": 4,
+    "total_results": 0,
+    "useful_trigger_hits": 0,
+    "errors": 0,
+    "rate_limits": 0,
+    "timeouts": 0,
+    "avg_latency_sec": 0.366
+  },
+  {
+    "engine": "qwant",
+    "enabled": true,
+    "live": false,
+    "queries_tested": 4,
+    "successful_queries": 4,
+    "total_results": 0,
+    "useful_trigger_hits": 0,
+    "errors": 0,
+    "rate_limits": 0,
+    "timeouts": 0,
+    "avg_latency_sec": 0.447
+  }
+]
