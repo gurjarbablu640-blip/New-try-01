@@ -23,6 +23,7 @@ from services.person_intelligence_service import (
     classify_current_employment,
     classify_facility_relationship,
     compute_deterministic_person_score,
+    discover_and_rank_decision_makers,
     extract_person_from_search_result,
     generate_person_search_queries,
     generate_deepseek_person_queries,
@@ -172,12 +173,13 @@ class PersonIntelligencePipelineTests(unittest.TestCase):
             text=json.dumps({"ranked_candidates": [{
                 "name": "Arun Sharma",
                 "rank": 1,
-                "employment_assessment": "VERIFIED",
-                "facility_relationship": "DIRECT",
-                "functional_alignment": "STRONG",
+                "current_employment_supported": True,
+                "facility_relationship": "FACILITY_OWNER",
+                "function_alignment": "STRONG",
                 "authority_class": "STRONG_PLANT_QUALITY_OWNER",
                 "confidence": 0.99,
-                "reason": "Model assertion",
+                "evidence_reasons": ["Model assertion"],
+                "missing_evidence": [],
             }]}),
             usage={"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
             provider="hive",
@@ -193,9 +195,50 @@ class PersonIntelligencePipelineTests(unittest.TestCase):
             provider=provider,
         )
         ranked = result["candidates"][0]
+        self.assertEqual(result["assessment_count"], 1)
         self.assertEqual(ranked["current_employment"], "UNKNOWN")
         self.assertEqual(ranked["facility_relationship"], "COMPANY_ONLY")
         self.assertEqual(ranked["person_confidence"], "LOW")
+
+    def test_deepseek_rank_is_only_a_tiebreaker_after_deterministic_score(self):
+        class SearchRouter:
+            def search(self, query, num_results=5):
+                return {"results": [
+                    {
+                        "title": "Wrong Person - Quality Executive - LinkedIn",
+                        "url": "https://linkedin.com/in/wrong-person",
+                        "snippet": "Experience: Example Manufacturing. Quality Executive in Pune.",
+                    },
+                    {
+                        "title": "Right Person - Plant Head - LinkedIn",
+                        "url": "https://linkedin.com/in/right-person",
+                        "snippet": "Experience: Example Manufacturing. Plant Head for Pune Plant.",
+                    },
+                ]}
+
+        provider = MagicMock()
+        provider.complete.return_value = LLMResponse(
+            text=json.dumps({"ranked_candidates": [
+                {"name": "Wrong Person", "rank": 1},
+                {"name": "Right Person", "rank": 2},
+            ]}),
+            usage={"input_tokens": 100, "output_tokens": 50},
+            provider="hive",
+            model="deepseek-ai/DeepSeek-V4.1-Flash",
+        )
+
+        result = discover_and_rank_decision_makers(
+            company_name="Example Manufacturing",
+            facility_name="Pune Plant",
+            city="Pune",
+            search_router=SearchRouter(),
+            use_deepseek=True,
+            ranking_provider=provider,
+        )
+
+        self.assertEqual(result["telemetry"]["deepseek_top1"], "Wrong Person")
+        self.assertEqual(result["primary_person"]["name"], "Right Person")
+        self.assertEqual(result["primary_person"]["person_confidence"], "HIGH")
 
     def test_deepseek_query_generation_is_bounded_and_has_no_expected_answer_field(self):
         provider = MagicMock()

@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     HIVE_ACCOUNT_MODE: str = "UNVERIFIED"
     HIVE_ALLOW_PAID_OVERAGE: bool = False
     HIVE_TIMEOUT: int = 60
+    HIVE_INPUT_USD_PER_MILLION_TOKENS: float = 0.15
+    HIVE_OUTPUT_USD_PER_MILLION_TOKENS: float = 0.60
 
     # LLM Reasoning Cache
     LLM_CACHE_ENABLED: bool = True

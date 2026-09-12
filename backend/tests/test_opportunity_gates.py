@@ -8,6 +8,7 @@ from services.opportunity_gates import (
     P2_STRONG,
     P3_QUALIFIED,
     READY_FOR_EMAIL,
+    READY_FOR_CONTACT_ENRICHMENT,
     classify_icp_score,
     evaluate_apollo_credit_gate,
     evaluate_opportunity_gates,
@@ -95,7 +96,19 @@ class OpportunityGateTests(unittest.TestCase):
         )
         result = evaluate_apollo_credit_gate(enrichment_evidence)
         self.assertTrue(result["passed"])
+        self.assertEqual(result["status"], READY_FOR_CONTACT_ENRICHMENT)
         self.assertEqual(result["criteria"]["icp_score"]["band"], P3_QUALIFIED)
+
+    def test_contact_enrichment_ready_is_not_email_ready(self):
+        enrichment_evidence = evidence(
+            reachable_email={"address": "", "status": "not_found"},
+        )
+
+        enrichment = evaluate_apollo_credit_gate(enrichment_evidence)
+        outbound = evaluate_opportunity_gates(enrichment_evidence)
+
+        self.assertEqual(enrichment["status"], READY_FOR_CONTACT_ENRICHMENT)
+        self.assertFalse(outbound["ready_for_email"])
 
     def test_missing_gate_blocks(self):
         result = evaluate_opportunity_gates(evidence(timing=False))

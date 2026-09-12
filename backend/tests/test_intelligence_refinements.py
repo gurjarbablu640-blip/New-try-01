@@ -252,7 +252,7 @@ class TestIntelligenceRefinements(unittest.TestCase):
         }
         res = evaluate_apollo_credit_gate(evidence)
         self.assertTrue(res["apollo_recommended"])
-        self.assertEqual(res["status"], "QUALIFIED_FOR_APOLLO")
+        self.assertEqual(res["status"], "READY_FOR_CONTACT_ENRICHMENT")
         self.assertIn("Abhishek Kumar", res["reason"])
 
     def test_functional_calibration_hierarchy_classification(self):

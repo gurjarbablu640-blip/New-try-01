@@ -19,6 +19,7 @@ GATE_NAMES = (
     "reachable_email",
 )
 READY_FOR_EMAIL = "READY_FOR_EMAIL"
+READY_FOR_CONTACT_ENRICHMENT = "READY_FOR_CONTACT_ENRICHMENT"
 HOT = "HOT"
 BLOCKED = "BLOCKED"
 P1_HOT = "P1_HOT"
@@ -1048,7 +1049,7 @@ def evaluate_apollo_credit_gate(evidence: Mapping[str, Any]) -> dict[str, Any]:
     )
 
     if all_passed:
-        status = "QUALIFIED_FOR_APOLLO"
+        status = READY_FOR_CONTACT_ENRICHMENT
         reason = f"All 8 Apollo criteria met: Real human decision-maker '{candidate_name}' ({person_class}) at verified facility with active trigger; missing direct contact data."
     else:
         status = "NOT_QUALIFIED"

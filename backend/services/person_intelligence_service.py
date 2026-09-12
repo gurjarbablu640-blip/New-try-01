@@ -529,6 +529,8 @@ def extract_person_from_search_result(
         "title": clean_title,
         "company": company_name,
         "facility": facility_name or city,
+        "location": item.get("location") or city or facility_name,
+        "source_date": item.get("source_date") or item.get("published_date") or item.get("date") or "",
         "current_employment": current_emp,
         "facility_relationship": fac_rel,
         "authority_class": auth_class,
@@ -626,9 +628,11 @@ def rank_candidates_with_deepseek(
     response = provider.complete(
         system_prompt=(
             "Rank only the supplied person candidates for calibration-related commercial outreach. "
-            "Do not create people or facts. Treat missing current-employment or facility evidence as missing. "
-            "Return JSON with ranked_candidates; each item must include name, rank, employment_assessment, "
-            "facility_relationship, functional_alignment, authority_class, confidence, and reason."
+            "Do not create people, employment facts, facility relationships, duties, or calibration ownership. "
+            "Every positive assertion must map to the supplied title, snippet, location, source, or source date. "
+            "Treat missing current-employment or facility evidence as missing. Return JSON with ranked_candidates; "
+            "each item must include name, rank, current_employment_supported, facility_relationship, "
+            "function_alignment, authority_class, confidence, evidence_reasons, and missing_evidence."
         ),
         messages=[{"role": "user", "content": json.dumps(request_payload)}],
         response_format="json",
@@ -651,18 +655,19 @@ def rank_candidates_with_deepseek(
         assessment = assessments.get(_normalize_person_name(str(candidate.get("name") or "")))
         if assessment:
             candidate_copy["deepseek_assessment"] = assessment
+            try:
+                candidate_copy["deepseek_rank"] = int(assessment.get("rank"))
+            except (TypeError, ValueError):
+                candidate_copy["deepseek_rank"] = 9999
         ranked_candidates.append(candidate_copy)
     def ranking_key(candidate: Dict[str, Any]) -> tuple[int, float]:
-        raw_rank = (candidate.get("deepseek_assessment") or {}).get("rank")
-        try:
-            rank = int(raw_rank)
-        except (TypeError, ValueError):
-            rank = 9999
+        rank = int(candidate.get("deepseek_rank") or 9999)
         return rank, -float(candidate.get("person_score") or 0)
 
     ranked_candidates.sort(key=ranking_key)
     return {
         "candidates": ranked_candidates,
+        "assessment_count": len(assessments),
         "usage": dict(response.usage or {}),
         "provider": response.provider,
         "model": response.model,
@@ -774,31 +779,56 @@ def discover_and_rank_decision_makers(
 
         if all_candidates:
             try:
+                deterministic_pool = sorted(
+                    all_candidates,
+                    key=lambda candidate: (
+                        -float(candidate.get("person_score") or 0),
+                        AUTHORITY_HIERARCHY.index(candidate["authority_class"])
+                        if candidate.get("authority_class") in AUTHORITY_HIERARCHY else 99,
+                    ),
+                )[:20]
                 ranked = rank_candidates_with_deepseek(
                     company_name=company_name,
                     facility_name=facility_name,
                     city=city,
                     commercial_trigger=commercial_trigger,
                     target_functions=functions,
-                    candidates=all_candidates,
+                    candidates=deterministic_pool,
                     provider=ranking_provider,
                 )
                 telemetry["hive_requests"] += 1
                 telemetry["hive_input_tokens"] += int(ranked["usage"].get("input_tokens", 0) or 0)
                 telemetry["hive_output_tokens"] += int(ranked["usage"].get("output_tokens", 0) or 0)
-                all_candidates = ranked["candidates"]
-                telemetry["deepseek_ranking_applied"] = True
+                ranked_by_name = {
+                    _normalize_person_name(candidate.get("name", "")): candidate
+                    for candidate in ranked["candidates"]
+                }
+                all_candidates = [
+                    ranked_by_name.get(_normalize_person_name(candidate.get("name", "")), candidate)
+                    for candidate in all_candidates
+                ]
+                deepseek_candidates = sorted(
+                    [candidate for candidate in ranked["candidates"] if candidate.get("deepseek_rank") is not None],
+                    key=lambda candidate: (
+                        int(candidate.get("deepseek_rank") or 9999),
+                        -float(candidate.get("person_score") or 0),
+                    ),
+                )
+                telemetry["deepseek_top1"] = deepseek_candidates[0].get("name") if deepseek_candidates else None
+                telemetry["deepseek_ranking_applied"] = bool(ranked["assessment_count"])
+                if not ranked["assessment_count"]:
+                    telemetry["deepseek_ranking_error"] = "NO_VALID_STRUCTURED_RANKING"
             except Exception as exc:
                 telemetry["deepseek_ranking_applied"] = False
                 telemetry["deepseek_ranking_error"] = type(exc).__name__
 
-    if not telemetry.get("deepseek_ranking_applied"):
-        all_candidates.sort(
-            key=lambda c: (
-                -c["person_score"],
-                AUTHORITY_HIERARCHY.index(c["authority_class"]) if c["authority_class"] in AUTHORITY_HIERARCHY else 99,
-            )
+    all_candidates.sort(
+        key=lambda c: (
+            -c["person_score"],
+            AUTHORITY_HIERARCHY.index(c["authority_class"]) if c["authority_class"] in AUTHORITY_HIERARCHY else 99,
+            int(c.get("deepseek_rank") or 9999),
         )
+    )
 
     primary = all_candidates[0] if all_candidates else None
     secondary = all_candidates[1] if len(all_candidates) > 1 else None
