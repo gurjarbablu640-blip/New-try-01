@@ -799,6 +799,19 @@ def extract_event_date(
                         "source": "URL_PATH",
                         "pos": 0,
                     })
+            else:
+                m_url3 = re.search(r'/(\d{4})-(\d{2})-(\d{2})(?:[-/.]|$)', url)
+                if m_url3:
+                    u_dt3 = datetime(int(m_url3.group(1)), int(m_url3.group(2)), int(m_url3.group(3)), tzinfo=timezone.utc)
+                    if u_dt3 <= now_dt:
+                        candidates.append({
+                            "dt": u_dt3,
+                            "dt_str": u_dt3.strftime("%Y-%m-%d"),
+                            "role": "PUBLICATION_DATE",
+                            "role_priority": DATE_ROLE_PRIORITY["PUBLICATION_DATE"],
+                            "source": "URL_PATH",
+                            "pos": 0,
+                        })
 
     # 3. Check relative date
     m_rel = re.search(r"(\d+)\s+(day|week|month|hour)s?\s+ago", combined_text, re.IGNORECASE)
@@ -1506,6 +1519,37 @@ def compute_lead_qualification_score(
     if emp_status not in ("VERIFIED", "PROBABLE"):
         return 68.0, "HOLD", "HOLD_PERSON_UNCERTAIN", [f"Candidate '{p_name}' current employment status is {emp_status}."]
 
+    # Person-Facility Relationship Gate:
+    # Plant-specific requires verified plant ownership (FACILITY_OWNER or FACILITY_FUNCTION_OWNER).
+    # Group-level requires verified group ownership (GROUP_FUNCTION_OWNER) and is assigned GROUP_LEVEL_CONTACT.
+    # FUNCTIONALLY_RELEVANT or COMPANY_ONLY lacks verified facility link -> must be held as HOLD_PERSON_UNCERTAIN.
+    is_plant_owner = fac_rel in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER")
+    is_group_owner = fac_rel == "GROUP_FUNCTION_OWNER" or auth_class == "GROUP_FUNCTION_OWNER"
+
+    if not is_plant_owner and not is_group_owner:
+        return 70.0, "HOLD", "HOLD_PERSON_UNCERTAIN", [
+            f"Candidate '{p_name}' lacks verified facility relationship ({fac_rel}). Plant-specific qualification requires direct plant quality/operations leadership."
+        ]
+
+    # Target facility must have a known location or name for on-site plant qualification
+    target_city = (
+        (facility_binding_info or {}).get("target_city")
+        or trigger_info.get("discovered_city")
+        or trigger_info.get("city")
+        or ""
+    )
+    target_fac = (
+        (facility_binding_info or {}).get("target_facility")
+        or trigger_info.get("discovered_facility")
+        or trigger_info.get("facility")
+        or trigger_info.get("facility_relationship")
+        or ""
+    )
+    if not target_city and not target_fac and is_plant_owner:
+        return 60.0, "HOLD", "HOLD_FACILITY_AMBIGUOUS", [
+            "Target manufacturing facility geographical location (city/state) is unverified."
+        ]
+
     # 4. Canonical Decompressed Scoring
     # Trigger Component (0 to 50, base 40.0):
     trig_comp = 40.0
@@ -1556,19 +1600,30 @@ def compute_lead_qualification_score(
     total_score = round(trig_comp + person_comp, 1)
 
     # Priority Band Assignment
-    if total_score >= 95.0:
-        priority_band = "P1"
-        status = "READY_FOR_CONTACT_ENRICHMENT"
-    elif total_score >= 90.0:
-        priority_band = "P2"
-        status = "READY_FOR_CONTACT_ENRICHMENT"
-    elif total_score >= 85.0:
-        priority_band = "P3"
-        status = "READY_FOR_CONTACT_ENRICHMENT"
+    if is_group_owner:
+        # Group-level qualification
+        if total_score >= 85.0:
+            priority_band = "P2" if total_score >= 90.0 else "P3"
+            status = "GROUP_LEVEL_CONTACT"
+        else:
+            priority_band = "HOLD"
+            status = "HOLD_RESEARCH"
+            hold_reasons.append(f"Group lead composite score ({total_score}) is below production qualification threshold (85.0).")
     else:
-        priority_band = "HOLD"
-        status = "HOLD_RESEARCH"
-        hold_reasons.append(f"Composite score ({total_score}) is below production qualification threshold (85.0).")
+        # Plant-specific qualification
+        if total_score >= 95.0:
+            priority_band = "P1"
+            status = "READY_FOR_CONTACT_ENRICHMENT"
+        elif total_score >= 90.0:
+            priority_band = "P2"
+            status = "READY_FOR_CONTACT_ENRICHMENT"
+        elif total_score >= 85.0:
+            priority_band = "P3"
+            status = "READY_FOR_CONTACT_ENRICHMENT"
+        else:
+            priority_band = "HOLD"
+            status = "HOLD_RESEARCH"
+            hold_reasons.append(f"Composite score ({total_score}) is below production qualification threshold (85.0).")
 
     return total_score, priority_band, status, hold_reasons
 

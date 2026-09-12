@@ -547,6 +547,8 @@ INDIAN_CITIES_TO_STATE = {
     "indore": "madhya pradesh", "pithampur": "madhya pradesh", "bhopal": "madhya pradesh", "mandideep": "madhya pradesh",
 }
 
+KNOWN_MAJOR_CITIES = set(INDIAN_CITIES_TO_STATE.keys())
+
 METRO_CLUSTERS = {
     "sanand": {"ahmedabad", "sanand", "gujarat"},
     "ahmedabad": {"ahmedabad", "sanand", "gujarat"},

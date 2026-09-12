@@ -214,6 +214,29 @@ class TestScoringDecompression:
         score, band, status, reasons = compute_lead_qualification_score(trigger, person, binding, "Automotive")
         assert 85.0 <= score <= 89.0
         assert band == "P3"
+        assert status == "GROUP_LEVEL_CONTACT"
+
+    def test_p3_reachable_for_plant_contact(self):
+        trigger = {
+            "is_valid": True,
+            "trigger_type": "CAPACITY_EXPANSION",
+            "recency_tier": "RECENT",
+            "has_ongoing": True,
+            "source_tier": "TIER_B",
+            "facility_relationship": "STRONG",
+        }
+        person = {
+            "name": "Ravi Singh",
+            "current_employment": "PROBABLE",
+            "facility_relationship": "FACILITY_FUNCTION_OWNER",
+            "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+            "person_confidence": "MEDIUM",
+            "person_score": 78.0,
+        }
+        binding = {"linkage": TRIGGER_FACILITY_STRONG}
+        score, band, status, reasons = compute_lead_qualification_score(trigger, person, binding, "Automotive")
+        assert 85.0 <= score <= 89.0
+        assert band == "P3"
         assert status == "READY_FOR_CONTACT_ENRICHMENT"
 
     def test_hold_when_person_employment_is_contradicted(self):
