@@ -23,6 +23,9 @@ frontend/build/
 
 # Data files (generated at runtime)
 backend/data/*.json
+backend/data/runtime_state/search_provider_cache.json
+backend/data/runtime_state/serper_budget_state.json
+pytest_basetemp/
 
 # Celery runtime state
 celerybeat-schedule

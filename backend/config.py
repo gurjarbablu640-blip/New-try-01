@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     ORCHESTRATOR_MAX_ITERATIONS: int = 6
     ORCHESTRATOR_TOKEN_BUDGET: int = 20000
 
+
     # Apollo API
     APOLLO_API_KEY: str = ""
     APOLLO_API_BASE_URL: str = "https://api.apollo.io/v1"
@@ -117,7 +118,12 @@ class Settings(BaseSettings):
     IMAP_USE_SSL: bool = True
 
     # Search & Crawling
+    SERPER_API_KEY: str = ""
+    SERPER_DAILY_HARD_LIMIT: int = 1500
+    SERPER_INITIAL_QUERIES_PER_COMPANY: int = 4
+    SERPER_MAX_QUERIES_PER_COMPANY: int = 10
     SEARXNG_BASE_URL: str = "http://localhost:8080"
+    SEARXNG_AUTO_FALLBACK: bool = False
 
     # DeerFlow Service Adapter (Isolated HTTP boundary)
     DEERFLOW_BASE_URL: str = os.getenv("DEERFLOW_BASE_URL", "http://deerflow:8001" if os.path.exists("/.dockerenv") else "http://localhost:8001")

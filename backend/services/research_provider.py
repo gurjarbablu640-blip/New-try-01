@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from config import settings
 from services.settings_manager import get_setting_value
 from models.web_research import WebResearchItem
+from services.serper_budget_manager import serper_budget_manager, SerperBudgetExhaustedError
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,8 @@ PROVIDER_FALLBACK = "FALLBACK"
 PROVIDER_EMPTY = "EMPTY"
 PROVIDER_BLOCKED = "BLOCKED"
 PROVIDER_QUOTA_EXHAUSTED = "QUOTA_EXHAUSTED"
+PROVIDER_BUDGET_EXHAUSTED = "SERPER_DAILY_BUDGET_EXHAUSTED"
+
 
 
 from abc import ABC, abstractmethod
@@ -123,10 +126,12 @@ class SerperSearchProvider(ResearchProvider):
         api_key: Optional[str] = None,
         timeout: int = 20,
         cache: Optional[Any] = None,
+        budget_manager: Optional[Any] = None,
     ) -> None:
         self._api_key_override = api_key
         self.timeout = timeout
         self.cache = cache
+        self.budget_manager = budget_manager
 
     def _get_api_key(self) -> str:
         if self._api_key_override:
@@ -155,6 +160,8 @@ class SerperSearchProvider(ResearchProvider):
                 "cache_hit": False,
             }
 
+        mgr = self.budget_manager or kwargs.get("budget_manager") or serper_budget_manager
+
         # Check cache if provided or available
         cache_instance = self.cache
         if cache_instance is None:
@@ -169,10 +176,43 @@ class SerperSearchProvider(ResearchProvider):
             cached = cache_instance.get("serper", query, num_results=num_results)
             if cached:
                 cached["latency_ms"] = round((time.time() - start_time) * 1000, 2)
+                # CRITICAL: Cache hits must NOT consume Serper API quota
+                try:
+                    if mgr:
+                        mgr.record_cache_hit(1)
+                except Exception as e:
+                    logger.debug("Failed to record cache hit: %s", e)
                 return cached
+
+        # Check daily budget limit BEFORE making live network request
+        if mgr and not mgr.can_request():
+            mgr.record_budget_exhausted()
+            return {
+                "provider": "serper",
+                "provider_status": PROVIDER_BUDGET_EXHAUSTED,
+                "results": [],
+                "query": query,
+                "error": "SERPER_DAILY_BUDGET_EXHAUSTED: Daily limit of 1500 live requests reached",
+                "latency_ms": round((time.time() - start_time) * 1000, 2),
+                "cache_hit": False,
+            }
 
         last_err = None
         for attempt in range(3):
+            if mgr:
+                try:
+                    mgr.record_live_request(1)
+                except SerperBudgetExhaustedError:
+                    return {
+                        "provider": "serper",
+                        "provider_status": PROVIDER_BUDGET_EXHAUSTED,
+                        "results": [],
+                        "query": query,
+                        "error": "SERPER_DAILY_BUDGET_EXHAUSTED: Daily limit reached",
+                        "latency_ms": round((time.time() - start_time) * 1000, 2),
+                        "cache_hit": False,
+                    }
+
             try:
                 req_start = time.time()
                 resp = requests.post(
@@ -481,34 +521,34 @@ class ResearchProviderRouter:
         """Discover which research providers are configured and available."""
         providers = []
 
-        # Google Custom Search
-        google_key = str(get_setting_value("GOOGLE_API_KEY", "")).strip()
-        google_cx = str(get_setting_value("GOOGLE_SEARCH_CX", "")).strip()
-        # Ensure mock keys are not treated as live search keys
+        # 1. Serper Search API (Primary production search provider)
+        serper_key = str(get_setting_value("SERPER_API_KEY", "") or getattr(settings, "SERPER_API_KEY", "")).strip()
+        is_serper_live = bool(serper_key and not serper_key.startswith("mock_") and not serper_key.startswith("YOUR_") and len(serper_key) > 8)
+        providers.append({
+            "name": "serper",
+            "display": "Serper Search API",
+            "configured": is_serper_live,
+            "priority": 1,
+        })
+
+        # 2. Google Custom Search (secondary if Serper not configured)
+        google_key = str(get_setting_value("GOOGLE_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")).strip()
+        google_cx = str(get_setting_value("GOOGLE_SEARCH_CX", "") or getattr(settings, "GOOGLE_SEARCH_CX", "")).strip()
         is_google_live = bool(google_key and google_cx and not google_key.startswith("mock_") and not google_key.startswith("YOUR_"))
         providers.append({
             "name": "google_custom_search",
             "display": "Google Custom Search",
             "configured": is_google_live,
-            "priority": 1,
-        })
-
-        # Serper
-        serper_key = str(get_setting_value("SERPER_API_KEY", "")).strip()
-        is_serper_live = bool(serper_key and not serper_key.startswith("mock_") and not serper_key.startswith("YOUR_"))
-        providers.append({
-            "name": "serper",
-            "display": "Serper Search API",
-            "configured": is_serper_live,
             "priority": 2,
         })
 
-        # SearXNG Private Self-Hosted Search
+        # 3. SearXNG Private Self-Hosted Search (OPTIONAL fallback, disabled by default)
+        auto_fallback = bool(getattr(settings, "SEARXNG_AUTO_FALLBACK", False))
         searxng_url = str(getattr(settings, "SEARXNG_BASE_URL", "") or get_setting_value("SEARXNG_BASE_URL", "http://localhost:8080")).strip()
         providers.append({
             "name": "searxng",
             "display": "SearXNG Private Search",
-            "configured": bool(searxng_url),
+            "configured": bool(searxng_url) and auto_fallback,
             "priority": 3,
         })
 
@@ -542,7 +582,7 @@ class ResearchProviderRouter:
         """Return the name of the best available search provider."""
         providers = self._discover_providers()
         for p in providers:
-            if p["configured"] and p["name"] in ("google_custom_search", "serper", "searxng"):
+            if p["configured"] and p["name"] in ("serper", "google_custom_search", "searxng"):
                 return p["name"]
         return None
 
@@ -553,13 +593,14 @@ class ResearchProviderRouter:
         company_id: Optional[int] = None,
         db: Optional[Session] = None,
         free_only: bool = False,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """Execute a search using the best available provider with automatic fallback.
 
         Priority order:
-        1. Google Custom Search
-        2. Serper API
-        3. SearXNG Private Instance
+        1. Serper API (Primary production search)
+        2. Google Custom Search (Secondary if configured and Serper missing)
+        3. SearXNG Private Instance (OPTIONAL fallback, disabled by default)
         4. Database Cache
         """
         results = []
@@ -567,24 +608,38 @@ class ResearchProviderRouter:
         error = None
         used_provider = "none"
 
-        # 1. Google Custom Search
-        google_key = str(get_setting_value("GOOGLE_API_KEY", "")).strip()
-        google_cx = str(get_setting_value("GOOGLE_SEARCH_CX", "")).strip()
-        if not free_only and google_key and google_cx and not google_key.startswith("mock_") and not google_key.startswith("YOUR_"):
-            results, status, error = self._search_google(query, num_results)
+        # 1. Serper API (Primary)
+        serper_key = str(get_setting_value("SERPER_API_KEY", "") or getattr(settings, "SERPER_API_KEY", "")).strip()
+        if not free_only and serper_key and not serper_key.startswith("mock_") and not serper_key.startswith("YOUR_"):
+            results, status, error = self._search_serper(query, num_results, **kwargs)
             if status == PROVIDER_LIVE:
-                used_provider = "google_custom_search"
+                used_provider = "serper"
+            elif status == PROVIDER_BUDGET_EXHAUSTED:
+                # When Serper daily budget is exhausted, do NOT fall back to SearXNG
+                return {
+                    "provider": "serper",
+                    "provider_status": PROVIDER_BUDGET_EXHAUSTED,
+                    "results": [],
+                    "query": query,
+                    "error": error or "SERPER_DAILY_BUDGET_EXHAUSTED",
+                }
 
-        # 2. Serper fallback
-        if not results:
-            serper_key = str(get_setting_value("SERPER_API_KEY", "")).strip()
-            if not free_only and serper_key and not serper_key.startswith("mock_") and not serper_key.startswith("YOUR_"):
-                results, status, error = self._search_serper(query, num_results)
+        # 2. Google Custom Search (secondary if Serper not configured)
+        if not results and used_provider != "serper":
+            google_key = str(get_setting_value("GOOGLE_API_KEY", "")).strip()
+            google_cx = str(get_setting_value("GOOGLE_SEARCH_CX", "")).strip()
+            if not free_only and google_key and google_cx and not google_key.startswith("mock_") and not google_key.startswith("YOUR_"):
+                results, status, error = self._search_google(query, num_results)
                 if status == PROVIDER_LIVE:
-                    used_provider = "serper"
+                    used_provider = "google_custom_search"
 
-        # 3. SearXNG fallback
-        if not results:
+        # 3. SearXNG fallback (OPTIONAL only; disabled by default in production; allowed when free_only=True or explicitly requested)
+        searxng_allowed = bool(
+            free_only
+            or kwargs.get("allow_searxng_fallback", False)
+            or getattr(settings, "SEARXNG_AUTO_FALLBACK", False)
+        )
+        if not results and searxng_allowed and used_provider == "none":
             results, status, error = self._search_searxng(query, num_results)
             if status == PROVIDER_LIVE:
                 used_provider = "searxng"
@@ -744,53 +799,25 @@ class ResearchProviderRouter:
             return [], PROVIDER_ERROR, str(e)
 
     def _search_serper(
-        self, query: str, num_results: int
+        self, query: str, num_results: int, **kwargs: Any
     ) -> tuple[list[ResearchResult], str, Optional[str]]:
-        """Search via Serper.dev API."""
-        api_key = str(get_setting_value("SERPER_API_KEY", "")).strip()
-
-        if not api_key or api_key.startswith("mock_") or api_key.startswith("YOUR_"):
-            return [], PROVIDER_NOT_CONFIGURED, "Serper API key not configured"
-
-        last_err = None
-        for attempt in range(3):
-            try:
-                resp = requests.post(
-                    "https://google.serper.dev/search",
-                    json={"q": query, "num": min(num_results, 10)},
-                    headers={
-                        "X-API-KEY": api_key,
-                        "Content-Type": "application/json",
-                        "Connection": "close",
-                    },
-                    timeout=20,
-                )
-                if resp.status_code != 200:
-                    logger.error("Serper API HTTP %s: %s", resp.status_code, resp.text[:200])
-                    return [], PROVIDER_ERROR, f"Serper API HTTP {resp.status_code}"
-
-                data = resp.json()
-                results = []
-                for item in data.get("organic", []):
-                    results.append(ResearchResult(
-                        title=item.get("title", ""),
-                        url=item.get("link", ""),
-                        snippet=item.get("snippet", ""),
-                        provider="serper",
-                        confidence=0.72,
-                    ))
-
-                if results:
-                    return results, PROVIDER_LIVE, None
-                return [], PROVIDER_EMPTY, "Serper returned no organic results"
-
-            except Exception as e:
-                last_err = e
-                logger.warning(f"Serper attempt {attempt + 1} failed: {e}. Retrying...")
-                time.sleep(1)
-
-        logger.error("Serper search error after retries: %s", last_err, exc_info=True)
-        return [], PROVIDER_ERROR, f"Serper search error: {str(last_err)[:100]}"
+        """Search via Serper.dev API using SerperSearchProvider with budget management."""
+        provider = SerperSearchProvider()
+        res = provider.search(query, num_results=num_results, **kwargs)
+        raw_results = res.get("results", []) or []
+        results = [
+            ResearchResult(
+                title=item.get("title", ""),
+                url=item.get("url", ""),
+                snippet=item.get("snippet", ""),
+                provider="serper",
+                confidence=float(item.get("confidence", 0.85)),
+                position=item.get("position"),
+                metadata=item.get("metadata"),
+            )
+            for item in raw_results
+        ]
+        return results, res.get("provider_status", PROVIDER_ERROR), res.get("error")
 
     def _search_database_cache(
         self, query: str, db: Session

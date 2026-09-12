@@ -231,12 +231,12 @@ def execute_web_person_search(
     company_name: str,
     queries: List[Dict[str, str]],
     db: Session,
-    max_queries: int = 8,
+    max_queries: Optional[int] = None,
     free_only: bool = False,
 ) -> Dict[str, Any]:
     """Execute real web searches using configured research provider.
 
-    Returns structured results with provider status transparency.
+    Adheres to Serper per-company budget and evidence-driven early stop.
     Does NOT generate fictional search results.
     """
     all_results = []
@@ -245,9 +245,23 @@ def execute_web_person_search(
     search_provider_used = best_provider or "none"
     overall_status = PROVIDER_LIVE if best_provider else PROVIDER_NOT_CONFIGURED
 
-    executed_queries = []
+    # Record company researched in Serper budget manager
+    try:
+        from services.serper_budget_manager import serper_budget_manager
+        serper_budget_manager.record_company_researched(1)
+    except Exception:
+        serper_budget_manager = None
 
-    for q_info in queries[:max_queries]:
+    # Determine per-company query budget
+    initial_budget = int(getattr(settings, "SERPER_INITIAL_QUERIES_PER_COMPANY", 4))
+    hard_max_budget = int(getattr(settings, "SERPER_MAX_QUERIES_PER_COMPANY", 10))
+    effective_max = max_queries if max_queries is not None else hard_max_budget
+    limit = min(effective_max, hard_max_budget)
+
+    executed_queries = []
+    stopped_early = False
+
+    for idx, q_info in enumerate(queries[:limit]):
         search_result = research_router.search(
             query=q_info["query"],
             num_results=5,
@@ -274,6 +288,26 @@ def execute_web_person_search(
 
         if search_result["provider_status"] != PROVIDER_LIVE:
             overall_status = search_result["provider_status"]
+            if search_result["provider_status"] == "SERPER_DAILY_BUDGET_EXHAUSTED":
+                break
+
+        # Evidence-Driven Early Stop:
+        # After completing the initial tier (or when sufficient evidence exists),
+        # check if at least one credible candidate was extracted.
+        if (idx + 1) >= min(initial_budget, len(queries)):
+            candidates_so_far = extract_person_candidates(all_results, company_name)
+            if candidates_so_far:
+                company_obj = db.query(Company).filter(Company.id == company_id).first() if db else None
+                if company_obj:
+                    has_verified = any(
+                        verify_person_candidate(c, company_obj).get("composite_score", 0.0) >= 0.75
+                        for c in candidates_so_far
+                    )
+                    if has_verified:
+                        stopped_early = True
+                        if serper_budget_manager:
+                            serper_budget_manager.record_search_stopped_early(1)
+                        break
 
     return {
         "company_id": company_id,
@@ -284,6 +318,7 @@ def execute_web_person_search(
         "queries_executed": executed_queries,
         "total_results": len(all_results),
         "results": all_results,
+        "stopped_early": stopped_early,
     }
 
 

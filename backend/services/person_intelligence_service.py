@@ -661,7 +661,8 @@ PERSON_ROLE_PATTERN = (
     r"Quality(?:\s+Assurance|\s+Control)?\s+(?:Head|Manager|Lead)|QA(?:\s*/\s*QC)?\s+(?:Head|Manager)|"
     r"QC\s+(?:Head|Manager)|Operations Head|Head of Operations|Manufacturing Head|"
     r"Head of Manufacturing|Metrology(?:\s+Head|\s+Manager)?|Calibration(?:\s+Head|\s+Manager|\s+Incharge)?|"
-    r"Operational Excellence(?:\s+Head|\s+Lead)?|Instrumentation(?:\s+Head|\s+Manager)?)"
+    r"Operational Excellence(?:\s+Head|\s+Lead)?|Instrumentation(?:\s+Head|\s+Manager)?|"
+    r"Deputy Manager|Assistant Manager|(?:General\s+|Deputy\s+|Assistant\s+)?Manager)"
 )
 
 
@@ -764,7 +765,7 @@ def extract_person_candidates_from_search_result(
     comp_clean = re.sub(r"[^\w\s]", " ", company_name.lower())
     comp_tokens = set(t for t in comp_clean.split() if t not in COMPANY_SUFFIX_TOKENS and len(t) > 2)
 
-    if "linkedin.com/in/" in url.lower() or "rocketreach.co/" in url.lower():
+    if any(k in url.lower() for k in ("linkedin.com/in/", "rocketreach.co/", "aeroleads.com", "signalhire.com", "zoominfo.com")):
         parts = [part.strip() for part in re.split(r"\s+[-–—|•]\s+", cleaned_title) if part.strip() and part.strip().lower() != "linkedin"]
         if parts:
             name_cand = parts[0]
@@ -795,9 +796,10 @@ def extract_person_candidates_from_search_result(
     patterns = (
         rf"(?P<name>{PERSON_NAME_PATTERN})\s*[-–—|,:]\s*(?P<role>{role_pattern})",
         rf"(?P<role>{role_pattern})\s*[-–—|,:]\s*(?P<name>{PERSON_NAME_PATTERN})",
-        rf"(?P<name>{PERSON_NAME_PATTERN})\s+(?i:is|was|serves as|serving as|has joined as|appointed as|named as|promoted to)\s+(?i:the\s+)?(?P<role>{role_pattern})",
+        rf"(?P<name>{PERSON_NAME_PATTERN})\s+(?i:is|was|is listed as|listed as|serves as|serving as|has joined as|appointed as|named as|promoted to)\s+(?i:a\s+|an\s+|the\s+)?(?P<role>{role_pattern})",
         rf"(?i:appoints?|appointed|names?|named)\s+(?P<name>{PERSON_NAME_PATTERN})\s+(?i:as\s+(?:the\s+)?)?(?P<role>{role_pattern})",
         rf"(?P<role>{role_pattern})\s+(?i:at|for|with|in)\s+[^,\.\n]+[,\.\n]\s*(?P<name>{PERSON_NAME_PATTERN})",
+        rf"(?P<name>{PERSON_NAME_PATTERN})\s+(?i:is listed as|listed as)\s+(?i:a\s+|an\s+|the\s+)?(?P<role>{role_pattern})",
     )
     for pattern in patterns:
         for match in re.finditer(pattern, combined):
@@ -1474,7 +1476,68 @@ def discover_and_rank_decision_makers(
                     elif _person_sort_key(candidate) < _person_sort_key(all_candidates[existing_index]):
                         all_candidates[existing_index] = candidate
 
-    collect_candidates(deterministic_queries)
+    def _has_sufficient_evidence(candidates: List[Dict[str, Any]]) -> bool:
+        for c in candidates:
+            if c.get("person_confidence") == "HIGH":
+                return True
+            score = float(c.get("person_score") or 0.0)
+            emp = str(c.get("current_employment") or "").upper()
+            fac = str(c.get("facility_relationship") or "").upper()
+            auth = str(c.get("authority_class") or "").upper()
+            if (
+                score >= 75.0
+                and emp == "VERIFIED"
+                and fac in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER", "GROUP_FUNCTION_OWNER", "FUNCTIONALLY_RELEVANT")
+                and auth not in ("UNKNOWN", "COMPANY_ONLY")
+            ):
+                return True
+        return False
+
+    # Budget & Early Stop Management
+    try:
+        from services.serper_budget_manager import serper_budget_manager
+        serper_budget_manager.record_company_researched(1)
+    except Exception:
+        serper_budget_manager = None
+
+    try:
+        from config import settings
+        initial_budget = int(getattr(settings, "SERPER_INITIAL_QUERIES_PER_COMPANY", 4))
+        max_company_budget = int(getattr(settings, "SERPER_MAX_QUERIES_PER_COMPANY", 10))
+    except Exception:
+        initial_budget = 4
+        max_company_budget = 10
+
+    # 1. Initial Tier: 3-5 intelligent queries
+    initial_tier_queries = deterministic_queries[:initial_budget]
+    collect_candidates(initial_tier_queries)
+
+    stopped_early = False
+    if _has_sufficient_evidence(all_candidates):
+        stopped_early = True
+        telemetry["stopped_early"] = True
+        telemetry["early_stop_reason"] = "SUFFICIENT_EVIDENCE_INITIAL_TIER"
+        if serper_budget_manager:
+            serper_budget_manager.record_search_stopped_early(1)
+    else:
+        # 2. Targeted Tier: execute remaining queries up to max_company_budget, checking early stop
+        targeted_queries = deterministic_queries[initial_budget:max_company_budget]
+        for i in range(0, len(targeted_queries), 2):
+            if _has_sufficient_evidence(all_candidates):
+                stopped_early = True
+                telemetry["stopped_early"] = True
+                telemetry["early_stop_reason"] = "SUFFICIENT_EVIDENCE_TARGETED_TIER"
+                if serper_budget_manager:
+                    serper_budget_manager.record_search_stopped_early(1)
+                break
+            collect_candidates(targeted_queries[i:i+2])
+
+        if not stopped_early and _has_sufficient_evidence(all_candidates):
+            stopped_early = True
+            telemetry["stopped_early"] = True
+            telemetry["early_stop_reason"] = "SUFFICIENT_EVIDENCE_TARGETED_TIER"
+            if serper_budget_manager:
+                serper_budget_manager.record_search_stopped_early(1)
 
     reused_queries = [
         {
@@ -1487,7 +1550,8 @@ def discover_and_rank_decision_makers(
         for query in (additional_queries or [])
         if isinstance(query, str) and query.strip()
     ]
-    collect_candidates(reused_queries)
+    if reused_queries:
+        collect_candidates(reused_queries)
 
     if (use_deepseek_queries or use_deepseek_ranking) and ranking_provider is None:
         from services.llm_provider import get_provider
