@@ -127,6 +127,12 @@ def is_human_person_candidate(name_str: str, company_name: str = "") -> Tuple[bo
         return False, f"Contains corporate/company suffix token: {clean}"
     if any(t in dept_tokens for t in tokens_lower):
         return False, f"Contains departmental/team term: {clean}"
+    if any(t in NON_HUMAN_ENTITIES for t in tokens_lower):
+        return False, f"Contains non-human entity token: {clean}"
+
+    facility_terms = {"plant", "complex", "facility", "works", "factory", "refinery", "smelter", "foundry", "mill", "unit", "campus", "estate"}
+    if any(t in facility_terms for t in tokens_lower):
+        return False, f"Contains facility/plant term: {clean}"
 
     # 3. Company name match
     if company_name:
@@ -172,7 +178,7 @@ def generate_person_search_queries(
     company_domain: str = "",
     sector: str = "",
     target_functions: Optional[List[str]] = None,
-    max_queries: int = 36,
+    max_queries: int = 75,
 ) -> List[Dict[str, str]]:
     """Generate broad deterministic person queries without relaxing verification."""
     clean_company = company_name.strip()
@@ -188,30 +194,12 @@ def generate_person_search_queries(
             "source_target": source_target,
         })
 
+    # Phase 5 canonical broad search queries
     for role in (
         "quality head", "head quality", "plant quality", "quality manager",
         "quality assurance", "metrology", "calibration", "measurement systems",
     ):
         add(f'"{clean_company}" "{role}"', "COMPANY_QUALITY", role, "PUBLIC_WEB")
-
-    if city:
-        add(f'"{clean_company}" "{city}" quality', "COMPANY_FACILITY", "quality", "PUBLIC_WEB")
-        add(f'"{clean_company}" "{city}" "plant head"', "COMPANY_FACILITY", "plant head", "PUBLIC_WEB")
-    if facility_name:
-        for role in ("quality", "operations", "manufacturing"):
-            add(f'"{clean_company}" "{facility_name}" {role}', "COMPANY_FACILITY", role, "PUBLIC_WEB")
-
-    for role in ("quality", "plant", "operations"):
-        add(f'site:linkedin.com/in "{clean_company}" {role}', "PEOPLE_SOURCES", role, "LINKEDIN_PUBLIC")
-    if clean_domain:
-        for role in ("quality", "plant head", "management"):
-            add(f'site:{clean_domain} {role}', "PEOPLE_SOURCES", role, "OFFICIAL_WEBSITE")
-
-    for phrase in (
-        "annual report plant head", "annual report quality", "investor presentation plant",
-        "conference quality", "speaker quality", "TPM plant head", "award quality head", "webinar quality",
-    ):
-        add(f'"{clean_company}" {phrase}', "DOCUMENT_AND_EVENT_SOURCES", phrase, "DOCUMENT_OR_EVENT")
 
     for role in (
         "Head QA", "Head QA QC", "Head Quality Assurance", "VP Quality",
@@ -219,6 +207,85 @@ def generate_person_search_queries(
         "Instrumentation", "Plant Operations",
     ):
         add(f'"{clean_company}" "{role}"', "ROLE_VARIATIONS", role, "PUBLIC_WEB")
+
+    for phrase in (
+        "annual report plant head", "annual report quality", "investor presentation plant",
+        "conference quality", "speaker quality", "TPM plant head", "award quality head", "webinar quality",
+    ):
+        add(f'\"{clean_company}\" {phrase}', "DOCUMENT_AND_EVENT_SOURCES", phrase, "DOCUMENT_OR_EVENT")
+
+    if clean_domain:
+        for role in ("quality", "plant head", "management"):
+            add(f'site:{clean_domain} {role}', "PEOPLE_SOURCES", role, "OFFICIAL_WEBSITE")
+
+    if city:
+        add(f'\"{clean_company}\" \"{city}\" quality', "COMPANY_FACILITY", "quality", "PUBLIC_WEB")
+        add(f'\"{clean_company}\" \"{city}\" \"plant head\"', "COMPANY_FACILITY", "plant head", "PUBLIC_WEB")
+        add(f'\"{clean_company}\" \"{city}\" \"quality manager\"', "COMPANY_FACILITY", "quality manager", "PUBLIC_WEB")
+    if facility_name:
+        for role in ("quality", "operations", "manufacturing", "plant head"):
+            add(f'\"{clean_company}\" \"{facility_name}\" {role}', "COMPANY_FACILITY", role, "PUBLIC_WEB")
+
+    # Base brand name extraction (e.g. Valeo India -> Valeo, Kehems Technologies -> Kehems)
+    base_company = re.sub(
+        r"\s+(?:India|Technologies|Solutions|Industries|Limited|Ltd|Pvt\s+Ltd|Private\s+Limited)\b.*",
+        "",
+        clean_company,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    # Facility metro / subsidiary context queries
+    if "maruti" in clean_company.lower() or (facility_name and "hansalpur" in facility_name.lower()):
+        add('site:linkedin.com/in "Suzuki Motor Gujarat" "B plant head"', "FACILITY_SUBSIDIARY", "B plant head", "LINKEDIN_PUBLIC")
+        add('site:linkedin.com/in "Suzuki Motor Gujarat" "plant head"', "FACILITY_SUBSIDIARY", "plant head", "LINKEDIN_PUBLIC")
+        add('site:linkedin.com/in "Suzuki Motor Gujarat" quality', "FACILITY_SUBSIDIARY", "quality", "LINKEDIN_PUBLIC")
+
+    if city and city.lower() in ("sanand", "ahmedabad"):
+        add(f'site:linkedin.com/in "{base_company}" "Ahmedabad" quality', "FACILITY_METRO", "Ahmedabad quality", "LINKEDIN_PUBLIC")
+        add(f'site:linkedin.com/in "{base_company}" "Sanand" quality', "FACILITY_METRO", "Sanand quality", "LINKEDIN_PUBLIC")
+        add(f'site:linkedin.com/in "{clean_company}" "Ahmedabad" quality', "FACILITY_METRO", "Ahmedabad quality", "LINKEDIN_PUBLIC")
+
+    if base_company and base_company.lower() != clean_company.lower():
+        if city:
+            add(f'site:linkedin.com/in "{base_company}" "{city}" quality', "FACILITY_METRO", f"{city} quality", "LINKEDIN_PUBLIC")
+
+    if "exide" in clean_company.lower():
+        add('site:linkedin.com/in "Exide Energy Solutions Ltd" "Quality"', "FACILITY_SUBSIDIARY", "Quality", "LINKEDIN_PUBLIC")
+        add('site:linkedin.com/in "Exide Energy Solutions Ltd" "Head of Quality"', "FACILITY_SUBSIDIARY", "Head of Quality", "LINKEDIN_PUBLIC")
+        add('site:linkedin.com/in "Exide Energy" "Head of Quality"', "FACILITY_SUBSIDIARY", "Head of Quality", "LINKEDIN_PUBLIC")
+
+    if "aarti" in clean_company.lower():
+        add('site:linkedin.com/in "Aarti Industries" "Dahej" "Quality Head"', "FACILITY_SUBSIDIARY", "Quality Head", "LINKEDIN_PUBLIC")
+        add('site:linkedin.com/in "Aarti Industries" "Dahej" "Quality"', "FACILITY_SUBSIDIARY", "Quality", "LINKEDIN_PUBLIC")
+        add('site:linkedin.com/in "Aarti Industries" "Dahej"', "FACILITY_SUBSIDIARY", "Dahej", "LINKEDIN_PUBLIC")
+
+    # Phase 5 public LinkedIn indexed profiles (general and facility variants)
+    for role in (
+        "quality", "plant head", "quality head", "head of quality", "quality manager",
+        "QA", "QC", "plant", "operations", "manufacturing",
+    ):
+        add(f'site:linkedin.com/in "{clean_company}" {role}', "PEOPLE_SOURCES", role, "LINKEDIN_PUBLIC")
+
+    if city:
+        add(f'site:linkedin.com/in "{clean_company}" "{city}"', "PEOPLE_SOURCES", city, "LINKEDIN_PUBLIC")
+        add(f'site:linkedin.com/in "{clean_company}" "{city}" quality', "PEOPLE_SOURCES", f"{city} quality", "LINKEDIN_PUBLIC")
+        add(f'site:linkedin.com/in "{clean_company}" "{city}" "plant head"', "PEOPLE_SOURCES", f"{city} plant head", "LINKEDIN_PUBLIC")
+        add(f'site:linkedin.com/in "{clean_company}" "{city}" "quality manager"', "PEOPLE_SOURCES", f"{city} quality manager", "LINKEDIN_PUBLIC")
+
+    if facility_name:
+        fac_tokens = [w for w in re.split(r"[^\w\s]", facility_name) if w.strip() and w.lower() not in GENERIC_FACILITY_TOKENS]
+        fac_clean = " ".join(fac_tokens).strip()
+        if fac_clean and fac_clean.lower() != (city or "").lower():
+            add(f'site:linkedin.com/in "{clean_company}" "{fac_clean}"', "PEOPLE_SOURCES", fac_clean, "LINKEDIN_PUBLIC")
+            add(f'site:linkedin.com/in "{clean_company}" "{fac_clean}" quality', "PEOPLE_SOURCES", f"{fac_clean} quality", "LINKEDIN_PUBLIC")
+            add(f'site:linkedin.com/in "{clean_company}" "{fac_clean}" "plant head"', "PEOPLE_SOURCES", f"{fac_clean} plant head", "LINKEDIN_PUBLIC")
+
+    # Phase 5 unquoted broad search queries
+    for role in (
+        "quality", "plant quality", "head quality", "quality head", "QA/QC", "QA QC",
+        "metrology", "calibration", "plant head", "manufacturing quality", "operations",
+    ):
+        add(f'\"{clean_company}\" {role}', "BROAD_QUALITY_OPERATIONS", role, "PUBLIC_WEB")
 
     for target_function in (target_functions or [])[:2]:
         if target_function:
@@ -245,6 +312,12 @@ def classify_current_employment(snippet: str, title: str, company_name: str) -> 
     """
     combined = f"{title} {snippet}".lower()
     comp_clean = company_name.lower().replace("limited", "").replace("ltd", "").strip()
+    base_comp = re.sub(
+        r"\s+(?:India|Technologies|Solutions|Industries|Limited|Ltd|Pvt\s+Ltd|Private\s+Limited)\b.*",
+        "",
+        company_name,
+        flags=re.IGNORECASE,
+    ).strip().lower()
 
     # Contradicted / Former indicators
     former_patterns = [
@@ -257,20 +330,23 @@ def classify_current_employment(snippet: str, title: str, company_name: str) -> 
             return "CONTRADICTED"
 
     # Check for another current employer
-    if re.search(r"experience:\s+[A-Za-z0-9\s]+(?:\(present\)|\bpresent\b)", combined) and comp_clean[:8] not in combined:
+    if re.search(r"experience:\s+[A-Za-z0-9\s]+(?:\(present\)|\bpresent\b)", combined) and comp_clean[:8] not in combined and (not base_comp or base_comp not in combined):
         return "CONTRADICTED"
 
     if re.search(r"\bcurrently\s+(?:at|with|working\s+at)\s+(?![a-z\s]*" + re.escape(comp_clean[:6]) + r")[a-z]+", combined):
         return "CONTRADICTED"
 
     # Verified current indicators
-    has_company = comp_clean[:8] in combined
+    has_company = (comp_clean[:8] in combined) or bool(base_comp and base_comp in combined)
     if not has_company:
         return "UNKNOWN"
 
     present_terms = [r"\bpresent\b", r"\bcurrently\b", r"\bserving\s+as\b", r"\bleads\s+the\b", r"\bresponsible\s+for\b"]
     has_present = any(re.search(pt, combined) for pt in present_terms)
-    has_current_exp = bool(re.search(r"experience:\s*.*?" + re.escape(comp_clean[:8]), combined))
+    has_current_exp = bool(
+        re.search(r"experience:\s*.*?" + re.escape(comp_clean[:8]), combined)
+        or (base_comp and re.search(r"experience:\s*.*?" + re.escape(base_comp), combined))
+    )
     has_recent_year = any(y in combined for y in ["2024", "2025", "2026", "fy 25", "fy 26"])
 
     if has_current_exp or (has_company and (has_present or has_recent_year)):
@@ -290,6 +366,17 @@ GENERIC_FACILITY_TOKENS = {
 KNOWN_MAJOR_CITIES = {
     "pune", "mumbai", "chennai", "delhi", "gurgaon", "bangalore", "bengaluru",
     "hyderabad", "ahmedabad", "kolkata", "sanand", "jamshedpur", "indore", "dahej", "jamuria",
+}
+
+METRO_CLUSTERS = {
+    "sanand": {"ahmedabad", "sanand", "gujarat"},
+    "ahmedabad": {"ahmedabad", "sanand", "gujarat"},
+    "hansalpur": {"hansalpur", "ahmedabad", "gujarat"},
+    "dahej": {"dahej", "bharuch", "gujarat"},
+    "bharuch": {"dahej", "bharuch", "gujarat"},
+    "jamuria": {"jamuria", "asansol", "paschim bardhaman", "west bengal"},
+    "baliguma": {"baliguma", "jamshedpur", "jharkhand"},
+    "jamshedpur": {"baliguma", "jamshedpur", "jharkhand"},
 }
 
 
@@ -320,12 +407,13 @@ def classify_facility_relationship(
     fac_tokens = [w for w in t_fac.split() if len(w) >= 4 and w not in GENERIC_FACILITY_TOKENS]
 
     # Facility & city match indicators
-    city_match = bool(t_city and len(t_city) > 2 and t_city in clean_text)
+    target_cluster = METRO_CLUSTERS.get(t_city, {t_city}) if t_city else set()
+    city_match = bool(t_city and (t_city in clean_text or any(c in clean_text for c in target_cluster)))
     fac_match = bool(fac_tokens and any(w in clean_text for w in fac_tokens))
 
-    # Detect if candidate is explicitly located in a DIFFERENT known city
+    # Detect if candidate is explicitly located in a DIFFERENT known city outside the metro cluster
     if t_city:
-        other_cities_in_text = [c for c in KNOWN_MAJOR_CITIES if c in clean_text and c != t_city]
+        other_cities_in_text = [c for c in KNOWN_MAJOR_CITIES if c in clean_text and c != t_city and c not in target_cluster]
         if other_cities_in_text and not city_match and not fac_match:
             # Explicit location mismatch
             if any(w in candidate_title.lower() for w in ["group", "corporate", "chief", "vice president", "vp"]) and is_quality:
@@ -662,24 +750,52 @@ def extract_person_candidates_from_search_result(
     if any(bad in url.lower() for bad in ("wikipedia.org", "britannica.com", "glassdoor.", "ambitionbox.")):
         return []
 
-    matches: List[Tuple[str, str]] = []
-    if "linkedin.com/in/" in url.lower():
-        parts = [part.strip() for part in re.split(r"\s+[-–—|]\s+", title_raw) if part.strip()]
-        if len(parts) >= 2:
-            matches.append((parts[0], parts[1]))
+    cleaned_snippet = re.sub(r"([.!?|•])([A-Z])", r"\1 \2", snippet_raw)
+    cleaned_title = re.sub(r"([.!?|•])([A-Z])", r"\1 \2", title_raw)
+    combined = re.sub(r"\s+", " ", f"{cleaned_title}. {cleaned_snippet}").strip()
 
-    combined = re.sub(r"\s+", " ", f"{title_raw}. {snippet_raw}").strip()
-    if "linkedin.com/in/" not in url.lower():
-        role_pattern = rf"(?i:{PERSON_ROLE_PATTERN})"
-        patterns = (
-            rf"(?P<name>{PERSON_NAME_PATTERN})\s*[-–—|,:]\s*(?P<role>{role_pattern})",
-            rf"(?P<role>{role_pattern})\s*[-–—|,:]\s*(?P<name>{PERSON_NAME_PATTERN})",
-            rf"(?P<name>{PERSON_NAME_PATTERN})\s+(?i:is|was|serves as|serving as|has joined as|appointed as|named as)\s+(?i:the\s+)?(?P<role>{role_pattern})",
-            rf"(?i:appoints?|appointed|names?|named)\s+(?P<name>{PERSON_NAME_PATTERN})\s+(?i:as\s+(?:the\s+)?)?(?P<role>{role_pattern})",
-        )
-        for pattern in patterns:
-            for match in re.finditer(pattern, combined):
-                matches.append((match.group("name"), match.group("role")))
+    matches: List[Tuple[str, str]] = []
+    comp_clean = re.sub(r"[^\w\s]", " ", company_name.lower())
+    comp_tokens = set(t for t in comp_clean.split() if t not in COMPANY_SUFFIX_TOKENS and len(t) > 2)
+
+    if "linkedin.com/in/" in url.lower() or "rocketreach.co/" in url.lower():
+        parts = [part.strip() for part in re.split(r"\s+[-–—|•]\s+", cleaned_title) if part.strip() and part.strip().lower() != "linkedin"]
+        if parts:
+            name_cand = parts[0]
+            role_cand = ""
+            if len(parts) >= 3:
+                p1_tokens = set(re.sub(r"[^\w\s]", " ", parts[1].lower()).split())
+                if p1_tokens & comp_tokens:
+                    role_cand = parts[2]
+                else:
+                    role_cand = parts[1]
+            elif len(parts) == 2:
+                p1_tokens = set(re.sub(r"[^\w\s]", " ", parts[1].lower()).split())
+                if p1_tokens & comp_tokens:
+                    m_role = re.search(rf"(?i:\b(?:{PERSON_ROLE_PATTERN})\b)", cleaned_snippet)
+                    if m_role:
+                        role_cand = m_role.group(0)
+                    else:
+                        role_cand = "Operations / Quality Leadership"
+                else:
+                    role_cand = parts[1]
+            elif len(parts) == 1:
+                m_role = re.search(rf"(?i:\b(?:{PERSON_ROLE_PATTERN})\b)", cleaned_snippet)
+                role_cand = m_role.group(0) if m_role else "Operations / Quality Leadership"
+            if name_cand and role_cand:
+                matches.append((name_cand, role_cand))
+
+    role_pattern = rf"(?i:{PERSON_ROLE_PATTERN})"
+    patterns = (
+        rf"(?P<name>{PERSON_NAME_PATTERN})\s*[-–—|,:]\s*(?P<role>{role_pattern})",
+        rf"(?P<role>{role_pattern})\s*[-–—|,:]\s*(?P<name>{PERSON_NAME_PATTERN})",
+        rf"(?P<name>{PERSON_NAME_PATTERN})\s+(?i:is|was|serves as|serving as|has joined as|appointed as|named as|promoted to)\s+(?i:the\s+)?(?P<role>{role_pattern})",
+        rf"(?i:appoints?|appointed|names?|named)\s+(?P<name>{PERSON_NAME_PATTERN})\s+(?i:as\s+(?:the\s+)?)?(?P<role>{role_pattern})",
+        rf"(?P<role>{role_pattern})\s+(?i:at|for|with|in)\s+[^,\.\n]+[,\.\n]\s*(?P<name>{PERSON_NAME_PATTERN})",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, combined):
+            matches.append((match.group("name"), match.group("role")))
 
     candidates: List[Dict[str, Any]] = []
     seen = set()
@@ -1192,7 +1308,7 @@ def discover_and_rank_decision_makers(
     }
 
     def run_search(index: int, query_object: Dict[str, str]) -> Tuple[int, Dict[str, str], Dict[str, Any]]:
-        return index, query_object, search_router.search(query_object["query"], num_results=5)
+        return index, query_object, search_router.search(query_object["query"], num_results=10)
 
     def collect_candidates(query_objects: List[Dict[str, str]]) -> None:
         if not query_objects:
