@@ -330,6 +330,12 @@ def classify_current_employment(snippet: str, title: str, company_name: str) -> 
             return "CONTRADICTED"
 
     # Check for another current employer
+    headline_match = re.search(r"^(?:[A-Za-z\s/&-]+)\s+at\s+([A-Za-z0-9\s&.-]+?)(?:\s*[-–—|•]|\.\s|$)", snippet)
+    if headline_match:
+        other_comp = headline_match.group(1).strip().lower()
+        if other_comp and comp_clean[:6] not in other_comp and (not base_comp or base_comp not in other_comp):
+            return "CONTRADICTED"
+
     if re.search(r"experience:\s+[A-Za-z0-9\s]+(?:\(present\)|\bpresent\b)", combined) and comp_clean[:8] not in combined and (not base_comp or base_comp not in combined):
         return "CONTRADICTED"
 
@@ -989,22 +995,28 @@ def rank_candidates_with_deepseek(
     candidates: List[Dict[str, Any]],
     provider: Any,
 ) -> Dict[str, Any]:
-    """Batch-rank known candidates without changing deterministic truth fields."""
-    public_candidates = [
-        {
-            "name": candidate.get("name", ""),
-            "title": candidate.get("title", ""),
-            "source": candidate.get("source_url", ""),
-            "snippet": (
-                ""
-                if candidate.get("source_type") == "ANNUAL_REPORT"
-                else candidate.get("evidence_snippet", "")
-            ),
-            "source_date": candidate.get("source_date", ""),
-            "location": candidate.get("location") or candidate.get("facility", ""),
+    """Batch-rank known candidates using DeepSeek with a small strict schema and deterministic evidence gating."""
+    if not candidates:
+        return {
+            "candidates": [],
+            "assessment_count": 0,
+            "usage": {},
+            "provider": getattr(provider, "provider", "unknown"),
+            "model": getattr(provider, "model_name", getattr(provider, "model", "unknown")),
         }
-        for candidate in candidates
-    ]
+
+    cid_to_candidate: Dict[str, Dict[str, Any]] = {}
+    public_candidates: List[Dict[str, Any]] = []
+    for idx, candidate in enumerate(candidates):
+        cid = f"C{idx+1:02d}"
+        cid_to_candidate[cid] = candidate
+        public_candidates.append({
+            "candidate_id": cid,
+            "title": candidate.get("title", ""),
+            "location": candidate.get("location") or candidate.get("facility", "") or city,
+            "evidence": (candidate.get("evidence_snippet") or candidate.get("title") or "")[:250],
+        })
+
     request_payload = {
         "company": company_name,
         "facility": facility_name,
@@ -1013,52 +1025,137 @@ def rank_candidates_with_deepseek(
         "target_functions": target_functions,
         "candidates": public_candidates,
     }
-    response = provider.complete(
-        system_prompt=(
-            "Rank only the supplied person candidates for calibration-related commercial outreach. "
-            "Do not create people, employment facts, facility relationships, duties, or calibration ownership. "
-            "Every positive assertion must map to the supplied title, snippet, location, source, or source date. "
-            "Treat missing current-employment or facility evidence as missing. Return JSON with ranked_candidates; "
-            "each item must include name, rank, current_employment_supported, facility_relationship, "
-            "function_alignment, authority_class, confidence, evidence_reasons, and missing_evidence."
-        ),
-        messages=[{"role": "user", "content": json.dumps(request_payload)}],
-        response_format="json",
-        temperature=0.1,
-        max_tokens=1200,
+
+    system_prompt = (
+        "You are an industrial b2b qualification system ranking candidates for commercial outreach "
+        "regarding plant quality, testing, calibration, and metrology at the target facility.\n"
+        "Rank only the supplied candidates by their candidate_id.\n"
+        "Do NOT create people, employment facts, facility relationships, duties, or calibration ownership.\n"
+        "Every positive determination must already be supported by supplied candidate evidence.\n"
+        "Return ONLY valid JSON matching this schema:\n"
+        "{\n"
+        '  "ranking": [\n'
+        "    {\n"
+        '      "candidate_id": "C01",\n'
+        '      "rank": 1,\n'
+        '      "employment": "SUPPORTED|UNCERTAIN|UNSUPPORTED",\n'
+        '      "facility": "SUPPORTED|UNCERTAIN|UNSUPPORTED",\n'
+        '      "function": "STRONG|MEDIUM|WEAK",\n'
+        '      "authority": "STRONG|MEDIUM|WEAK",\n'
+        '      "reason": "max 5 words evidence reason"\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "Keep 'reason' strictly under 5 words per candidate (e.g. 'Plant Head at facility'). Never write long explanations."
     )
+
+    def _execute_completion(prompt_suffix: str = "") -> Any:
+        messages = [{"role": "user", "content": json.dumps(request_payload)}]
+        if prompt_suffix:
+            messages.append({"role": "user", "content": prompt_suffix})
+        return provider.complete(
+            system_prompt=system_prompt,
+            messages=messages,
+            response_format="json",
+            temperature=0.1,
+            max_tokens=2000,
+        )
+
+    response = _execute_completion()
     parsed = response.parse_json() or {}
-    ranked_items = parsed.get("ranked_candidates") if isinstance(parsed, dict) else []
+    ranked_items: List[Any] = []
+    if isinstance(parsed, dict):
+        if "ranking" in parsed and isinstance(parsed["ranking"], list):
+            ranked_items = parsed["ranking"]
+        elif "ranked_candidates" in parsed and isinstance(parsed["ranked_candidates"], list):
+            ranked_items = parsed["ranked_candidates"]
+        elif "candidates" in parsed and isinstance(parsed["candidates"], list):
+            ranked_items = parsed["candidates"]
+
+    # Controlled retry if empty or malformed (max 1 retry)
+    if not ranked_items:
+        try:
+            retry_response = _execute_completion("Return valid JSON with the ranking key matching the exact schema.")
+            retry_parsed = retry_response.parse_json() or {}
+            if isinstance(retry_parsed, dict):
+                ranked_items = (
+                    retry_parsed.get("ranking")
+                    or retry_parsed.get("ranked_candidates")
+                    or retry_parsed.get("candidates")
+                    or []
+                )
+            if ranked_items:
+                response = retry_response
+        except Exception:
+            pass
+
     assessments: Dict[str, Dict[str, Any]] = {}
     for item in ranked_items if isinstance(ranked_items, list) else []:
         if not isinstance(item, dict):
             continue
-        key = _normalize_person_name(str(item.get("name") or ""))
-        if key and key not in assessments:
-            assessments[key] = item
+        cid = str(item.get("candidate_id") or "").strip().upper()
+        if not cid and "name" in item:
+            for k_cid, c_obj in cid_to_candidate.items():
+                if _normalize_person_name(c_obj.get("name", "")) == _normalize_person_name(item["name"]):
+                    cid = k_cid
+                    break
+        if cid and cid in cid_to_candidate and cid not in assessments:
+            cand = cid_to_candidate[cid]
+            rejected_claims = []
+            llm_emp = str(item.get("employment", "UNCERTAIN")).upper()
+            llm_fac = str(item.get("facility", "UNCERTAIN")).upper()
+            det_emp = str(cand.get("current_employment") or "UNKNOWN").upper()
+            det_fac = str(cand.get("facility_relationship") or "COMPANY_ONLY").upper()
+
+            # Strict Evidence Rule (Phase 7):
+            # 1. Unsupported employment
+            if llm_emp == "SUPPORTED" and det_emp == "CONTRADICTED":
+                rejected_claims.append("UNSUPPORTED_EMPLOYMENT")
+            elif llm_emp == "SUPPORTED" and det_emp == "UNKNOWN":
+                clean_comp = re.sub(r"[^\w\s]", " ", company_name.lower())[:8].strip()
+                combined_text = f"{cand.get('title', '')} {cand.get('evidence_snippet', '')}".lower()
+                if clean_comp and clean_comp not in combined_text:
+                    rejected_claims.append("UNSUPPORTED_EMPLOYMENT")
+
+            # 2. Unsupported facility
+            if llm_fac == "SUPPORTED":
+                if det_fac in ("COMPANY_ONLY", "LOCATION_MISMATCH"):
+                    cand_loc = str(cand.get("location") or cand.get("facility") or "").lower()
+                    target_city = city.lower()
+                    target_cluster = METRO_CLUSTERS.get(target_city, {target_city}) if target_city else set()
+                    other_cities = [c for c in KNOWN_MAJOR_CITIES if c in cand_loc and c != target_city and c not in target_cluster]
+                    if other_cities:
+                        rejected_claims.append("UNSUPPORTED_FACILITY")
+
+            item_copy = dict(item)
+            item_copy["candidate_id"] = cid
+            item_copy["evidence_verified"] = (len(rejected_claims) == 0)
+            item_copy["rejected_claims"] = rejected_claims
+            assessments[cid] = item_copy
 
     ranked_candidates: List[Dict[str, Any]] = []
-    for candidate in candidates:
+    for cid, candidate in cid_to_candidate.items():
         candidate_copy = dict(candidate)
-        assessment = assessments.get(_normalize_person_name(str(candidate.get("name") or "")))
+        assessment = assessments.get(cid)
         if assessment:
             candidate_copy["deepseek_assessment"] = assessment
             try:
-                candidate_copy["deepseek_rank"] = int(assessment.get("rank"))
+                candidate_copy["deepseek_rank"] = int(assessment.get("rank", 9999))
             except (TypeError, ValueError):
                 candidate_copy["deepseek_rank"] = 9999
+        else:
+            candidate_copy["deepseek_rank"] = 9999
+        # Final Deterministic Gate (Phase 8):
+        # Confidence is strictly deterministic and never elevated by DeepSeek.
         ranked_candidates.append(candidate_copy)
-    def ranking_key(candidate: Dict[str, Any]) -> tuple[int, float]:
-        rank = int(candidate.get("deepseek_rank") or 9999)
-        return rank, -float(candidate.get("person_score") or 0)
 
-    ranked_candidates.sort(key=ranking_key)
+    ranked_candidates.sort(key=_person_sort_key)
     return {
         "candidates": ranked_candidates,
         "assessment_count": len(assessments),
-        "usage": dict(response.usage or {}),
-        "provider": response.provider,
-        "model": response.model,
+        "usage": dict(getattr(response, "usage", {}) or {}),
+        "provider": getattr(response, "provider", "hive"),
+        "model": getattr(response, "model", "deepseek-ai/DeepSeek-V4.1-Flash"),
     }
 
 

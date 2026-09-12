@@ -1,0 +1,95 @@
+{
+  "timestamp": "2026-09-12T18:08:56.499214+00:00",
+  "candidate_discovery": {
+    "total_gold_cases": 5,
+    "discovered_expected": 2,
+    "candidate_set_recall_pct": 40.0,
+    "undiscovered_cases": [
+      "CASE-03",
+      "CASE-04",
+      "CASE-05"
+    ]
+  },
+  "deterministic_baseline": {
+    "cases_evaluated": 2,
+    "top1": "2 / 2",
+    "top3": "2 / 2",
+    "top1_pct": 100.0,
+    "top3_pct": 100.0
+  },
+  "deepseek_ranking": {
+    "cases_evaluated": 2,
+    "top1": "1 / 2",
+    "top3": "2 / 2",
+    "correct_high": "1 / 2",
+    "false_high": 0,
+    "conditional_top1_accuracy_pct": 50.0,
+    "conditional_top3_recall_pct": 100.0,
+    "false_high_confidence_rate_pct": 0.0,
+    "end_to_end_correct_top1": "1 / 5"
+  },
+  "case_table": [
+    {
+      "case_id": "CASE-01",
+      "company": "Maruti Suzuki",
+      "facility": "Hansalpur Manufacturing Complex",
+      "candidate_count": 15,
+      "expected_candidate_starting_pos": 1,
+      "deterministic_final_pos": 1,
+      "deepseek_pos": 1,
+      "expected_person": "Atul Jain",
+      "top1_candidate_name": "Atul Jain",
+      "final_deterministic_confidence": "HIGH",
+      "correct_top1": true,
+      "correct_top3": true,
+      "evidence_sufficient": true,
+      "failure_cause": "NONE",
+      "deepseek_assessment_count": 15
+    },
+    {
+      "case_id": "CASE-02",
+      "company": "Valeo India",
+      "facility": "Sanand Plant",
+      "candidate_count": 15,
+      "expected_candidate_starting_pos": 1,
+      "deterministic_final_pos": 1,
+      "deepseek_pos": 3,
+      "expected_person": "Abhijit Biswal",
+      "top1_candidate_name": "Shrikant Jagtap",
+      "final_deterministic_confidence": "MEDIUM",
+      "correct_top1": false,
+      "correct_top3": true,
+      "evidence_sufficient": true,
+      "failure_cause": "FUNCTION_ALIGNMENT_TOO_WEAK",
+      "deepseek_assessment_count": 15
+    }
+  ],
+  "positive_control": {
+    "company": "Ramkrishna Forgings",
+    "facility": "Plant V Baliguma",
+    "person_name": "Krishna Kumar Jha",
+    "title": "Plant Head \u2013 Plant V",
+    "current_employment": "VERIFIED",
+    "facility_relationship": "FACILITY_OWNER",
+    "authority_class": "FACILITY_OWNER",
+    "person_score": 93.0,
+    "person_confidence": "HIGH",
+    "apollo_gate_status": "READY_FOR_CONTACT_ENRICHMENT",
+    "ready_for_contact_enrichment": true,
+    "ready_for_email": false,
+    "control_passed": true
+  },
+  "hive_telemetry": {
+    "max_requests": 4,
+    "attempted_requests": 2,
+    "successful_requests": 2,
+    "failed_requests": 0,
+    "input_tokens": 3086,
+    "output_tokens": 2081,
+    "total_tokens": 5167,
+    "estimated_usd_cost": 0.0017115,
+    "remaining_request_budget": 2,
+    "paid_overage_allowed": false,
+    "last_error": null
+  }
+}

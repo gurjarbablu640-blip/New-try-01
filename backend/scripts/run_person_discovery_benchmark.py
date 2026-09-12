@@ -45,7 +45,15 @@ def write_json_atomic(path: str, payload: Dict[str, Any]) -> None:
     temporary_path = f"{path}.tmp"
     with open(temporary_path, "w", encoding="utf-8") as output_file:
         json.dump(payload, output_file, indent=2)
-    os.replace(temporary_path, path)
+    import time
+    for attempt in range(5):
+        try:
+            os.replace(temporary_path, path)
+            break
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.02)
 
 
 class HiveRequestBudget:
@@ -79,6 +87,10 @@ class HiveRequestBudget:
         self.last_error: Optional[str] = None
         self.checkpoint_data: Dict[str, Any] = {}
         self._persist("RUNNING")
+
+    @property
+    def remaining_request_budget(self) -> int:
+        return self.max_requests - self.attempted_requests
 
     def reserve_request(self) -> None:
         if self.attempted_requests >= self.max_requests:
