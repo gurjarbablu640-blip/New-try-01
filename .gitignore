@@ -25,6 +25,9 @@ frontend/build/
 backend/data/*.json
 backend/data/runtime_state/search_provider_cache.json
 backend/data/runtime_state/serper_budget_state.json
+backend/data/runtime_state/
+backend/data/daily_reports/
+backend/tests/.tmp/
 pytest_basetemp/
 
 # Celery runtime state

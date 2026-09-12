@@ -72,6 +72,10 @@ NON_HUMAN_ENTITIES = {
     "annual report", "financial results", "press release", "news desk", "web desk",
     "status", "smrt status", "dev smrt status", "profile", "updates", "contact us",
     "about us", "board of directors", "management team", "editorial team",
+    "carbogen amcis", "carbogen amcis shanghai", "carbogen", "amcis",
+    "propulsion systems", "powertrain systems", "quality systems", "chassis systems",
+    "committee composition", "committee composition. designation", "composition. designation",
+    "committee composition designation", "purchase head", "quality head",
 }
 
 GENERIC_ROLE_PHRASES = {
@@ -79,6 +83,52 @@ GENERIC_ROLE_PHRASES = {
     "plant head", "quality manager", "general manager", "vice president",
     "director of operations", "executive director", "managing director",
     "head quality", "qa manager", "qc manager", "plant operations",
+    "quality head", "purchase head", "head purchase", "procurement head",
+    "operations head", "operations team", "leadership team", "management team",
+    "maintenance manager", "calibration manager", "metrology manager",
+    "head qa", "head qc", "head of quality", "director quality",
+    "supply chain head", "hr head", "business head",
+}
+
+GENERIC_ROLE_TOKENS = {
+    "head", "manager", "director", "lead", "leader", "chief", "officer",
+    "executive", "president", "vp", "gm", "avp", "dgm", "agm", "supervisor",
+    "coordinator", "administrator", "specialist", "consultant", "advisor",
+    "analyst", "engineer", "technician", "inspector", "auditor", "operator",
+    "buyer", "incharge", "controller", "leadership", "officers", "personnel",
+}
+
+FUNCTION_AND_DEPT_TOKENS = {
+    "quality", "qa", "qc", "qms", "purchase", "procurement", "sourcing",
+    "operations", "plant", "works", "factory", "facility", "maintenance",
+    "metrology", "calibration", "instrumentation", "testing", "inspection",
+    "production", "manufacturing", "supply", "chain", "logistics", "stores",
+    "safety", "ehs", "hse", "compliance", "regulatory", "engineering", "commercial",
+    "systems", "subsystems", "division", "department", "dept", "team",
+}
+
+SUBSYSTEM_TOKENS = {
+    "propulsion", "powertrain", "chassis", "aerodynamics", "telematics",
+    "infotainment", "firmware", "hydraulics", "pneumatics", "avionics",
+    "battery", "batteries", "substation", "transmission", "metallurgy",
+}
+
+GOVERNANCE_TERMS = {
+    "committee", "composition", "designation", "remuneration", "nomination",
+    "stakeholders", "stakeholder", "shareholding", "independent", "governance",
+    "directors", "secretarial", "resolution", "agenda", "minutes", "charter",
+}
+
+FOREIGN_AND_CORP_ENTITIES = {
+    "carbogen", "amcis", "shanghai", "beijing", "suzhou", "shenzhen",
+    "guangzhou", "tokyo", "singapore", "malaysia", "germany", "switzerland",
+    "basel", "aarau", "manchester", "london", "seattle", "detroit", "chicago",
+}
+
+RECRUITMENT_TERMS = {
+    "walk-in", "walkin", "interview", "urgent", "requirement", "openings",
+    "opening", "vacancies", "vacancy", "careers", "career", "hiring",
+    "recruitment", "immediate", "joiner", "apply", "job", "jobs",
 }
 
 COMPANY_SUFFIX_TOKENS = {
@@ -92,7 +142,8 @@ COMPANY_SUFFIX_TOKENS = {
 def is_human_person_candidate(name_str: str, company_name: str = "") -> Tuple[bool, str]:
     """Validate whether candidate string represents a genuine human decision-maker.
 
-    Rejects: company names, department names, product names, SEO titles, generic phrases.
+    Rejects: generic role phrases, departments, technical subsystems, governance headings,
+             corporate/subsidiary entities, foreign locations, job listing terms.
     Preserves: Indian initials, honorifics, compound names, and regional formats.
     """
     clean = (name_str or "").strip()
@@ -100,7 +151,7 @@ def is_human_person_candidate(name_str: str, company_name: str = "") -> Tuple[bo
         return False, "Candidate name is empty"
 
     # Remove trailing company/title fragments if separated by dash or pipe
-    clean = re.split(r"\s*[-–|•]\s*", clean)[0].strip()
+    clean = re.split(r"\s*[-–—|•]\s*", clean)[0].strip()
 
     tokens = re.findall(r"[a-zA-Z]+", clean)
     if not tokens:
@@ -120,9 +171,35 @@ def is_human_person_candidate(name_str: str, company_name: str = "") -> Tuple[bo
     if clean_lower in GENERIC_ROLE_PHRASES:
         return False, f"Candidate name is a generic role phrase, not a human name: {clean}"
 
+    tokens_lower = [t.lower() for t in tokens]
+
+    # 3. Reject technical subsystems (e.g. 'Propulsion Systems')
+    if any(t in SUBSYSTEM_TOKENS for t in tokens_lower):
+        return False, f"Candidate name '{clean}' contains engineering subsystem/technical domain term"
+
+    # 4. Reject governance / table heading artifacts (e.g. 'Committee Composition. Designation')
+    if any(t in GOVERNANCE_TERMS for t in tokens_lower):
+        return False, f"Candidate name '{clean}' contains corporate governance or document heading term"
+
+    # 5. Reject foreign locations and corporate subsidiary names (e.g. 'CARBOGEN AMCIS Shanghai')
+    if any(t in FOREIGN_AND_CORP_ENTITIES for t in tokens_lower):
+        return False, f"Candidate name '{clean}' matches corporate entity, CDMO, or foreign geography"
+
+    # 6. Reject recruitment / job listing terms
+    if any(t in RECRUITMENT_TERMS for t in tokens_lower):
+        return False, f"Candidate name '{clean}' contains recruitment/job listing phrase"
+
+    # 7. Reject if ALL meaningful tokens are generic role or functional department tokens
+    honorifics = {"mr", "dr", "mrs", "ms", "shri", "smt", "prof", "er"}
+    non_honorific_tokens = [t for t in tokens_lower if t not in honorifics]
+    if non_honorific_tokens and all(
+        (t in GENERIC_ROLE_TOKENS or t in FUNCTION_AND_DEPT_TOKENS or t in COMPANY_SUFFIX_TOKENS)
+        for t in non_honorific_tokens
+    ):
+        return False, f"Candidate name '{clean}' is a combination of generic role and department phrases"
+
     # Reject if any token is a company suffix or department indicator
     dept_tokens = {"department", "dept", "team", "leadership", "management", "assurance", "operations", "division"}
-    tokens_lower = [t.lower() for t in tokens]
     if any(t in COMPANY_SUFFIX_TOKENS for t in tokens_lower):
         return False, f"Contains corporate/company suffix token: {clean}"
     if any(t in dept_tokens for t in tokens_lower):
@@ -134,7 +211,7 @@ def is_human_person_candidate(name_str: str, company_name: str = "") -> Tuple[bo
     if any(t in facility_terms for t in tokens_lower):
         return False, f"Contains facility/plant term: {clean}"
 
-    # 3. Company name match
+    # 8. Company name match
     if company_name:
         comp_clean = re.sub(r"[^\w\s]", " ", company_name.lower())
         comp_tokens = [t for t in comp_clean.split() if t not in COMPANY_SUFFIX_TOKENS and len(t) > 2]
@@ -147,13 +224,20 @@ def is_human_person_candidate(name_str: str, company_name: str = "") -> Tuple[bo
             if matched >= 2:
                 return False, f"Candidate name '{clean}' has 2+ company name tokens"
 
-    # 4. Characters / symbols check
-    if re.search(r"[\d@:/\\_<>{}\[\]\*\+=#\$%^&~®™©|!?;]", clean):
+    # 9. Characters / symbols check
+    if re.search(r"[\d@:/\\_<>{}\[\]\*\+=#\$%^&~®™©|!?;,]", clean):
         return False, "Contains digits or punctuation invalid for human names"
 
-    # 5. Token length check (allow 2 to 4 tokens, plus optional honorific)
-    # Honorifics
-    honorifics = {"mr", "dr", "mrs", "ms", "shri", "smt", "prof", "er"}
+    # Check for invalid internal periods (dots allowed only on initials or honorifics)
+    raw_words = clean.split()
+    for w in raw_words:
+        if "." in w:
+            w_strip = w.rstrip(".").lower()
+            # If word is not a single initial (1 char) and not a recognized honorific
+            if len(w_strip) > 1 and w_strip not in honorifics:
+                return False, f"Contains invalid sentence/table period in token: {w}"
+
+    # 10. Token length check (allow 2 to 4 tokens, plus optional honorific)
     meaningful_tokens = [t for t in tokens if t.lower() not in honorifics]
 
     if len(meaningful_tokens) < 2:
@@ -162,12 +246,13 @@ def is_human_person_candidate(name_str: str, company_name: str = "") -> Tuple[bo
     if len(meaningful_tokens) > 5:
         return False, f"Candidate name '{clean}' has too many tokens; likely a phrase or title"
 
-    # 6. Reject SEO / web page title terms
+    # 11. Reject SEO / web page title terms
     seo_terms = {"overview", "about", "careers", "jobs", "salary", "news", "updates", "status", "profile", "review"}
     if any(t.lower() in seo_terms for t in tokens):
         return False, f"Contains web page or SEO keyword: {clean}"
 
     return True, "Valid human person candidate"
+
 
 
 # ── Phase 3: Multi-Query Person Discovery ────────────────────────────────────
@@ -310,58 +395,107 @@ def classify_current_employment(snippet: str, title: str, company_name: str) -> 
 
     Values: VERIFIED, PROBABLE, UNKNOWN, STALE, CONTRADICTED.
     """
-    combined = f"{title} {snippet}".lower()
-    comp_clean = company_name.lower().replace("limited", "").replace("ltd", "").strip()
+    clean_title = (title or "").strip()
+    clean_snippet = (snippet or "").strip()
+    combined = f"{clean_title} {clean_snippet}".lower()
+
+    comp_clean = re.sub(r"\b(limited|ltd|private|pvt|corp|corporation|inc)\b", "", company_name.lower()).strip()
     base_comp = re.sub(
         r"\s+(?:India|Technologies|Solutions|Industries|Limited|Ltd|Pvt\s+Ltd|Private\s+Limited)\b.*",
         "",
         company_name,
         flags=re.IGNORECASE,
     ).strip().lower()
+    comp_tokens = set(t for t in comp_clean.split() if len(t) > 2)
+    if not comp_tokens and base_comp:
+        comp_tokens = set(t for t in base_comp.split() if len(t) > 2)
 
-    # Contradicted / Former indicators
+    def is_target_comp(c_str: str) -> bool:
+        c_str_lower = c_str.lower()
+        if comp_clean and comp_clean[:6] in c_str_lower:
+            return True
+        if base_comp and len(base_comp) >= 3 and base_comp in c_str_lower:
+            return True
+        if any(t in c_str_lower for t in comp_tokens):
+            return True
+        return False
+
+    # 1. Direct Contradiction via Title headline: "@<Company>" or "at <Company>"
+    # Example: "AVP Quality @Crompton", "Plant QA at Elecon", "Quality Head at Tata Motors" when company is Schneider
+    headline_match = re.search(r"(?:@|\bat\s+)\s*([A-Za-z0-9\s&.-]{3,35})(?:\s*[-–—|•,]|\s*I\s*|\.\s|$)", clean_title)
+    if headline_match:
+        other_comp = headline_match.group(1).strip()
+        if other_comp.lower() not in {"linkedin", "home", "work", "india", "plant"} and len(other_comp) >= 3:
+            if not is_target_comp(other_comp):
+                return "CONTRADICTED"
+
+    # 2. Contradicted via Snippet headline / current role
+    snip_headline = re.search(r"^(?:[A-Za-z\s/&-]+)\s+(?:at|@)\s+([A-Za-z0-9\s&.-]+?)(?:\s*[-–—|•]|\.\s|$)", clean_snippet)
+    if snip_headline:
+        other_comp = snip_headline.group(1).strip()
+        if other_comp and not is_target_comp(other_comp):
+            return "CONTRADICTED"
+
+    # 3. Explicit former / past employment patterns for target company
     former_patterns = [
-        r"\b(?:former|formerly|ex-|past|previously)\b.*?\b" + re.escape(comp_clean[:8]),
-        r"\b" + re.escape(comp_clean[:8]) + r"\b.*?\buntil\s+(?:20\d{2}|19\d{2})",
-        r"\bpreviously\s+worked\s+at\s+" + re.escape(comp_clean[:8]),
+        r"\b(?:former|formerly|ex-|past|previously|prior to)\b.*?\b" + re.escape(base_comp),
+        r"\b" + re.escape(base_comp) + r"\b.*?\buntil\s+(?:20\d{2}|19\d{2})",
+        r"\b" + re.escape(base_comp) + r"\b.*?\btill\s+(?:20\d{2}|19\d{2})",
+        r"\bpreviously\s+(?:worked|served|managed|held)\b",
+        r"\bleft\s+" + re.escape(base_comp),
     ]
     for fp in former_patterns:
         if re.search(fp, combined):
             return "CONTRADICTED"
 
-    # Check for another current employer
-    headline_match = re.search(r"^(?:[A-Za-z\s/&-]+)\s+at\s+([A-Za-z0-9\s&.-]+?)(?:\s*[-–—|•]|\.\s|$)", snippet)
-    if headline_match:
-        other_comp = headline_match.group(1).strip().lower()
-        if other_comp and comp_clean[:6] not in other_comp and (not base_comp or base_comp not in other_comp):
+    # 4. Closed date ranges for target company ending in past (<= 2023)
+    # Example: "Schneider Electric ... Jan 2007 – Nov 2009", "2007 - 2009 · 2 yrs"
+    closed_date_patterns = [
+        r"\b" + re.escape(base_comp) + r"[\w\s,()·–-]{0,50}\b(?:19\d{2}|20[01]\d|202[0-3])\s*[-–—to]+\s*(?:19\d{2}|20[01]\d|202[0-3])\b",
+        r"\b(?:19\d{2}|20[01]\d|202[0-3])\s*[-–—to]+\s*(?:19\d{2}|20[01]\d|202[0-3])\b[\w\s,()·–-]{0,50}\b" + re.escape(base_comp),
+    ]
+    for cdp in closed_date_patterns:
+        if re.search(cdp, combined):
             return "CONTRADICTED"
 
-    if re.search(r"experience:\s+[A-Za-z0-9\s]+(?:\(present\)|\bpresent\b)", combined) and comp_clean[:8] not in combined and (not base_comp or base_comp not in combined):
-        return "CONTRADICTED"
+    # 5. Experience present at another company
+    exp_present = re.search(r"experience:\s*([A-Za-z0-9\s&.-]+?)(?:\s*·|\s*\()(?:\bpresent\b|\bcurrent\b)", combined)
+    if exp_present:
+        curr_exp_comp = exp_present.group(1).strip()
+        if curr_exp_comp and not is_target_comp(curr_exp_comp):
+            return "CONTRADICTED"
 
-    if re.search(r"\bcurrently\s+(?:at|with|working\s+at)\s+(?![a-z\s]*" + re.escape(comp_clean[:6]) + r")[a-z]+", combined):
-        return "CONTRADICTED"
+    curr_at = re.search(r"\bcurrently\s+(?:at|with|working\s+at)\s+([A-Za-z0-9\s&.-]+)", combined)
+    if curr_at:
+        curr_at_comp = curr_at.group(1).strip()
+        if curr_at_comp and not is_target_comp(curr_at_comp):
+            return "CONTRADICTED"
 
-    # Verified current indicators
-    has_company = (comp_clean[:8] in combined) or bool(base_comp and base_comp in combined)
+    # 6. Verified current indicators for target company
+    has_company = is_target_comp(combined)
     if not has_company:
         return "UNKNOWN"
 
     present_terms = [r"\bpresent\b", r"\bcurrently\b", r"\bserving\s+as\b", r"\bleads\s+the\b", r"\bresponsible\s+for\b"]
     has_present = any(re.search(pt, combined) for pt in present_terms)
     has_current_exp = bool(
-        re.search(r"experience:\s*.*?" + re.escape(comp_clean[:8]), combined)
-        or (base_comp and re.search(r"experience:\s*.*?" + re.escape(base_comp), combined))
+        re.search(r"experience:\s*.*?" + re.escape(base_comp), combined)
+        or (comp_clean and re.search(r"experience:\s*.*?" + re.escape(comp_clean[:8]), combined))
+        or re.search(re.escape(base_comp) + r"[\w\s,()·–-]{0,100}\b(?:202[4-6]|present)\b", combined)
+        or (has_company and re.search(r"\b(?:202[0-6]|fy\s*2[4-6])\s*[-–—to]+\s*present\b", combined))
+        or (has_company and re.search(r"experience:\s*.*?\bpresent\b", combined))
     )
+
     has_recent_year = any(y in combined for y in ["2024", "2025", "2026", "fy 25", "fy 26"])
 
-    if has_current_exp or (has_company and (has_present or has_recent_year)):
+    if has_current_exp or (has_company and has_present and (has_recent_year or "present" in combined)):
         return "VERIFIED"
 
-    if has_company:
+    if has_company and (has_present or has_recent_year):
         return "PROBABLE"
 
     return "UNKNOWN"
+
 
 
 GENERIC_FACILITY_TOKENS = {
@@ -369,20 +503,69 @@ GENERIC_FACILITY_TOKENS = {
     "division", "factory", "site", "headquarters", "office", "operations",
 }
 
-KNOWN_MAJOR_CITIES = {
-    "pune", "mumbai", "chennai", "delhi", "gurgaon", "bangalore", "bengaluru",
-    "hyderabad", "ahmedabad", "kolkata", "sanand", "jamshedpur", "indore", "dahej", "jamuria",
+INDIAN_CITIES_TO_STATE = {
+    # Gujarat
+    "sanand": "gujarat", "ahmedabad": "gujarat", "waghodia": "gujarat", "vadodara": "gujarat",
+    "baroda": "gujarat", "dahej": "gujarat", "bharuch": "gujarat", "halol": "gujarat",
+    "panchmahal": "gujarat", "chikhli": "gujarat", "navsari": "gujarat", "surat": "gujarat",
+    "rajkot": "gujarat", "metoda": "gujarat", "morbi": "gujarat", "hazira": "gujarat",
+    "hansalpur": "gujarat", "kutch": "gujarat", "mundra": "gujarat", "ankleshwar": "gujarat",
+    # Karnataka
+    "dharwad": "karnataka", "hubli": "karnataka", "bengaluru": "karnataka", "bangalore": "karnataka",
+    "peenya": "karnataka", "devanahalli": "karnataka", "bidadi": "karnataka", "hoskote": "karnataka",
+    "mysuru": "karnataka", "mysore": "karnataka", "belagavi": "karnataka", "belgaum": "karnataka",
+    # Himachal Pradesh
+    "baddi": "himachal pradesh", "nalagarh": "himachal pradesh", "barotiwala": "himachal pradesh",
+    "solan": "himachal pradesh", "kala amb": "himachal pradesh", "paonta sahib": "himachal pradesh",
+    # Uttar Pradesh / NCR
+    "noida": "uttar pradesh", "greater noida": "uttar pradesh", "ghaziabad": "uttar pradesh",
+    "lucknow": "uttar pradesh", "kanpur": "uttar pradesh", "aligarh": "uttar pradesh",
+    # Haryana
+    "bawal": "haryana", "manesar": "haryana", "gurugram": "haryana", "gurgaon": "haryana",
+    "faridabad": "haryana", "panipat": "haryana", "sonipat": "haryana", "rohtak": "haryana",
+    # Maharashtra
+    "pune": "maharashtra", "chakan": "maharashtra", "bhosari": "maharashtra", "talegaon": "maharashtra",
+    "ranjangaon": "maharashtra", "mumbai": "maharashtra", "navi mumbai": "maharashtra", "thane": "maharashtra",
+    "kagal": "maharashtra", "kolhapur": "maharashtra", "aurangabad": "maharashtra", "chhatrapati sambhajinagar": "maharashtra",
+    "nagpur": "maharashtra", "nashik": "maharashtra", "tarapur": "maharashtra", "waluj": "maharashtra",
+    # Tamil Nadu
+    "chennai": "tamil nadu", "oragadam": "tamil nadu", "sriperumbudur": "tamil nadu", "maraimalai nagar": "tamil nadu",
+    "irungattukottai": "tamil nadu", "hosur": "tamil nadu", "coimbatore": "tamil nadu", "krishnagiri": "tamil nadu",
+    "pochampalli": "tamil nadu", "ranipet": "tamil nadu",
+    # Telangana / Andhra Pradesh
+    "hyderabad": "telangana", "mahbubnagar": "telangana", "divitipally": "telangana", "adibatla": "telangana",
+    "kongara kalan": "telangana", "raviryala": "telangana", "medchal": "telangana", "patancheru": "telangana",
+    "sri city": "andhra pradesh", "kakinada": "andhra pradesh", "visakhapatnam": "andhra pradesh", "vizag": "andhra pradesh",
+    # Rajasthan
+    "alwar": "rajasthan", "ghiloth": "rajasthan", "neemrana": "rajasthan", "bhiwadi": "rajasthan",
+    "jaipur": "rajasthan", "udaipur": "rajasthan",
+    # West Bengal / Jharkhand / Odisha
+    "kolkata": "west bengal", "asansol": "west bengal", "jamuria": "west bengal", "durgapur": "west bengal",
+    "jamshedpur": "jharkhand", "ranchi": "jharkhand", "bokaro": "jharkhand", "baliguma": "jharkhand",
+    "bhubaneswar": "odisha", "rourkela": "odisha", "jharsuguda": "odisha",
+    # Madhya Pradesh
+    "indore": "madhya pradesh", "pithampur": "madhya pradesh", "bhopal": "madhya pradesh", "mandideep": "madhya pradesh",
 }
 
 METRO_CLUSTERS = {
     "sanand": {"ahmedabad", "sanand", "gujarat"},
     "ahmedabad": {"ahmedabad", "sanand", "gujarat"},
     "hansalpur": {"hansalpur", "ahmedabad", "gujarat"},
+    "waghodia": {"waghodia", "vadodara", "baroda", "gujarat"},
+    "vadodara": {"waghodia", "vadodara", "baroda", "gujarat"},
+    "halol": {"halol", "panchmahal", "vadodara", "gujarat"},
     "dahej": {"dahej", "bharuch", "gujarat"},
     "bharuch": {"dahej", "bharuch", "gujarat"},
     "jamuria": {"jamuria", "asansol", "paschim bardhaman", "west bengal"},
     "baliguma": {"baliguma", "jamshedpur", "jharkhand"},
     "jamshedpur": {"baliguma", "jamshedpur", "jharkhand"},
+    "oragadam": {"oragadam", "sriperumbudur", "chennai", "tamil nadu"},
+    "chennai": {"oragadam", "sriperumbudur", "chennai", "tamil nadu"},
+    "baddi": {"baddi", "nalagarh", "solan", "himachal pradesh"},
+    "dharwad": {"dharwad", "hubli", "karnataka"},
+    "kagal": {"kagal", "kolhapur", "maharashtra"},
+    "peenya": {"peenya", "bengaluru", "bangalore", "karnataka"},
+    "bengaluru": {"peenya", "devanahalli", "bidadi", "bengaluru", "bangalore", "karnataka"},
 }
 
 
@@ -391,52 +574,75 @@ def classify_facility_relationship(
     candidate_text: str,
     target_facility: str,
     target_city: str,
+    target_state: str = "",
 ) -> str:
     """Classify relationship between candidate and the target manufacturing facility.
 
     Values:
-    FACILITY_OWNER
-    FACILITY_FUNCTION_OWNER
-    GROUP_FUNCTION_OWNER
-    FUNCTIONALLY_RELEVANT
-    COMPANY_ONLY
-    UNKNOWN
+    FACILITY_OWNER: Direct head/manager of target plant.
+    FACILITY_FUNCTION_OWNER: Direct QA/metrology/operations head at target facility.
+    GROUP_FUNCTION_OWNER: Corporate or group-level quality/operations leader.
+    OTHER_FACILITY_OWNER: Owner/manager of a DIFFERENT facility (contradiction).
+    FACILITY_CONTRADICTED: Explicitly located at a different facility/city/state.
+    FUNCTIONALLY_RELEVANT: Relevant role, facility link unverified.
+    COMPANY_ONLY: Generic company link.
+    UNKNOWN: Indeterminate.
     """
     clean_text = f"{candidate_title} {candidate_text}".lower()
     t_city = target_city.lower().strip() if target_city else ""
     t_fac = target_facility.lower().strip() if target_facility else ""
+    t_state = target_state.lower().strip() if target_state else ""
 
+    if not t_state and t_city in INDIAN_CITIES_TO_STATE:
+        t_state = INDIAN_CITIES_TO_STATE[t_city]
+
+    is_group = any(w in candidate_title.lower() for w in ["group", "corporate", "chief", "vice president", "vp"])
     is_plant_head = any(w in candidate_title.lower() for w in ["plant head", "works manager", "factory manager", "unit head", "site head"])
     is_quality = any(w in candidate_title.lower() for w in ["quality", "qa", "qc", "metrology", "calibration"])
 
     # Extract non-generic facility tokens
     fac_tokens = [w for w in t_fac.split() if len(w) >= 4 and w not in GENERIC_FACILITY_TOKENS]
 
-    # Facility & city match indicators
-    target_cluster = METRO_CLUSTERS.get(t_city, {t_city}) if t_city else set()
-    city_match = bool(t_city and (t_city in clean_text or any(c in clean_text for c in target_cluster)))
+    # Target cluster
+    target_cluster = set(METRO_CLUSTERS.get(t_city, {t_city})) if t_city else set()
+    if t_state:
+        target_cluster.add(t_state)
+    for w in fac_tokens:
+        if w in INDIAN_CITIES_TO_STATE:
+            target_cluster.add(w)
+            target_cluster.add(INDIAN_CITIES_TO_STATE[w])
+
+    city_match = bool(t_city and (t_city in clean_text or any(c in clean_text for c in target_cluster if c != t_state)))
     fac_match = bool(fac_tokens and any(w in clean_text for w in fac_tokens))
 
-    # Detect if candidate is explicitly located in a DIFFERENT known city outside the metro cluster
-    if t_city:
-        other_cities_in_text = [c for c in KNOWN_MAJOR_CITIES if c in clean_text and c != t_city and c not in target_cluster]
-        if other_cities_in_text and not city_match and not fac_match:
-            # Explicit location mismatch
-            if any(w in candidate_title.lower() for w in ["group", "corporate", "chief", "vice president", "vp"]) and is_quality:
-                return "GROUP_FUNCTION_OWNER"
-            return "COMPANY_ONLY"
+    # Detect explicit foreign/other city contradiction
+    other_cities = [
+        c for c, s in INDIAN_CITIES_TO_STATE.items()
+        if re.search(rf"\b{c}\b", clean_text)
+        and c not in target_cluster
+        and (not t_state or s != t_state or c != t_city)
+    ]
 
-    if is_plant_head and (city_match or fac_match):
+    # Contradiction check:
+    if other_cities and not city_match and not fac_match:
+        # Candidate explicitly located in a different Indian city / state
+        if is_group and is_quality:
+            return "GROUP_FUNCTION_OWNER"
+        if is_plant_head or "plant" in candidate_title.lower() or "head of plant" in clean_text:
+            return "OTHER_FACILITY_OWNER"
+        return "FACILITY_CONTRADICTED"
+
+    if (city_match or fac_match) and is_plant_head:
         return "FACILITY_OWNER"
 
-    if is_quality and (city_match or fac_match):
+    if (city_match or fac_match) and is_quality:
         return "FACILITY_FUNCTION_OWNER"
 
-    if any(w in candidate_title.lower() for w in ["group", "corporate", "chief", "vice president", "vp"]) and is_quality:
+    if is_group and is_quality:
         return "GROUP_FUNCTION_OWNER"
 
     if is_plant_head:
-        return "FACILITY_OWNER" if not target_city else "FUNCTIONALLY_RELEVANT"
+        return "OTHER_FACILITY_OWNER" if t_city else "FACILITY_OWNER"
 
     if is_quality:
         return "FUNCTIONALLY_RELEVANT"
@@ -450,8 +656,24 @@ def classify_facility_relationship(
 def classify_authority_class(title: str, snippet: str = "") -> str:
     """Classify the person into Salesoorja priority authority hierarchy."""
     clean = f"{title} {snippet}".lower()
+    t_clean = title.lower()
 
-    if any(w in clean for w in ["calibration lab", "calibration incharge", "head calibration", "calibration engineer"]):
+    # Detect junior individual contributors without decision authority
+    junior_roles = [
+        "qa engineer", "qc engineer", "quality engineer", "calibration engineer",
+        "metrology engineer", "graduate engineer trainee", "get", "intern",
+        "trainee", "executive quality", "quality executive", "technician",
+        "junior engineer", "inspection engineer", "associate engineer",
+    ]
+    has_junior = any(re.search(rf"\b{re.escape(jr)}\b", t_clean) for jr in junior_roles)
+    has_leadership = any(w in t_clean for w in [
+        "head", "manager", "lead", "director", "chief", "vp", "president",
+        "incharge", "dgm", "agm", "gm", "works manager", "plant head", "site head"
+    ])
+    if has_junior and not has_leadership:
+        return "JUNIOR_IC"
+
+    if any(w in clean for w in ["calibration lab", "calibration incharge", "head calibration"]):
         return "DIRECT_CALIBRATION_OWNER"
 
     if any(w in clean for w in ["metrology", "cmm", "measurement systems"]):
@@ -513,6 +735,8 @@ def compute_deterministic_person_score(
         score_fac = 12.0
     elif facility_relationship == "COMPANY_ONLY":
         score_fac = 5.0
+    elif facility_relationship in ("OTHER_FACILITY_OWNER", "FACILITY_CONTRADICTED"):
+        score_fac = 0.0
     else:
         score_fac = 0.0
 
@@ -527,12 +751,16 @@ def compute_deterministic_person_score(
         score_fn = 14.0
     elif authority_class == "GENERAL_QUALITY":
         score_fn = 10.0
+    elif authority_class == "JUNIOR_IC":
+        score_fn = 6.0
     else:
         score_fn = 2.0
 
     # 4. Authority Level (0-15)
     t_lower = title.lower()
-    if any(w in t_lower for w in ["vp", "vice president", "director", "head", "general manager", "gm", "plant head"]):
+    if authority_class == "JUNIOR_IC":
+        score_auth = 2.0
+    elif any(w in t_lower for w in ["vp", "vice president", "director", "head", "general manager", "gm", "plant head"]):
         score_auth = 15.0
     elif any(w in t_lower for w in ["manager", "dgm", "agm", "lead"]):
         score_auth = 10.0
@@ -553,8 +781,17 @@ def compute_deterministic_person_score(
     total_score = max(0.0, min(100.0, total_score))
 
     # Strict Confidence Classification
-    # HIGH requires score >= 85, VERIFIED employment, and meaningful facility relationship
+    # Cannot be HIGH if:
+    # - facility is contradicted or other facility
+    # - current employment is contradicted or stale
+    # - role is junior individual contributor without authority
     if (
+        facility_relationship in ("OTHER_FACILITY_OWNER", "FACILITY_CONTRADICTED")
+        or current_employment in ("CONTRADICTED", "STALE")
+        or authority_class == "JUNIOR_IC"
+    ):
+        confidence = "LOW"
+    elif (
         total_score >= 85.0
         and current_employment == "VERIFIED"
         and facility_relationship in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER", "GROUP_FUNCTION_OWNER")
@@ -566,6 +803,7 @@ def compute_deterministic_person_score(
         confidence = "LOW"
 
     return total_score, confidence
+
 
 
 # ── Phase 4 & 10: Extraction & Candidate Ranking ──────────────────────────────
@@ -653,7 +891,7 @@ def _extract_person_from_search_result_legacy(
 
 PERSON_NAME_PATTERN = (
     r"(?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+|Shri\s+)?"
-    r"[A-Z][A-Za-z.'-]{1,30}(?:\s+[A-Z](?:\.|[A-Za-z.'-]{1,30})){1,4}"
+    r"[A-Z][A-Za-z'-]{1,30}(?:\s+(?:[A-Z]\.|\b[A-Z]\b|[A-Z][A-Za-z'-]{1,30})){1,4}"
 )
 PERSON_ROLE_PATTERN = (
     r"(?:Vice President|VP|AVP|Director|Plant Head|Site Head|Unit Head|Works Manager|"
@@ -715,7 +953,10 @@ def _candidate_from_fields(
     source_url = str(item.get("url") or "")
     source_type = classify_person_source(source_url, title_raw, company_domain)
     current_employment = classify_current_employment(snippet_raw, title_raw, company_name)
-    facility_relationship = classify_facility_relationship(clean_title, snippet_raw, facility_name, city)
+    target_state = str(item.get("state") or "")
+    facility_relationship = classify_facility_relationship(
+        clean_title, snippet_raw, facility_name, city, target_state=target_state
+    )
     authority_class = classify_authority_class(clean_title, snippet_raw)
     score, confidence = compute_deterministic_person_score(
         current_employment=current_employment,
@@ -743,6 +984,7 @@ def _candidate_from_fields(
     }
 
 
+
 def extract_person_candidates_from_search_result(
     item: Dict[str, Any],
     company_name: str,
@@ -768,29 +1010,32 @@ def extract_person_candidates_from_search_result(
     if any(k in url.lower() for k in ("linkedin.com/in/", "rocketreach.co/", "aeroleads.com", "signalhire.com", "zoominfo.com")):
         parts = [part.strip() for part in re.split(r"\s+[-–—|•]\s+", cleaned_title) if part.strip() and part.strip().lower() != "linkedin"]
         if parts:
-            name_cand = parts[0]
-            role_cand = ""
-            if len(parts) >= 3:
-                p1_tokens = set(re.sub(r"[^\w\s]", " ", parts[1].lower()).split())
-                if p1_tokens & comp_tokens:
-                    role_cand = parts[2]
-                else:
-                    role_cand = parts[1]
-            elif len(parts) == 2:
-                p1_tokens = set(re.sub(r"[^\w\s]", " ", parts[1].lower()).split())
-                if p1_tokens & comp_tokens:
-                    m_role = re.search(rf"(?i:\b(?:{PERSON_ROLE_PATTERN})\b)", cleaned_snippet)
-                    if m_role:
-                        role_cand = m_role.group(0)
+            is_h, _ = is_human_person_candidate(parts[0], company_name=company_name)
+            if is_h:
+                name_cand = parts[0]
+                role_cand = ""
+                if len(parts) >= 3:
+                    p1_tokens = set(re.sub(r"[^\w\s]", " ", parts[1].lower()).split())
+                    if p1_tokens & comp_tokens:
+                        role_cand = parts[2]
                     else:
-                        role_cand = "Operations / Quality Leadership"
-                else:
-                    role_cand = parts[1]
-            elif len(parts) == 1:
-                m_role = re.search(rf"(?i:\b(?:{PERSON_ROLE_PATTERN})\b)", cleaned_snippet)
-                role_cand = m_role.group(0) if m_role else "Operations / Quality Leadership"
-            if name_cand and role_cand:
-                matches.append((name_cand, role_cand))
+                        role_cand = parts[1]
+                elif len(parts) == 2:
+                    p1_tokens = set(re.sub(r"[^\w\s]", " ", parts[1].lower()).split())
+                    if p1_tokens & comp_tokens:
+                        m_role = re.search(rf"(?i:\b(?:{PERSON_ROLE_PATTERN})\b)", cleaned_snippet)
+                        if m_role:
+                            role_cand = m_role.group(0)
+                        else:
+                            role_cand = "Operations / Quality Leadership"
+                    else:
+                        role_cand = parts[1]
+                elif len(parts) == 1:
+                    m_role = re.search(rf"(?i:\b(?:{PERSON_ROLE_PATTERN})\b)", cleaned_snippet)
+                    role_cand = m_role.group(0) if m_role else "Operations / Quality Leadership"
+                if name_cand and role_cand:
+                    matches.append((name_cand, role_cand))
+
 
     role_pattern = rf"(?i:{PERSON_ROLE_PATTERN})"
     patterns = (
