@@ -40,6 +40,9 @@ PROVIDER_BLOCKED = "BLOCKED"
 PROVIDER_QUOTA_EXHAUSTED = "QUOTA_EXHAUSTED"
 
 
+from abc import ABC, abstractmethod
+
+
 class ResearchResult:
     """Single research result from any provider."""
 
@@ -53,6 +56,8 @@ class ResearchResult:
         confidence: float = 0.5,
         evidence_type: str = "WEB_EVIDENCE",
         provider: str = "unknown",
+        position: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ):
         self.title = title
         self.url = url
@@ -62,6 +67,8 @@ class ResearchResult:
         self.confidence = confidence
         self.evidence_type = evidence_type
         self.provider = provider
+        self.position = position
+        self.metadata = metadata or {}
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -73,7 +80,391 @@ class ResearchResult:
             "confidence": self.confidence,
             "evidence_type": self.evidence_type,
             "provider": self.provider,
+            "position": self.position,
+            "metadata": self.metadata,
         }
+
+
+# ── Common Provider Interface (Phase 5) ──────────────────────────────────
+class ResearchProvider(ABC):
+    """Abstract base class for all research and web search providers."""
+
+    @abstractmethod
+    def search(self, query: str, num_results: int = 5, **kwargs: Any) -> Dict[str, Any]:
+        """Execute search and return normalized result payload:
+        {
+            "provider": str,
+            "provider_status": str,
+            "results": list[dict],
+            "query": str,
+            "error": Optional[str],
+            "latency_ms": float,
+            "cache_hit": bool,
+        }
+        """
+        pass
+
+    @abstractmethod
+    def get_status(self) -> str:
+        """Return provider status (LIVE, NOT_CONFIGURED, etc.)."""
+        pass
+
+    @abstractmethod
+    def is_available(self) -> bool:
+        """Return whether provider is currently configured and operational."""
+        pass
+
+
+class SerperSearchProvider(ResearchProvider):
+    """Serper.dev Google Search API provider."""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        timeout: int = 20,
+        cache: Optional[Any] = None,
+    ) -> None:
+        self._api_key_override = api_key
+        self.timeout = timeout
+        self.cache = cache
+
+    def _get_api_key(self) -> str:
+        if self._api_key_override:
+            return self._api_key_override.strip()
+        key = str(get_setting_value("SERPER_API_KEY", "") or os.environ.get("SERPER_API_KEY", "")).strip()
+        return key
+
+    def is_available(self) -> bool:
+        key = self._get_api_key()
+        return bool(key and not key.startswith("mock_") and not key.startswith("YOUR_") and len(key) > 8)
+
+    def get_status(self) -> str:
+        return PROVIDER_LIVE if self.is_available() else PROVIDER_NOT_CONFIGURED
+
+    def search(self, query: str, num_results: int = 5, **kwargs: Any) -> Dict[str, Any]:
+        start_time = time.time()
+        key = self._get_api_key()
+        if not self.is_available():
+            return {
+                "provider": "serper",
+                "provider_status": PROVIDER_NOT_CONFIGURED,
+                "results": [],
+                "query": query,
+                "error": "Serper API key not configured",
+                "latency_ms": 0.0,
+                "cache_hit": False,
+            }
+
+        # Check cache if provided or available
+        cache_instance = self.cache
+        if cache_instance is None:
+            try:
+                from services.search_cache import search_cache
+                cache_instance = search_cache
+            except Exception:
+                cache_instance = None
+
+        use_cache = kwargs.get("use_cache", True)
+        if use_cache and cache_instance:
+            cached = cache_instance.get("serper", query, num_results=num_results)
+            if cached:
+                cached["latency_ms"] = round((time.time() - start_time) * 1000, 2)
+                return cached
+
+        last_err = None
+        for attempt in range(3):
+            try:
+                req_start = time.time()
+                resp = requests.post(
+                    "https://google.serper.dev/search",
+                    json={"q": query, "num": min(max(int(num_results), 1), 10)},
+                    headers={
+                        "X-API-KEY": key,
+                        "Content-Type": "application/json",
+                        "Connection": "close",
+                    },
+                    timeout=self.timeout,
+                )
+                latency_ms = round((time.time() - req_start) * 1000, 2)
+
+                if resp.status_code == 200:
+                    data = resp.json()
+                    organic = data.get("organic", []) or []
+                    results = []
+                    for idx, item in enumerate(organic):
+                        item_url = str(item.get("link") or "")
+                        pos = item.get("position")
+                        if pos is None:
+                            pos = idx + 1
+                        results.append(
+                            ResearchResult(
+                                title=str(item.get("title") or ""),
+                                url=item_url,
+                                snippet=str(item.get("snippet") or ""),
+                                provider="serper",
+                                confidence=0.85,
+                                position=int(pos),
+                                metadata={
+                                    "serper_position": pos,
+                                    "date": item.get("date"),
+                                    "sitelinks_count": len(item.get("sitelinks", []) or []),
+                                },
+                            )
+                        )
+                    payload = {
+                        "provider": "serper",
+                        "provider_status": PROVIDER_LIVE if results else PROVIDER_EMPTY,
+                        "results": [r.to_dict() for r in results],
+                        "query": query,
+                        "error": None if results else "Serper returned no organic results",
+                        "latency_ms": latency_ms,
+                        "cache_hit": False,
+                    }
+                    if cache_instance:
+                        cache_instance.set("serper", query, payload, num_results=num_results)
+                    return payload
+                elif resp.status_code in (401, 403):
+                    return {
+                        "provider": "serper",
+                        "provider_status": PROVIDER_ERROR,
+                        "results": [],
+                        "query": query,
+                        "error": f"Serper auth failed: HTTP {resp.status_code}",
+                        "latency_ms": latency_ms,
+                        "cache_hit": False,
+                    }
+                elif resp.status_code == 429:
+                    return {
+                        "provider": "serper",
+                        "provider_status": PROVIDER_QUOTA_EXHAUSTED,
+                        "results": [],
+                        "query": query,
+                        "error": "Serper rate limited / quota exhausted: HTTP 429",
+                        "latency_ms": latency_ms,
+                        "cache_hit": False,
+                    }
+                else:
+                    last_err = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            except Exception as e:
+                last_err = str(e)
+                time.sleep(0.5)
+
+        total_latency = round((time.time() - start_time) * 1000, 2)
+        return {
+            "provider": "serper",
+            "provider_status": PROVIDER_ERROR,
+            "results": [],
+            "query": query,
+            "error": f"Serper search error: {last_err}",
+            "latency_ms": total_latency,
+            "cache_hit": False,
+        }
+
+
+class GeminiGroundedSearchProvider(ResearchProvider):
+    """Google Gemini Grounded Search (Google Search Tool) provider."""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gemini-3.5-flash-lite",
+        timeout: int = 25,
+        cache: Optional[Any] = None,
+    ) -> None:
+        self._api_key_override = api_key
+        self.model = model
+        self.timeout = timeout
+        self.cache = cache
+
+    def _get_api_key(self) -> str:
+        if self._api_key_override:
+            return self._api_key_override.strip()
+        key = str(
+            get_setting_value("GOOGLE_API_KEY", "")
+            or get_setting_value("GEMINI_API_KEY", "")
+            or os.environ.get("GEMINI_API_KEY", "")
+            or os.environ.get("GOOGLE_API_KEY", "")
+        ).strip()
+        return key
+
+    def is_available(self) -> bool:
+        key = self._get_api_key()
+        return bool(key and not key.startswith("mock_") and not key.startswith("YOUR_") and len(key) > 10)
+
+    def get_status(self) -> str:
+        if not self.is_available():
+            return PROVIDER_NOT_CONFIGURED
+        return PROVIDER_LIVE
+
+    def search(self, query: str, num_results: int = 5, **kwargs: Any) -> Dict[str, Any]:
+        start_time = time.time()
+        key = self._get_api_key()
+        if not self.is_available():
+            return {
+                "provider": "gemini_grounded",
+                "provider_status": PROVIDER_NOT_CONFIGURED,
+                "results": [],
+                "query": query,
+                "error": "Gemini API key not configured",
+                "latency_ms": 0.0,
+                "cache_hit": False,
+            }
+
+        cache_instance = self.cache
+        if cache_instance is None:
+            try:
+                from services.search_cache import search_cache
+                cache_instance = search_cache
+            except Exception:
+                cache_instance = None
+
+        use_cache = kwargs.get("use_cache", True)
+        if use_cache and cache_instance:
+            cached = cache_instance.get("gemini_grounded", query, model=self.model)
+            if cached:
+                cached["latency_ms"] = round((time.time() - start_time) * 1000, 2)
+                return cached
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={key}"
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": query}]}],
+            "tools": [{"google_search": {}}],
+            "generationConfig": {
+                "temperature": 0.1,
+                "maxOutputTokens": 800,
+            },
+        }
+
+        try:
+            req_start = time.time()
+            resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=self.timeout)
+            latency_ms = round((time.time() - req_start) * 1000, 2)
+
+            if resp.status_code == 200:
+                data = resp.json()
+                cand = (data.get("candidates") or [{}])[0]
+                grounding = cand.get("groundingMetadata") or {}
+                chunks = grounding.get("groundingChunks", []) or []
+                supports = grounding.get("groundingSupports", []) or []
+                queries_executed = grounding.get("webSearchQueries", []) or []
+
+                # Extract chunk text snippet from groundingSupports where available
+                chunk_snippets: Dict[int, str] = {}
+                for support in supports:
+                    seg_text = (support.get("segment") or {}).get("text", "")
+                    for c_idx in support.get("groundingChunkIndices", []) or []:
+                        if c_idx not in chunk_snippets and seg_text:
+                            chunk_snippets[c_idx] = seg_text
+
+                # Synthesized text fallback
+                parts = cand.get("content", {}).get("parts", []) or []
+                synth_text = parts[0].get("text", "") if parts else ""
+
+                results = []
+                for idx, chunk in enumerate(chunks[:num_results]):
+                    web_data = chunk.get("web") or {}
+                    uri = web_data.get("uri") or ""
+                    title = web_data.get("title") or ""
+                    snippet = chunk_snippets.get(idx) or synth_text[:300]
+                    results.append(
+                        ResearchResult(
+                            title=title,
+                            url=uri,
+                            snippet=snippet,
+                            provider="gemini_grounded",
+                            confidence=0.80,
+                            position=idx + 1,
+                            evidence_type="GROUNDED_WEB_EVIDENCE",
+                            metadata={
+                                "model": self.model,
+                                "grounding_chunk_index": idx,
+                                "web_search_queries": queries_executed,
+                            },
+                        )
+                    )
+
+                status = PROVIDER_LIVE if results else PROVIDER_EMPTY
+                out_payload = {
+                    "provider": "gemini_grounded",
+                    "provider_status": status,
+                    "results": [r.to_dict() for r in results],
+                    "query": query,
+                    "error": None if results else "Gemini returned no grounding chunks",
+                    "latency_ms": latency_ms,
+                    "model": self.model,
+                    "search_queries_run": queries_executed,
+                    "cache_hit": False,
+                }
+                if cache_instance and status == PROVIDER_LIVE:
+                    cache_instance.set("gemini_grounded", query, out_payload, model=self.model)
+                return out_payload
+
+            elif resp.status_code == 429:
+                return {
+                    "provider": "gemini_grounded",
+                    "provider_status": PROVIDER_QUOTA_EXHAUSTED,
+                    "results": [],
+                    "query": query,
+                    "error": "Gemini Google Search grounding unavailable: HTTP 429 Quota Exceeded (requires paid tier / billing enabled)",
+                    "latency_ms": latency_ms,
+                    "model": self.model,
+                    "cache_hit": False,
+                }
+            else:
+                err_msg = resp.json().get("error", {}).get("message", resp.text[:200]) if resp.text else f"HTTP {resp.status_code}"
+                return {
+                    "provider": "gemini_grounded",
+                    "provider_status": PROVIDER_ERROR,
+                    "results": [],
+                    "query": query,
+                    "error": f"Gemini API error ({resp.status_code}): {err_msg}",
+                    "latency_ms": latency_ms,
+                    "model": self.model,
+                    "cache_hit": False,
+                }
+
+        except Exception as e:
+            total_latency = round((time.time() - start_time) * 1000, 2)
+            return {
+                "provider": "gemini_grounded",
+                "provider_status": PROVIDER_ERROR,
+                "results": [],
+                "query": query,
+                "error": f"Gemini request exception: {str(e)}",
+                "latency_ms": total_latency,
+                "model": self.model,
+                "cache_hit": False,
+            }
+
+
+class SearXNGProvider(ResearchProvider):
+    """SearXNG self-hosted private search provider."""
+
+    def __init__(self, base_url: Optional[str] = None, timeout: int = 16) -> None:
+        self.base_url = base_url
+        self.timeout = timeout
+
+    def is_available(self) -> bool:
+        candidates = research_router._get_candidate_searxng_urls() if "research_router" in globals() else []
+        return bool(candidates or self.base_url)
+
+    def get_status(self) -> str:
+        return PROVIDER_LIVE if self.is_available() else PROVIDER_NOT_CONFIGURED
+
+    def search(self, query: str, num_results: int = 5, **kwargs: Any) -> Dict[str, Any]:
+        start_time = time.time()
+        results, status, error = research_router._search_searxng(query, num_results)
+        latency_ms = round((time.time() - start_time) * 1000, 2)
+        return {
+            "provider": "searxng",
+            "provider_status": status,
+            "results": [r.to_dict() for r in results],
+            "query": query,
+            "error": error,
+            "latency_ms": latency_ms,
+            "cache_hit": False,
+        }
+
 
 
 class ResearchProviderRouter:
