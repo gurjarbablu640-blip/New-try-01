@@ -63,6 +63,8 @@ class SerperDailyBudgetManager:
         self.companies_researched = 0
         self.searches_stopped_early = 0
         self.budget_exhausted_events = 0
+        self.benchmark_run_limit: Optional[int] = None
+        self.benchmark_requests_used: int = 0
 
         # Initial load or creation under cross-process lock
         with self._thread_lock:
@@ -166,6 +168,9 @@ class SerperDailyBudgetManager:
                     self.companies_researched = int(data.get("companies_researched", 0))
                     self.searches_stopped_early = int(data.get("searches_stopped_early", 0))
                     self.budget_exhausted_events = int(data.get("budget_exhausted_events", 0))
+                    raw_b_limit = data.get("benchmark_run_limit")
+                    self.benchmark_run_limit = int(raw_b_limit) if raw_b_limit is not None else None
+                    self.benchmark_requests_used = int(data.get("benchmark_requests_used", 0))
         except Exception as e:
             logger.warning("Could not load Serper budget state from %s: %s", self.state_path, e)
             self._save_unlocked()
@@ -186,6 +191,8 @@ class SerperDailyBudgetManager:
             "companies_researched": self.companies_researched,
             "searches_stopped_early": self.searches_stopped_early,
             "budget_exhausted_events": self.budget_exhausted_events,
+            "benchmark_run_limit": self.benchmark_run_limit,
+            "benchmark_requests_used": self.benchmark_requests_used,
             "last_updated": datetime.now(tz).isoformat(),
         }
         with open(tmp_path, "w", encoding="utf-8") as f:
@@ -211,8 +218,37 @@ class SerperDailyBudgetManager:
             with self._file_lock:
                 self._load_unlocked()
 
+    def set_benchmark_run_budget(self, cap: Optional[int]) -> None:
+        """Configures a temporary hard limit for a benchmark run.
+        
+        Set to None to remove the benchmark cap and restore pure daily limit.
+        """
+        with self._thread_lock:
+            with self._file_lock:
+                self._load_unlocked()
+                self.benchmark_run_limit = int(cap) if cap is not None else None
+                self.benchmark_requests_used = 0
+                self._save_unlocked()
+
+    def get_benchmark_run_status(self) -> Dict[str, Any]:
+        """Returns the current state of the benchmark run budget."""
+        with self._thread_lock:
+            with self._file_lock:
+                self._load_unlocked()
+                rem = (
+                    max(0, self.benchmark_run_limit - self.benchmark_requests_used)
+                    if self.benchmark_run_limit is not None
+                    else None
+                )
+                return {
+                    "benchmark_run_limit": self.benchmark_run_limit,
+                    "benchmark_requests_used": self.benchmark_requests_used,
+                    "benchmark_remaining": rem,
+                    "is_benchmark_active": self.benchmark_run_limit is not None,
+                }
+
     def can_request(self) -> bool:
-        """Non-reserving check whether daily quota has room.
+        """Non-reserving check whether daily quota and benchmark budget have room.
 
         Does NOT consume quota.
         """
@@ -220,6 +256,8 @@ class SerperDailyBudgetManager:
             with self._file_lock:
                 self._load_unlocked()
                 self._check_and_reset_if_new_day_unlocked()
+                if self.benchmark_run_limit is not None and self.benchmark_requests_used >= self.benchmark_run_limit:
+                    return False
                 return self.live_requests_today < self.daily_limit
 
     def reserve_request(self, count: int = 1) -> bool:
@@ -227,7 +265,7 @@ class SerperDailyBudgetManager:
 
         Guarantees that two concurrent workers competing for the final slot
         cannot both succeed.
-        Raises SerperBudgetExhaustedError if remaining budget < count.
+        Raises SerperBudgetExhaustedError if remaining budget < count or benchmark cap reached.
         """
         with self._thread_lock:
             with self._file_lock:
@@ -239,7 +277,15 @@ class SerperDailyBudgetManager:
                     raise SerperBudgetExhaustedError(
                         f"Serper daily budget exhausted: {self.live_requests_today}/{self.daily_limit} used today. Request blocked."
                     )
+                if self.benchmark_run_limit is not None and self.benchmark_requests_used + count > self.benchmark_run_limit:
+                    self.budget_exhausted_events += 1
+                    self._save_unlocked()
+                    raise SerperBudgetExhaustedError(
+                        f"Serper benchmark run budget exhausted: {self.benchmark_requests_used}/{self.benchmark_run_limit} used in this benchmark run. Request blocked."
+                    )
                 self.live_requests_today += count
+                if self.benchmark_run_limit is not None:
+                    self.benchmark_requests_used += count
                 self._save_unlocked()
                 return True
 

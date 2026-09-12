@@ -48,6 +48,9 @@ from services.trigger_discovery_service import (
     classify_source_tier,
     extract_event_date,
     evaluate_event_semantics,
+    bind_trigger_to_facility,
+    classify_calibration_opportunity,
+    compute_lead_qualification_score,
     SOURCE_TIER_A,
     SOURCE_TIER_B,
     SOURCE_TIER_C,
@@ -281,40 +284,35 @@ def discover_company_industrial_trigger(
         full_text = f"{title}. {snippet}"
 
         semantics = evaluate_event_semantics(full_text, title=title)
-        if not semantics.get("is_valid_event"):
+        if not semantics.get("is_verified"):
             continue
 
         src_tier = classify_source_tier(url)
-        # Skip low-grade Tier D aggregators if possible
         event_date_info = extract_event_date(full_text)
-        
-        # Check facility mentions
-        city_present = city.lower() in full_text.lower()
-        facility_present = target_facility.lower() in full_text.lower() or any(
-            t.lower() in full_text.lower() for t in target_facility.split() if len(t) > 3
-        )
+        binding = bind_trigger_to_facility(full_text, target_facility=target_facility, target_city=city)
 
-        facility_relationship = "DIRECT" if (city_present and facility_present) else ("STRONG" if city_present else "AMBIGUOUS")
+        facility_relationship = binding["linkage"].replace("TRIGGER_FACILITY_", "")
 
-        recency_days = event_date_info.get("days_ago", 120)
-        recency_tier = "CURRENT" if recency_days <= 180 else ("RECENT" if recency_days <= 365 else "STALE")
+        recency_days = event_date_info.get("recency_days", 999)
+        recency_tier = event_date_info.get("recency_tier", "DATE_UNKNOWN")
 
         best_trigger = {
             "is_valid": True,
             "trigger_type": semantics.get("trigger_type", "PLANT_EXPANSION"),
             "trigger_snippet": snippet[:250],
-            "trigger_date": event_date_info.get("date_str", "2025-2026"),
+            "trigger_date": event_date_info.get("trigger_date", "UNKNOWN_DATE"),
             "days_ago": recency_days,
             "recency_tier": recency_tier,
             "source_url": url,
             "source_tier": src_tier,
             "facility_relationship": facility_relationship,
-            "facility_evidence": f"Facility mentioned in {src_tier} source: '{title}' ({url})",
+            "facility_evidence": binding.get("reason") or f"Facility mentioned in {src_tier} source: '{title}' ({url})",
+            "facility_binding": binding,
         }
         break
 
     if not best_trigger:
-        # Fallback search if first query was too restrictive
+        # Fallback search - evaluate semantics; DO NOT fabricate fake CAPACITY_EXPANSION on static pages
         fallback_query = f'"{company_name}" "{city}" manufacturing (plant OR factory OR unit) -stock'
         logger.info("Fallback trigger search: %s", fallback_query)
         fb_res = research_router.search(fallback_query, num_results=3)
@@ -324,33 +322,40 @@ def discover_company_industrial_trigger(
             snippet = str(r.get("snippet") or "")
             url = str(r.get("url") or "")
             full_text = f"{title}. {snippet}"
-            if city.lower() in full_text.lower():
+            semantics = evaluate_event_semantics(full_text, title=title)
+            binding = bind_trigger_to_facility(full_text, target_facility=target_facility, target_city=city)
+            if semantics.get("is_verified") and binding.get("is_bound"):
+                event_date_info = extract_event_date(full_text)
+                recency_days = event_date_info.get("recency_days", 999)
+                recency_tier = event_date_info.get("recency_tier", "DATE_UNKNOWN")
                 best_trigger = {
                     "is_valid": True,
-                    "trigger_type": "CAPACITY_EXPANSION",
+                    "trigger_type": semantics.get("trigger_type", "OTHER"),
                     "trigger_snippet": snippet[:250],
-                    "trigger_date": "2025-2026",
-                    "days_ago": 150,
-                    "recency_tier": "CURRENT",
+                    "trigger_date": event_date_info.get("trigger_date", "UNKNOWN_DATE"),
+                    "days_ago": recency_days,
+                    "recency_tier": recency_tier,
                     "source_url": url,
                     "source_tier": classify_source_tier(url),
-                    "facility_relationship": "STRONG",
-                    "facility_evidence": f"Manufacturing unit in {city} identified: '{title}' ({url})",
+                    "facility_relationship": binding["linkage"].replace("TRIGGER_FACILITY_", ""),
+                    "facility_evidence": binding.get("reason"),
+                    "facility_binding": binding,
                 }
                 break
 
     if not best_trigger:
         best_trigger = {
             "is_valid": False,
-            "trigger_type": "UNKNOWN",
+            "trigger_type": "STATIC_REFERENCE",
             "trigger_snippet": "No confirmed industrial trigger discovered in public sources",
-            "trigger_date": "UNKNOWN",
+            "trigger_date": "UNKNOWN_DATE",
             "days_ago": 999,
-            "recency_tier": "STALE",
+            "recency_tier": "DATE_UNKNOWN",
             "source_url": "",
             "source_tier": SOURCE_TIER_D,
-            "facility_relationship": "AMBIGUOUS",
+            "facility_relationship": "NONE",
             "facility_evidence": f"No unambiguous facility presence verified for {city}",
+            "facility_binding": {"linkage": "TRIGGER_FACILITY_NONE", "is_bound": False},
         }
 
     return best_trigger
@@ -381,10 +386,11 @@ def run_benchmark_for_company(company_meta: Dict[str, str], current_live_calls: 
     )
 
     # 2. Phase 3: Calibration Consequence
-    calibration_angle = CALIBRATION_SECTOR_MAP.get(
-        sector,
-        "Dimensional, electrical, thermal, pressure, and torque instrumentation calibration."
+    cal_info = classify_calibration_opportunity(
+        trigger_snippet=trigger_info.get("trigger_snippet", ""),
+        sector=sector,
     )
+    calibration_angle = cal_info.get("calibration_description", "")
 
     # 3. Phase 4: Person Discovery
     person_discovery = discover_and_rank_decision_makers(
@@ -425,56 +431,12 @@ def run_benchmark_for_company(company_meta: Dict[str, str], current_live_calls: 
     duration_sec = round(time.time() - start_t, 2)
 
     # 4. Phase 5: Lead Qualification
-    lead_score = 0.0
-    priority_band = "HOLD"
-    status = "REJECTED"
-    hold_reasons: List[str] = []
-
-    if not trigger_info["is_valid"]:
-        status = "HOLD_TRIGGER_WEAK"
-        hold_reasons.append("Trigger could not be verified from reputable source.")
-    elif trigger_info["facility_relationship"] not in ("DIRECT", "STRONG"):
-        status = "HOLD_FACILITY_AMBIGUOUS"
-        hold_reasons.append(f"Facility link is {trigger_info['facility_relationship']} (not DIRECT/STRONG).")
-    elif not top_person:
-        status = "HOLD_PERSON_UNCERTAIN"
-        hold_reasons.append("No human decision-maker candidate discovered in public search.")
-    else:
-        # Candidate evaluation
-        person_score = float(top_person.get("person_score", 0.0) or 0.0)
-        person_conf = str(top_person.get("person_confidence") or "LOW").upper()
-        emp_status = str(top_person.get("current_employment") or "UNKNOWN").upper()
-        fac_rel = str(top_person.get("facility_relationship") or "UNKNOWN").upper()
-
-        if person_score < 70.0 or emp_status not in ("VERIFIED", "PROBABLE"):
-            status = "HOLD_PERSON_UNCERTAIN"
-            hold_reasons.append(f"Candidate '{top_person.get('name')}' score {person_score} < 70 or employment '{emp_status}'.")
-        else:
-            # Deterministic Lead Score Calculation
-            base_score = 85.0
-            if trigger_info["recency_tier"] == "CURRENT":
-                base_score += 5.0
-            if trigger_info["facility_relationship"] == "DIRECT":
-                base_score += 3.0
-            if person_conf == "HIGH":
-                base_score += 4.0
-            elif person_score >= 80.0:
-                base_score += 2.0
-
-            lead_score = min(base_score, 98.0)
-
-            if lead_score >= 95.0:
-                priority_band = "P1"
-                status = "READY_FOR_CONTACT_ENRICHMENT"
-            elif lead_score >= 90.0:
-                priority_band = "P2"
-                status = "READY_FOR_CONTACT_ENRICHMENT"
-            elif lead_score >= 85.0:
-                priority_band = "P3"
-                status = "READY_FOR_CONTACT_ENRICHMENT"
-            else:
-                priority_band = "HOLD"
-                status = "HOLD_PERSON_UNCERTAIN"
+    lead_score, priority_band, status, hold_reasons = compute_lead_qualification_score(
+        trigger_info=trigger_info,
+        person_info=top_person,
+        facility_binding_info=trigger_info.get("facility_binding"),
+        sector=sector,
+    )
 
     # Phase 9: Forensic Self-Audit Check
     manual_review_required = False

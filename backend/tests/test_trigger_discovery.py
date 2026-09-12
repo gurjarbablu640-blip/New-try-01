@@ -83,7 +83,7 @@ class TestTriggerDiscoveryService(unittest.TestCase):
         snippet = "We are a leading manufacturer of precision shock absorbers with manufacturing plants across India. Quality is our priority."
         is_event, trig_type, desc = event_semantics_verified(snippet, title="About Us - Gabriel India")
         self.assertFalse(is_event)
-        self.assertEqual(trig_type, "UNKNOWN")
+        self.assertIn(trig_type, ("STATIC_REFERENCE", "UNKNOWN"))
 
     def test_real_event_semantics_verified_expansion(self):
         """Actionable events like 'commissioned new line' are verified triggers."""

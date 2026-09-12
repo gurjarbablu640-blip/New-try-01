@@ -28,11 +28,18 @@ TRIGGER_TYPES = {
     "NEW_PLANT",
     "NEW_LINE",
     "COMMISSIONING",
+    "CAPACITY_EXPANSION",
+    "PRODUCTION_RAMP",
+    "MACHINERY_INSTALLATION",
+    "ORDER_DRIVEN_RAMP",
+    "QUALITY_VALIDATION",
+    "LAB_SETUP",
+    "CERTIFICATION_RAMP",
+    "HIRING_RAMP",
     "NEW_EQUIPMENT",
     "NEW_LAB",
     "METROLOGY_LAB_SETUP",
     "QUALITY_LAB_SETUP",
-    "CAPACITY_EXPANSION",
     "ORDER_RAMP_UP",
     "NEW_PRODUCT_MANUFACTURING",
     "CUSTOMER_OEM_APPROVAL",
@@ -47,6 +54,8 @@ TRIGGER_TYPES = {
     "MAINTENANCE_HIRING",
     "VALIDATION_QUALIFICATION",
     "FACILITY_MODERNIZATION",
+    "STATIC_REFERENCE",
+    "OTHER",
 }
 
 HIRING_TRIGGER_TYPES = {
@@ -149,24 +158,72 @@ def classify_source_tier(url: str, domain: str = "", official_domain: str = "") 
 
 # ── Event Semantics Verification ──────────────────────────────────────────────
 EVENT_ACTION_PATTERNS = [
-    # Capex / Plant / Line Events
-    (r"\b(will invest|is investing|invests|invested|investment of|investment planned|investment amount|investing in|capex of|capex planned|approved capex|capex investment|capital expenditure of|announces? capex|announced capex)\b", "CAPACITY_EXPANSION", 1.0),
+    # 1. New Plant
+    (r"\b(new plant|new manufacturing plant|new factory|new facility|construction of(?: [a-z]+)* plant|greenfield plant|second plant|third plant|fourth plant|sets? up(?:\s+[a-zA-Z0-9\-\.]+){0,6}\s+(?:plant|facility|factory|unit|works)|to set up(?:\s+[a-zA-Z0-9\-\.]+){0,6}\s+(?:plant|facility|factory|unit|works)|to build(?:\s+[a-zA-Z0-9\-\.]+){0,6}\s+(?:plant|facility|factory|works))\b", "NEW_PLANT", 1.0),
+    # 2. New Line
+    (r"\b(new line|new manufacturing line|new assembly line|new production line|production line|new smt line|new press line|fourth unit|fourth line|new unit|additional unit|additional line|second production line|third production line)\b", "NEW_LINE", 1.0),
+    # 3. Commissioning
     (r"\b(commissions?|commissioned|will commission|to commission|commissioning of (?:a |the |its |their )?(?:new )?(?:plant|facility|factory|unit|line|project|capacity|expansion|furnace|kiln|smelter|reactor)|inaugurate[ds]?|inauguration|inaugurating|opened|opening of|commencing operations|commence operations|commencement timing|starts? production|started production|commercial production)\b", "COMMISSIONING", 1.0),
-    (r"\b(new plant|new manufacturing plant|new factory|new facility|construction of(?: [a-z]+)* plant|greenfield plant|second plant|third plant|fourth plant|sets? up(?:\s+[a-zA-Z0-9\-\.]+){0,6}\s+(?:plant|facility|factory|unit|line)|to set up(?:\s+[a-zA-Z0-9\-\.]+){0,6}\s+(?:plant|facility|factory|unit|line)|to build(?:\s+[a-zA-Z0-9\-\.]+){0,6}\s+(?:plant|facility|factory|unit|line))\b", "NEW_PLANT", 1.0),
-    (r"\b(new line|new manufacturing line|new assembly line|new production line|production line|new smt line|new press line|fourth unit|fourth line|new unit|additional unit|additional line)\b", "NEW_LINE", 1.0),
-    (r"\b(expanding|expanding plant|plant expansion|expanding capacity|capacity expansion|capacity increased|capacity ramp-?up|facility expansion|expanding manufacturing|expands? capacity|capacity expanded)\b", "PLANT_EXPANSION", 1.0),
-    (r"\b(new equipment|new machinery|production equipment|testing equipment|machining center|tech center)\b", "NEW_EQUIPMENT", 0.95),
-    (r"\b(new lab|new laboratory|metrology lab|calibration lab|testing lab|quality laboratory|qc lab|qa lab)\b", "NEW_LAB", 1.0),
-    (r"\b(commercial production|production commenced|commences production|ramp up|ramping up|production ramp)\b", "ORDER_RAMP_UP", 0.95),
-    (r"\b(order awarded|bagged order|won contract|oem approval|oem nomination|customer approval)\b", "CUSTOMER_OEM_APPROVAL", 0.9),
-    (r"\b(validation activity|validation qualification)\b", "VALIDATION_QUALIFICATION", 0.85),
-    (r"\b(modernization|facility upgrade|retooling|equipment upgrade)\b", "FACILITY_MODERNIZATION", 0.9),
-    # Hiring Events
+    # 4. Capacity Expansion
+    (r"\b(will invest|is investing|invests|invested|investment of|investment planned|investment amount|investing in|capex of|capex planned|approved capex|capex investment|capital expenditure of|announces? capex|announced capex|expanding (?:manufacturing )?capacity|capacity expansion|capacity increased|expands? capacity|capacity ramp-?up|doubl(?:ing|es?) capacity|expansion of manufacturing capacity)\b", "CAPACITY_EXPANSION", 1.0),
+    (r"\b(expanding|expanding plant|plant expansion|facility expansion|expanding manufacturing)\b", "PLANT_EXPANSION", 1.0),
+    # 5. Production Ramp
+    (r"\b(production ramp|ramping up production|commercial operations commenced|ramp-?up of production|scaling up manufacturing|scaled up production|mass production started|commercial run started)\b", "PRODUCTION_RAMP", 0.95),
+    # 6. Machinery Installation
+    (r"\b(installed (?:new )?(?:machinery|equipment|press|furnace|cnc|cmm|robotics)|installing (?:new )?(?:machinery|equipment|press|furnace|cnc|cmm)|machinery installation|new equipment commissioned|new press line installed|tooling installation|new equipment|new machinery|production equipment|testing equipment|machining center)\b", "MACHINERY_INSTALLATION", 0.95),
+    # 7. Order-Driven Ramp
+    (r"\b(order awarded|bagged order|won contract|oem approval|oem nomination|customer approval|major contract win|supply agreement with oem|export order)\b", "ORDER_DRIVEN_RAMP", 0.9),
+    # 8. Quality Validation
+    (r"\b(validation activity|validation qualification|ppap approval|pilot run|pre-series production|prototype validation|sop approval)\b", "QUALITY_VALIDATION", 0.85),
+    # 9. Lab Setup
+    (r"\b(new lab|new laboratory|metrology lab|calibration lab|testing lab|quality laboratory|qc lab|qa lab|sets? up (?:a |the )?(?:metrology|calibration|testing|quality) lab)\b", "LAB_SETUP", 1.0),
+    # 10. Certification Ramp
+    (r"\b(iatf 16949|iso 17025|nabl accreditation|as9100|iso 9001 certification|audit preparation|cleanroom certification|nabl certified)\b", "CERTIFICATION_RAMP", 0.9),
+    # 11. Hiring Events
     (r"\b(hiring|vacancy|opening|walk-in|recruiting|looking for)\b.*?\b(calibration|gauge|gage)\b", "CALIBRATION_HIRING", 0.85),
     (r"\b(hiring|vacancy|opening|walk-in|recruiting|looking for)\b.*?\b(metrology|measurement)\b", "METROLOGY_HIRING", 0.85),
     (r"\b(hiring|vacancy|opening|walk-in|recruiting|looking for)\b.*?\b(instrumentation|instrument)\b", "INSTRUMENTATION_HIRING", 0.8),
     (r"\b(hiring|vacancy|opening|walk-in|recruiting|looking for)\b.*?\b(plant quality|quality assurance|quality engineer|qa/qc)\b", "QUALITY_HIRING", 0.8),
     (r"\b(hiring|vacancy|opening|walk-in|recruiting|looking for)\b.*?\b(plant maintenance|equipment maintenance)\b", "MAINTENANCE_HIRING", 0.75),
+    (r"\b(hiring|recruiting|vacancy|walk-in|opening)\b.*?\b(production engineer|plant operator|technician|machine operator)\b", "HIRING_RAMP", 0.75),
+    # Modernization
+    (r"\b(modernization|facility upgrade|retooling|equipment upgrade)\b", "FACILITY_MODERNIZATION", 0.9),
+]
+
+STATIC_REFERENCE_PATTERNS = [
+    r"\babout us\b",
+    r"\bwelcome to\b",
+    r"\bcompany profile\b",
+    r"\bcompany overview\b",
+    r"\bcorporate profile\b",
+    r"\bwho we are\b",
+    r"\bour presence\b",
+    r"\bour plants\b",
+    r"\bour facilities\b",
+    r"\bour locations\b",
+    r"\bregistered office\b",
+    r"\bcorporate office\b",
+    r"\bhead office\b",
+    r"\bcontact us\b",
+    r"\breach us\b",
+    r"\bcorporate governance\b",
+    r"\bboard of directors\b",
+    r"\bmanagement team\b",
+    r"\bcsr initiatives?\b",
+    r"\bcorporate social responsibility\b",
+    r"\bdirectory listing\b",
+    r"\bindiamart\b",
+    r"\btradeindia\b",
+    r"\bjustdial\b",
+    r"\byellow pages\b",
+    r"\bleading manufacturer of\b",
+    r"\bestablished in 19\d\d\b",
+    r"\bfounded in 19\d\d\b",
+    r"\bsince 19\d\d\b",
+    r"\bdecade-long experience\b",
+    r"\bannual report 20(?:1\d|2[0-3])\b",
+    r"\bcase study 20(?:1\d|2[0-3])\b",
+    r"\baward(?:ed)? in 20(?:1\d|2[0-3])\b",
 ]
 
 GENERIC_FINANCIAL_PATTERNS = [
@@ -174,10 +231,7 @@ GENERIC_FINANCIAL_PATTERNS = [
     r"\bstock price\b",
     r"\bmarket cap\b",
     r"\bmarket capitalisation\b",
-    r"\bcompany overview\b",
-    r"\bleading manufacturer\b",
     r"\bannual revenue\b",
-    r"\bcompany profile\b",
     r"\bfinancial results?\b",
     r"\bquarterly (?:net )?profits?\b",
     r"\bq[1-4] results?\b",
@@ -189,8 +243,6 @@ GENERIC_FINANCIAL_PATTERNS = [
     r"\bpe ratio\b",
     r"\b52-week high\b",
     r"\btrading volume\b",
-    r"\babout us\b",
-    r"\bwelcome to\b",
 ]
 
 
@@ -198,15 +250,12 @@ def evaluate_event_semantics(text: str, title: str = "") -> Dict[str, Any]:
     """Deterministically evaluates whether text contains genuine industrial event semantics.
 
     Returns:
-        dict with is_verified, trigger_type, description, score, matched_phrase, is_generic_financial
+        dict with is_verified, is_valid, is_valid_event, trigger_type, description, score, matched_phrase
     """
     combined = f"{title} {text}".strip()
     text_lower = combined.lower()
 
-    # Check for generic financial / non-event statements
-    matched_generic = [p for p in GENERIC_FINANCIAL_PATTERNS if re.search(p, text_lower)]
-
-    # Check for actionable event action patterns
+    # Check for actionable event action patterns first
     matched_event = None
     for pattern, trig_type, score in EVENT_ACTION_PATTERNS:
         match = re.search(pattern, text_lower)
@@ -214,37 +263,69 @@ def evaluate_event_semantics(text: str, title: str = "") -> Dict[str, Any]:
             matched_event = (trig_type, match.group(0), score)
             break
 
+    # Check for static profile / directory references
+    matched_static = [p for p in STATIC_REFERENCE_PATTERNS if re.search(p, text_lower)]
+    matched_generic = [p for p in GENERIC_FINANCIAL_PATTERNS if re.search(p, text_lower)]
+
+    # If static reference and NO active event pattern matched: hard reject with STATIC_REFERENCE
+    if matched_static and not matched_event:
+        return {
+            "is_verified": False,
+            "is_valid": False,
+            "is_valid_event": False,
+            "trigger_type": "STATIC_REFERENCE",
+            "description": f"Static profile or directory reference without actionable event semantics: '{matched_static[0]}'",
+            "score": 0.0,
+            "matched_phrase": "",
+            "is_generic_financial": bool(matched_generic),
+            "is_static_reference": True,
+        }
+
     # If generic financial text matched and NO event pattern matched: hard reject with 0.0 score
     if matched_generic and not matched_event:
         return {
             "is_verified": False,
+            "is_valid": False,
+            "is_valid_event": False,
             "trigger_type": "UNKNOWN",
             "description": f"Generic financial/market text without event semantics: '{matched_generic[0]}'",
             "score": 0.0,
             "matched_phrase": "",
             "is_generic_financial": True,
+            "is_static_reference": False,
         }
 
     if matched_event:
         trig_type, phrase, score = matched_event
-        # Penalty if generic financial phrasing dominates
-        final_score = score if not matched_generic else max(0.5, score - 0.2)
+        # Penalty if generic financial or static phrasing is present
+        penalty = 0.0
+        if matched_generic:
+            penalty += 0.2
+        if matched_static:
+            penalty += 0.1
+        final_score = max(0.5, score - penalty) if penalty > 0 else score
         return {
             "is_verified": True,
+            "is_valid": True,
+            "is_valid_event": True,
             "trigger_type": trig_type,
             "description": f"Actionable event confirmed: '{phrase}'",
             "score": final_score,
             "matched_phrase": phrase,
             "is_generic_financial": bool(matched_generic),
+            "is_static_reference": bool(matched_static),
         }
 
     return {
         "is_verified": False,
+        "is_valid": False,
+        "is_valid_event": False,
         "trigger_type": "UNKNOWN",
         "description": "No actionable event semantics found in source content",
         "score": 0.0,
         "matched_phrase": "",
         "is_generic_financial": bool(matched_generic),
+        "is_static_reference": bool(matched_static),
     }
 
 
@@ -755,12 +836,18 @@ def extract_event_date(
             line_end = len(clean_text) if line_end == -1 else line_end
             line_text = clean_text[line_start:line_end].lower()
 
-            if any(h in line_text for h in ["latest news", "advertise with us", "hot press news", "sparsh week"]):
+            if any(h in line_text for h in [
+                "latest news", "advertise with us", "hot press news", "sparsh week",
+                "copyright", "©", "(c)", "all rights reserved", "terms of use", "privacy policy", "disclaimer"
+            ]):
                 continue
 
             start_ctx = max(0, m.start() - 60)
             end_ctx = min(len(clean_text), m.end() + 60)
             ctx = clean_text[start_ctx:end_ctx]
+
+            if any(h in ctx.lower() for h in ["copyright 20", "© 20", "all rights reserved 20", "terms of use 20"]):
+                continue
 
             for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d %b %Y", "%d %B %Y", "%B %d %Y", "%b %d %Y", "%B %Y", "%b %Y", "%Y"):
                 try:
@@ -795,8 +882,8 @@ def extract_event_date(
 
     if not candidates:
         return {
-            "event_date": "",
-            "trigger_date": "",
+            "event_date": "UNKNOWN_DATE",
+            "trigger_date": "UNKNOWN_DATE",
             "publication_date": publication_date,
             "planned_completion_date": "",
             "recency_days": 999,
@@ -804,11 +891,14 @@ def extract_event_date(
             "calculation_reference_date": now_dt_iso,
             "ongoing_status": "DATE_UNKNOWN",
             "recency_status": "DATE_UNKNOWN",
+            "recency_tier": "DATE_UNKNOWN",
             "has_date": False,
             "date_role": "UNKNOWN",
             "date_source": "NONE",
             "is_future_planned_milestone": False,
             "date_parse_status": "DATE_NOT_FOUND",
+            "days_ago": 999,
+            "date_str": "UNKNOWN_DATE",
         }
 
     # Separate future / planned completion dates
@@ -839,15 +929,18 @@ def extract_event_date(
                 "calculation_reference_date": now_dt_iso,
                 "ongoing_status": "STALE",
                 "recency_status": "STALE",
+                "recency_tier": "STALE",
                 "has_date": True,
                 "date_role": "PLANNED_COMPLETION_DATE",
                 "date_source": "BODY_TEXT",
                 "is_future_planned_milestone": True,
                 "date_parse_status": "FUTURE_PLANNED_MILESTONE",
+                "days_ago": 999,
+                "date_str": planned_completion_date,
             }
         return {
-            "event_date": "",
-            "trigger_date": "",
+            "event_date": "UNKNOWN_DATE",
+            "trigger_date": "UNKNOWN_DATE",
             "publication_date": publication_date,
             "planned_completion_date": "",
             "recency_days": 999,
@@ -855,11 +948,14 @@ def extract_event_date(
             "calculation_reference_date": now_dt_iso,
             "ongoing_status": "DATE_UNKNOWN",
             "recency_status": "DATE_UNKNOWN",
+            "recency_tier": "DATE_UNKNOWN",
             "has_date": False,
             "date_role": "UNKNOWN",
             "date_source": "NONE",
             "is_future_planned_milestone": False,
             "date_parse_status": "DATE_NOT_FOUND",
+            "days_ago": 999,
+            "date_str": "UNKNOWN_DATE",
         }
 
     # Sort valid_past by:
@@ -888,11 +984,14 @@ def extract_event_date(
         "calculation_reference_date": now_dt_iso,
         "ongoing_status": rec_status,
         "recency_status": rec_status,
+        "recency_tier": rec_status,
         "has_date": True,
         "date_role": best["role"],
         "date_source": best["source"],
         "is_future_planned_milestone": is_future_milestone,
         "date_parse_status": "VALID",
+        "days_ago": recency_days,
+        "date_str": effective_event_date,
     }
 
 
@@ -1107,3 +1206,369 @@ def extract_pdf_capex_text(pdf_bytes: bytes, max_pages: int = 25) -> str:
     except Exception as exc:
         logger.warning(f"Failed to parse PDF bytes: {exc}")
         return ""
+
+
+# ── Phase 7: Trigger + Facility Binding ───────────────────────────────────────
+TRIGGER_FACILITY_DIRECT = "TRIGGER_FACILITY_DIRECT"
+TRIGGER_FACILITY_STRONG = "TRIGGER_FACILITY_STRONG"
+TRIGGER_FACILITY_AMBIGUOUS = "TRIGGER_FACILITY_AMBIGUOUS"
+TRIGGER_FACILITY_NONE = "TRIGGER_FACILITY_NONE"
+
+
+def bind_trigger_to_facility(
+    trigger_text: str,
+    target_facility: str = "",
+    target_city: str = "",
+    target_state: str = "",
+) -> Dict[str, Any]:
+    """Deterministically evaluates whether commercial trigger applies to target facility.
+
+    Rules:
+    - TRIGGER_FACILITY_DIRECT: Trigger explicitly names the target facility / unit
+      or target city + specific plant phrase (e.g. 'Sanand plant', 'Sanand facility').
+    - TRIGGER_FACILITY_STRONG: Trigger names target city/industrial hub where company
+      is expanding, without conflicting locations.
+    - TRIGGER_FACILITY_AMBIGUOUS: Trigger names a conflicting manufacturing hub
+      (e.g., Pune/Dharwad when target is Sanand/Waghodia), or only corporate India.
+    - TRIGGER_FACILITY_NONE: Neither target facility nor target city is mentioned.
+    """
+    from services.person_intelligence_service import INDIAN_CITIES_TO_STATE
+
+    text_lower = (trigger_text or "").lower()
+    city_lower = (target_city or "").strip().lower()
+    fac_lower = (target_facility or "").strip().lower()
+    state_lower = (target_state or "").strip().lower()
+
+    if not text_lower:
+        return {
+            "linkage": TRIGGER_FACILITY_NONE,
+            "is_bound": False,
+            "confidence": "NONE",
+            "reason": "Empty trigger text provided",
+            "matched_location": "",
+            "conflicting_locations": [],
+        }
+
+    # Detect any industrial cities mentioned in the trigger text
+    cities_in_text = []
+    for c_name in sorted(INDIAN_CITIES_TO_STATE.keys(), key=len, reverse=True):
+        if re.search(r"\b" + re.escape(c_name) + r"\b", text_lower):
+            cities_in_text.append(c_name.title())
+
+    conflicting_cities = [c for c in cities_in_text if city_lower and c.lower() != city_lower]
+
+    # 1. Direct match: Exact facility name mentioned
+    if fac_lower and (fac_lower in text_lower or any(
+        part in text_lower for part in fac_lower.split() if len(part) > 4 and part not in ("plant", "facility", "works", "unit", "limited")
+    )):
+        if city_lower and city_lower in text_lower:
+            return {
+                "linkage": TRIGGER_FACILITY_DIRECT,
+                "is_bound": True,
+                "confidence": "HIGH",
+                "reason": f"Target facility '{target_facility}' and city '{target_city}' directly confirmed in trigger text",
+                "matched_location": f"{target_facility} ({target_city})",
+                "conflicting_locations": conflicting_cities,
+            }
+        elif not conflicting_cities:
+            return {
+                "linkage": TRIGGER_FACILITY_DIRECT,
+                "is_bound": True,
+                "confidence": "HIGH",
+                "reason": f"Target facility '{target_facility}' directly confirmed in trigger text",
+                "matched_location": target_facility,
+                "conflicting_locations": [],
+            }
+
+    # 2. Check target city presence
+    if city_lower and re.search(r"\b" + re.escape(city_lower) + r"\b", text_lower):
+        has_plant_word = any(pw in text_lower for pw in ["plant", "facility", "unit", "works", "factory", "site", "line"])
+        if has_plant_word and not conflicting_cities:
+            return {
+                "linkage": TRIGGER_FACILITY_DIRECT,
+                "is_bound": True,
+                "confidence": "HIGH",
+                "reason": f"Target city '{target_city}' directly associated with manufacturing facility in trigger",
+                "matched_location": target_city,
+                "conflicting_locations": [],
+            }
+        elif not conflicting_cities:
+            return {
+                "linkage": TRIGGER_FACILITY_STRONG,
+                "is_bound": True,
+                "confidence": "MEDIUM",
+                "reason": f"Target city '{target_city}' present in trigger text without conflicting facilities",
+                "matched_location": target_city,
+                "conflicting_locations": [],
+            }
+        else:
+            return {
+                "linkage": TRIGGER_FACILITY_STRONG,
+                "is_bound": True,
+                "confidence": "MEDIUM",
+                "reason": f"Target city '{target_city}' mentioned alongside other locations ({', '.join(conflicting_cities)})",
+                "matched_location": target_city,
+                "conflicting_locations": conflicting_cities,
+            }
+
+    # 3. If target city is NOT present, but conflicting manufacturing hubs are present:
+    if conflicting_cities:
+        return {
+            "linkage": TRIGGER_FACILITY_AMBIGUOUS,
+            "is_bound": False,
+            "confidence": "LOW",
+            "reason": f"Trigger event is located at conflicting manufacturing hub ({', '.join(conflicting_cities)}), not target city '{target_city}'",
+            "matched_location": conflicting_cities[0],
+            "conflicting_locations": conflicting_cities,
+        }
+
+    # 4. State only match
+    if state_lower and re.search(r"\b" + re.escape(state_lower) + r"\b", text_lower):
+        return {
+            "linkage": TRIGGER_FACILITY_AMBIGUOUS,
+            "is_bound": False,
+            "confidence": "LOW",
+            "reason": f"Trigger mentions state '{target_state}' only, without proving target city '{target_city}'",
+            "matched_location": target_state,
+            "conflicting_locations": [],
+        }
+
+    return {
+        "linkage": TRIGGER_FACILITY_NONE,
+        "is_bound": False,
+        "confidence": "NONE",
+        "reason": f"Neither target facility '{target_facility}' nor target city '{target_city}' mentioned in trigger",
+        "matched_location": "",
+        "conflicting_locations": [],
+    }
+
+
+# ── Phase 8: Calibration Opportunity Truth ───────────────────────────────────
+CALIBRATION_SOURCE_SUPPORTED = "SOURCE_SUPPORTED"
+CALIBRATION_REASONABLE_INFERENCE = "REASONABLE_INFERENCE"
+CALIBRATION_UNKNOWN = "UNKNOWN"
+
+SOURCE_CALIBRATION_TERMS = [
+    (r"\bcalibration\b", "calibration"),
+    (r"\bcalibrat\w*\b", "calibration"),
+    (r"\bmetrology\b", "metrology"),
+    (r"\bcmm\b", "cmm"),
+    (r"\bcoordinate measuring\b", "coordinate measuring machine"),
+    (r"\bgaug(?:e|es|ing)\b", "gauges"),
+    (r"\bmicrometer(?:s)?\b", "micrometers"),
+    (r"\bvernier(?:s)?\b", "verniers"),
+    (r"\bprofile projector(?:s)?\b", "profile projectors"),
+    (r"\bpressure gaug(?:e|es)\b", "pressure gauges"),
+    (r"\bpressure transmitter(?:s)?\b", "pressure transmitters"),
+    (r"\btemperature sensor(?:s)?\b", "temperature sensors"),
+    (r"\bthermocouple(?:s)?\b", "thermocouples"),
+    (r"\brtd(?:s)?\b", "rtd sensors"),
+    (r"\bmultimeter(?:s)?\b", "multimeters"),
+    (r"\boscilloscope(?:s)?\b", "oscilloscopes"),
+    (r"\btorque wrench(?:es)?\b", "torque wrench"),
+    (r"\btesting laborator(?:y|ies)\b", "testing laboratory"),
+    (r"\bquality lab(?:s)?\b", "quality lab"),
+    (r"\bnabl\b", "nabl accredited calibration"),
+    (r"\bstandard room\b", "standard room"),
+    (r"\bcleanroom\b", "cleanroom"),
+    (r"\btensile tester(?:s)?\b", "tensile testers"),
+    (r"\bhardness tester(?:s)?\b", "hardness testers"),
+]
+
+CALIBRATION_SECTOR_TEMPLATES = {
+    "Automotive": "Likely calibration opportunities for an automotive manufacturing ramp include dimensional metrology (CMM, bore gauges, micrometers), torque wrenches, pressure/vacuum sensors, and temperature controllers; exact instrument scope requires confirmation.",
+    "Auto Components": "Likely calibration opportunities for an automotive component manufacturing ramp include dimensional metrology (CMM, profile projectors, gauges), torque tools, force gauges, and hardness testers; exact instrument scope requires confirmation.",
+    "Aerospace": "Likely calibration opportunities for an aerospace manufacturing ramp include high-precision dimensional metrology, torque, pressure/vacuum, and electrical test equipment; exact instrument scope requires confirmation.",
+    "Defence": "Likely calibration opportunities for a defence manufacturing facility include dimensional inspection, pressure transducers, temperature sensors, and electrical test instruments; exact instrument scope requires confirmation.",
+    "Electronics": "Likely calibration opportunities for an electronics/SMT manufacturing ramp include electrical test equipment (oscilloscopes, digital multimeters, LCR meters), ESD monitoring, thermal profiling, and dimensional inspection; exact instrument scope requires confirmation.",
+    "Electrical": "Likely calibration opportunities for an electrical equipment manufacturing ramp include high-voltage test sets, power meters, insulation testers, multimeters, and temperature calibration; exact instrument scope requires confirmation.",
+    "Pharma": "Likely calibration opportunities for a pharmaceutical manufacturing ramp include temperature sensors (RTD, thermocouples), pressure gauges, analytical balances, humidity transmitters, and autoclave validation; exact instrument scope requires confirmation.",
+    "Life Sciences": "Likely calibration opportunities for a life sciences manufacturing facility include temperature/humidity monitoring, analytical balances, pipettes, pressure sensors, and bio-reactor instrumentation; exact instrument scope requires confirmation.",
+    "Steel": "Likely calibration opportunities for a steel/metals manufacturing ramp include pyrometry/thermal sensors, pressure gauges, dimensional metrology, and mechanical testing machines; exact instrument scope requires confirmation.",
+    "Metals": "Likely calibration opportunities for a metals fabrication ramp include dimensional metrology, hardness testers, temperature controllers, and pressure instrumentation; exact instrument scope requires confirmation.",
+    "Heavy Engineering": "Likely calibration opportunities for a heavy engineering manufacturing ramp include large-scale dimensional metrology, laser tracking, torque multipliers, pressure gauges, and welding gauge calibration; exact instrument scope requires confirmation.",
+    "Chemicals": "Likely calibration opportunities for a specialty chemicals plant include flow meters, pressure transmitters, RTDs, pH meters, and gas monitors; exact instrument scope requires confirmation.",
+    "Power & Energy": "Likely calibration opportunities for an energy equipment manufacturing facility include pressure transmitters, temperature sensors, power analyzers, and electrical calibrators; exact instrument scope requires confirmation.",
+}
+
+
+def classify_calibration_opportunity(
+    trigger_snippet: str = "",
+    sector: str = "",
+    page_text: str = "",
+) -> Dict[str, Any]:
+    """Deterministically separates source-supported equipment mentions from sector-inferred opportunities.
+
+    Never invents exact equipment models, ranges, or quantities.
+    """
+    combined = f"{trigger_snippet} {page_text}".lower()
+
+    # 1. Check for explicit source-supported metrology / calibration equipment mentions
+    found_terms = []
+    for pat, label in SOURCE_CALIBRATION_TERMS:
+        if re.search(pat, combined):
+            found_terms.append(label)
+
+    if found_terms:
+        unique_terms = sorted(list(set(found_terms)))
+        return {
+            "calibration_evidence_type": CALIBRATION_SOURCE_SUPPORTED,
+            "calibration_description": f"Source explicitly mentions instrumentation/metrology requirements: {', '.join(unique_terms)}.",
+            "supported_instruments": unique_terms,
+            "sector": sector,
+            "is_source_supported": True,
+        }
+
+    # 2. Sector-inferred opportunity with explicit confirmation disclaimer
+    sec_clean = (sector or "").strip()
+    template = CALIBRATION_SECTOR_TEMPLATES.get(
+        sec_clean,
+        f"Likely calibration opportunities for a {sec_clean or 'manufacturing'} ramp include dimensional metrology, torque, pressure/vacuum, and electrical test instruments; exact instrument scope requires confirmation."
+    )
+
+    return {
+        "calibration_evidence_type": CALIBRATION_REASONABLE_INFERENCE if sec_clean else CALIBRATION_UNKNOWN,
+        "calibration_description": template,
+        "supported_instruments": [],
+        "sector": sec_clean,
+        "is_source_supported": False,
+    }
+
+
+# ── Phase 9: Composite Lead Qualification & Decompressed Scoring ──────────────
+def compute_lead_qualification_score(
+    trigger_info: Dict[str, Any],
+    person_info: Optional[Dict[str, Any]],
+    facility_binding_info: Optional[Dict[str, Any]] = None,
+    sector: str = "",
+) -> Tuple[float, str, str, List[str]]:
+    """Computes canonical production outbound qualification score and priority band.
+
+    Canonical bands:
+    - 95–100: P1 / HOT
+    - 90–94:  P2 / STRONG
+    - 85–89:  P3 / QUALIFIED
+    - < 85:   HOLD / RESEARCH
+
+    Returns:
+        (lead_score, priority_band, status, hold_reasons)
+    """
+    hold_reasons: List[str] = []
+
+    # 1. Validate Trigger
+    is_trig_valid = bool(trigger_info.get("is_valid") or trigger_info.get("is_verified"))
+    trig_type = str(trigger_info.get("trigger_type") or "").upper()
+    rec_tier = str(trigger_info.get("recency_tier") or trigger_info.get("recency_status") or "").upper()
+    has_ongoing = bool(trigger_info.get("has_ongoing") or trigger_info.get("ongoing_activity_evidence"))
+
+    if not is_trig_valid or trig_type in ("STATIC_REFERENCE", "UNKNOWN"):
+        return 40.0, "HOLD", "HOLD_TRIGGER_WEAK", ["Trigger lacks valid commercial event semantics (STATIC_REFERENCE or UNKNOWN)."]
+
+    if rec_tier in ("DATE_UNKNOWN", "UNKNOWN_DATE"):
+        return 45.0, "HOLD", "HOLD_TRIGGER_STALE", ["Trigger lacks verified publication/event date (DATE_UNKNOWN)."]
+
+    if rec_tier == "STALE" and not has_ongoing:
+        return 48.0, "HOLD", "HOLD_TRIGGER_STALE", ["Trigger is >365 days old without verified ongoing activity evidence."]
+
+    # 2. Validate Facility Linkage
+    fb_link = (
+        (facility_binding_info or {}).get("linkage")
+        or trigger_info.get("facility_relationship")
+        or "TRIGGER_FACILITY_NONE"
+    )
+    if fb_link in ("TRIGGER_FACILITY_AMBIGUOUS", "TRIGGER_FACILITY_NONE", "AMBIGUOUS"):
+        reason = (facility_binding_info or {}).get("reason") or "Trigger not bound to target facility."
+        return 55.0, "HOLD", "HOLD_FACILITY_AMBIGUOUS", [f"Trigger-facility link ambiguous: {reason}"]
+
+    # 3. Validate Person
+    if not person_info:
+        return 50.0, "HOLD", "HOLD_PERSON_UNCERTAIN", ["No human decision-maker candidate discovered."]
+
+    p_name = str(person_info.get("name") or "")
+    emp_status = str(person_info.get("current_employment") or "UNKNOWN").upper()
+    fac_rel = str(person_info.get("facility_relationship") or "UNKNOWN").upper()
+    p_score = float(person_info.get("person_score", 0.0) or 0.0)
+    p_conf = str(person_info.get("person_confidence") or "LOW").upper()
+    auth_class = str(person_info.get("authority_class") or "").upper()
+
+    # Contradicted employment hard block
+    if emp_status == "CONTRADICTED":
+        return 45.0, "HOLD", "HOLD_PERSON_CONTRADICTED", [f"Candidate '{p_name}' current employment contradicted (past tenure only)."]
+
+    # Facility mismatch hard block
+    if fac_rel in ("OTHER_FACILITY_OWNER", "FACILITY_CONTRADICTED"):
+        return 55.0, "HOLD", "HOLD_FACILITY_MISMATCH", [f"Candidate '{p_name}' is located at a different facility ({fac_rel})."]
+
+    # Junior IC hard block
+    if auth_class == "JUNIOR_IC" or p_conf == "LOW" or p_score < 65.0:
+        return 65.0, "HOLD", "HOLD_AUTHORITY_INSUFFICIENT", [f"Candidate '{p_name}' lacks plant decision authority or score < 65."]
+
+    if emp_status not in ("VERIFIED", "PROBABLE"):
+        return 68.0, "HOLD", "HOLD_PERSON_UNCERTAIN", [f"Candidate '{p_name}' current employment status is {emp_status}."]
+
+    # 4. Canonical Decompressed Scoring
+    # Trigger Component (0 to 50, base 40.0):
+    trig_comp = 40.0
+    if fb_link in ("TRIGGER_FACILITY_DIRECT", "DIRECT"):
+        trig_comp += 5.0
+    elif fb_link in ("TRIGGER_FACILITY_STRONG", "STRONG"):
+        trig_comp += 2.0
+
+    if rec_tier == "CURRENT":
+        trig_comp += 3.0
+    elif rec_tier == "RECENT" and has_ongoing:
+        trig_comp += 1.0
+
+    src_tier = str(trigger_info.get("source_tier") or "").upper()
+    if src_tier == "TIER_A":
+        trig_comp += 2.0
+    elif src_tier == "TIER_B":
+        trig_comp += 1.0
+
+    trig_comp = min(trig_comp, 50.0)
+
+    # Person Component (0 to 50, base 40.0):
+    person_comp = 40.0
+    if auth_class in ("DIRECT_CALIBRATION_OWNER", "METROLOGY_OWNER"):
+        person_comp += 4.0
+    elif auth_class == "STRONG_PLANT_QUALITY_OWNER":
+        person_comp += 3.0
+    elif auth_class == "FACILITY_OWNER":
+        person_comp += 2.0
+    elif auth_class == "GROUP_FUNCTION_OWNER":
+        person_comp += 1.0
+
+    if emp_status == "VERIFIED":
+        person_comp += 3.0
+    elif emp_status == "PROBABLE":
+        person_comp += 1.0
+
+    if fac_rel == "FACILITY_OWNER":
+        person_comp += 2.0
+    elif fac_rel == "GROUP_FUNCTION_OWNER":
+        person_comp += 1.0
+
+    if p_conf == "HIGH":
+        person_comp += 1.0
+
+    person_comp = min(person_comp, 50.0)
+
+    total_score = round(trig_comp + person_comp, 1)
+
+    # Priority Band Assignment
+    if total_score >= 95.0:
+        priority_band = "P1"
+        status = "READY_FOR_CONTACT_ENRICHMENT"
+    elif total_score >= 90.0:
+        priority_band = "P2"
+        status = "READY_FOR_CONTACT_ENRICHMENT"
+    elif total_score >= 85.0:
+        priority_band = "P3"
+        status = "READY_FOR_CONTACT_ENRICHMENT"
+    else:
+        priority_band = "HOLD"
+        status = "HOLD_RESEARCH"
+        hold_reasons.append(f"Composite score ({total_score}) is below production qualification threshold (85.0).")
+
+    return total_score, priority_band, status, hold_reasons
+
