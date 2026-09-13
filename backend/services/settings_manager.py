@@ -1,7 +1,7 @@
 """Settings and Credential Management Service for Salesoorja.
 
 Provides secure credential persistence, masked status reporting, connection diagnostic tests,
-and runtime overrides for OpenAI, Gemini, Apollo, SMTP, IMAP, and Voice services.
+and runtime overrides for DeepSeek, Gemini, Apollo, SMTP, IMAP, and Voice services.
 """
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def get_setting_value(key: str, default: Any = None) -> Any:
 
 def get_masked_settings_status() -> Dict[str, Any]:
     """Returns safe masked configuration status without exposing raw secrets."""
-    openai_key = get_setting_value("OPENAI_API_KEY", "")
+    deepseek_key = get_setting_value("HIVE_API_KEY", "")
     gemini_key = get_setting_value("GOOGLE_API_KEY", "")
     apollo_key = get_setting_value("APOLLO_API_KEY", "")
     smtp_pass = get_setting_value("SMTP_PASSWORD", "")
@@ -70,24 +70,18 @@ def get_masked_settings_status() -> Dict[str, Any]:
 
     return {
         "ai_providers": {
-            "primary_provider": get_setting_value("ORCHESTRATOR_PRIMARY_PROVIDER", "gemini"),
-            "fallback_provider": get_setting_value("ORCHESTRATOR_FALLBACK_PROVIDER", "openai"),
-            "openai": {
-                "configured": bool(openai_key),
-                "model": get_setting_value("OPENAI_MODEL", "gpt-4o"),
-                "masked_key": _mask_secret(openai_key),
+            "primary_provider": "deepseek",
+            "fallback_provider": "gemini",
+            "deepseek": {
+                "configured": bool(deepseek_key),
+                "model": get_setting_value("HIVE_MODEL", "deepseek-ai/DeepSeek-V4.1-Flash"),
+                "masked_key": _mask_secret(deepseek_key),
+                "transport": "hive",
             },
             "gemini": {
                 "configured": bool(gemini_key),
                 "model": get_setting_value("ORCHESTRATOR_GEMINI_MODEL", "gemini-2.0-flash"),
                 "masked_key": _mask_secret(gemini_key),
-            },
-            "unorouter": {
-                "configured": bool(get_setting_value("UNOROUTER_API_KEY", "")),
-                "model": get_setting_value("UNOROUTER_MODEL", "glm-5.3-search:free"),
-                "masked_key": _mask_secret(get_setting_value("UNOROUTER_API_KEY", "")),
-                "enabled": bool(get_setting_value("UNOROUTER_ENABLED", True)),
-                "account_mode": get_setting_value("UNOROUTER_ACCOUNT_MODE", "FREE"),
             },
         },
         "apollo": {
@@ -117,7 +111,6 @@ def get_masked_settings_status() -> Dict[str, Any]:
         },
         "research_sources": {
             "serper_configured": bool(get_setting_value("SERPER_API_KEY", "")),
-            "apify_configured": bool(get_setting_value("APIFY_API_TOKEN", "")),
         },
         "calling": {
             "provider": "Mock / Controlled Voice Agent",
@@ -146,23 +139,30 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
 # --- Diagnostic Connection Testers ---
 
 def test_ai_provider_connection(provider: str) -> Dict[str, Any]:
-    """Tests connection to OpenAI or Gemini with live authentication."""
+    """Tests connection to the production DeepSeek or Gemini provider."""
     provider = provider.lower().strip()
-    if provider == "openai":
-        api_key = str(get_setting_value("OPENAI_API_KEY", "")).strip()
+    if provider in ("deepseek", "hive"):
+        api_key = str(get_setting_value("HIVE_API_KEY", "")).strip()
         if not api_key or api_key.startswith("mock_") or api_key.startswith("YOUR_") or "test-sample" in api_key:
             return {
-                "provider": "openai",
+                "provider": "deepseek",
                 "status": "NOT_CONFIGURED",
-                "message": "OPENAI_API_KEY is not configured with a live key. System is using Internal Deterministic Fallback.",
+                "message": "HIVE_API_KEY is not configured for the DeepSeek transport.",
             }
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
-            client.models.list()
-            return {"provider": "openai", "status": "CONNECTED", "message": "OpenAI API connection verified successfully."}
+            from services.llm_provider import DeepSeekProvider
+            response = DeepSeekProvider(api_key=api_key).complete(
+                "Return only ok.",
+                [{"role": "user", "content": "ok"}],
+                max_tokens=8,
+            )
+            return {
+                "provider": "deepseek",
+                "status": "CONNECTED",
+                "message": f"DeepSeek connection verified via {response.provider}.",
+            }
         except Exception as err:
-            return {"provider": "openai", "status": "AUTHENTICATION_FAILED", "message": str(err)}
+            return {"provider": "deepseek", "status": "AUTHENTICATION_FAILED", "message": str(err)}
 
     elif provider in ("gemini", "google"):
         api_key = str(get_setting_value("GOOGLE_API_KEY", "")).strip()
@@ -183,7 +183,7 @@ def test_ai_provider_connection(provider: str) -> Dict[str, Any]:
         except Exception as err:
             return {"provider": "gemini", "status": "AUTHENTICATION_FAILED", "message": str(err)}
     else:
-        return {"provider": provider, "status": "UNSUPPORTED", "message": f"Provider '{provider}' is not supported. Supported AI providers: Google Gemini, OpenAI, Deterministic Fallback."}
+        return {"provider": provider, "status": "UNSUPPORTED", "message": f"Provider '{provider}' is not supported. Supported AI providers: DeepSeek and Google Gemini."}
 
 
 def test_apollo_connection() -> Dict[str, Any]:

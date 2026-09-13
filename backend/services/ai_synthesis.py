@@ -178,7 +178,7 @@ def generate_outreach(company_id: int, db: Session = None) -> Dict[str, Any]:
 
 
 def _call_llm_outreach(context: dict) -> Optional[dict]:
-    """Call configured LLM Provider (Gemini / OpenAI) to generate outreach content."""
+    """Call DeepSeek with Gemini fallback to generate outreach content."""
     provider = get_orchestrator_provider()
     if not provider or not provider.is_available():
         logger.info("No active LLM provider configured, using deterministic fallback outreach generation")
@@ -202,7 +202,7 @@ def _call_llm_outreach(context: dict) -> Optional[dict]:
 
 
 def _call_llm_free_value(context: dict) -> Optional[dict]:
-    """Call configured LLM Provider (Gemini / OpenAI) to generate the free value offer."""
+    """Call DeepSeek with Gemini fallback to generate the free value offer."""
     provider = get_orchestrator_provider()
     if not provider or not provider.is_available():
         return _fallback_free_value(context)

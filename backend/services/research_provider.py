@@ -1,20 +1,7 @@
-"""Research Provider Abstraction — unified web/person research router.
-
-Supports multiple legitimate configured research sources:
-- Google Custom Search API (GOOGLE_API_KEY + GOOGLE_SEARCH_CX)
-- Serper API (SERPER_API_KEY)
-- Existing web_research_service (database cache)
-- Direct HTTP fetch of public company pages
-
-Each provider clearly reports its status:
-  LIVE, NOT_CONFIGURED, ERROR, FALLBACK
-
-Does NOT bypass login controls, anti-bot protections, or access restrictions.
-"""
+"""Serper-only production research with quota-safe local caching."""
 from __future__ import annotations
 
 import logging
-import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -31,7 +18,7 @@ from services.serper_budget_manager import serper_budget_manager, SerperBudgetEx
 
 logger = logging.getLogger(__name__)
 
-# ── Provider Status Constants ───────────────────────────────────────────
+# â”€â”€ Provider Status Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 PROVIDER_LIVE = "LIVE"
 PROVIDER_NOT_CONFIGURED = "NOT_CONFIGURED"
 PROVIDER_ERROR = "ERROR"
@@ -88,7 +75,7 @@ class ResearchResult:
         }
 
 
-# ── Common Provider Interface (Phase 5) ──────────────────────────────────
+# â”€â”€ Common Provider Interface (Phase 5) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class ResearchProvider(ABC):
     """Abstract base class for all research and web search providers."""
 
@@ -334,291 +321,51 @@ class SerperSearchProvider(ResearchProvider):
             "cache_hit": False,
         }
 
-
-class GeminiGroundedSearchProvider(ResearchProvider):
-    """Google Gemini Grounded Search (Google Search Tool) provider."""
-
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        model: str = "gemini-3.5-flash-lite",
-        timeout: int = 25,
-        cache: Optional[Any] = None,
-    ) -> None:
-        self._api_key_override = api_key
-        self.model = model
-        self.timeout = timeout
-        self.cache = cache
-
-    def _get_api_key(self) -> str:
-        if self._api_key_override:
-            return self._api_key_override.strip()
-        key = str(
-            get_setting_value("GOOGLE_API_KEY", "")
-            or get_setting_value("GEMINI_API_KEY", "")
-            or os.environ.get("GEMINI_API_KEY", "")
-            or os.environ.get("GOOGLE_API_KEY", "")
-        ).strip()
-        return key
-
-    def is_available(self) -> bool:
-        key = self._get_api_key()
-        return bool(key and not key.startswith("mock_") and not key.startswith("YOUR_") and len(key) > 10)
-
-    def get_status(self) -> str:
-        if not self.is_available():
-            return PROVIDER_NOT_CONFIGURED
-        return PROVIDER_LIVE
-
-    def search(self, query: str, num_results: int = 5, **kwargs: Any) -> Dict[str, Any]:
-        start_time = time.time()
-        key = self._get_api_key()
-        if not self.is_available():
-            return {
-                "provider": "gemini_grounded",
-                "provider_status": PROVIDER_NOT_CONFIGURED,
-                "results": [],
-                "query": query,
-                "error": "Gemini API key not configured",
-                "latency_ms": 0.0,
-                "cache_hit": False,
-            }
-
-        cache_instance = self.cache
-        if cache_instance is None:
-            try:
-                from services.search_cache import search_cache
-                cache_instance = search_cache
-            except Exception:
-                cache_instance = None
-
-        use_cache = kwargs.get("use_cache", True)
-        if use_cache and cache_instance:
-            cached = cache_instance.get("gemini_grounded", query, model=self.model)
-            if cached:
-                cached["latency_ms"] = round((time.time() - start_time) * 1000, 2)
-                return cached
-
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={key}"
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": query}]}],
-            "tools": [{"google_search": {}}],
-            "generationConfig": {
-                "temperature": 0.1,
-                "maxOutputTokens": 800,
-            },
-        }
-
-        try:
-            req_start = time.time()
-            resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=self.timeout)
-            latency_ms = round((time.time() - req_start) * 1000, 2)
-
-            if resp.status_code == 200:
-                data = resp.json()
-                cand = (data.get("candidates") or [{}])[0]
-                grounding = cand.get("groundingMetadata") or {}
-                chunks = grounding.get("groundingChunks", []) or []
-                supports = grounding.get("groundingSupports", []) or []
-                queries_executed = grounding.get("webSearchQueries", []) or []
-
-                # Extract chunk text snippet from groundingSupports where available
-                chunk_snippets: Dict[int, str] = {}
-                for support in supports:
-                    seg_text = (support.get("segment") or {}).get("text", "")
-                    for c_idx in support.get("groundingChunkIndices", []) or []:
-                        if c_idx not in chunk_snippets and seg_text:
-                            chunk_snippets[c_idx] = seg_text
-
-                # Synthesized text fallback
-                parts = cand.get("content", {}).get("parts", []) or []
-                synth_text = parts[0].get("text", "") if parts else ""
-
-                results = []
-                for idx, chunk in enumerate(chunks[:num_results]):
-                    web_data = chunk.get("web") or {}
-                    uri = web_data.get("uri") or ""
-                    title = web_data.get("title") or ""
-                    snippet = chunk_snippets.get(idx) or synth_text[:300]
-                    results.append(
-                        ResearchResult(
-                            title=title,
-                            url=uri,
-                            snippet=snippet,
-                            provider="gemini_grounded",
-                            confidence=0.80,
-                            position=idx + 1,
-                            evidence_type="GROUNDED_WEB_EVIDENCE",
-                            metadata={
-                                "model": self.model,
-                                "grounding_chunk_index": idx,
-                                "web_search_queries": queries_executed,
-                            },
-                        )
-                    )
-
-                status = PROVIDER_LIVE if results else PROVIDER_EMPTY
-                out_payload = {
-                    "provider": "gemini_grounded",
-                    "provider_status": status,
-                    "results": [r.to_dict() for r in results],
-                    "query": query,
-                    "error": None if results else "Gemini returned no grounding chunks",
-                    "latency_ms": latency_ms,
-                    "model": self.model,
-                    "search_queries_run": queries_executed,
-                    "cache_hit": False,
-                }
-                if cache_instance and status == PROVIDER_LIVE:
-                    cache_instance.set("gemini_grounded", query, out_payload, model=self.model)
-                return out_payload
-
-            elif resp.status_code == 429:
-                return {
-                    "provider": "gemini_grounded",
-                    "provider_status": PROVIDER_QUOTA_EXHAUSTED,
-                    "results": [],
-                    "query": query,
-                    "error": "Gemini Google Search grounding unavailable: HTTP 429 Quota Exceeded (requires paid tier / billing enabled)",
-                    "latency_ms": latency_ms,
-                    "model": self.model,
-                    "cache_hit": False,
-                }
-            else:
-                err_msg = resp.json().get("error", {}).get("message", resp.text[:200]) if resp.text else f"HTTP {resp.status_code}"
-                return {
-                    "provider": "gemini_grounded",
-                    "provider_status": PROVIDER_ERROR,
-                    "results": [],
-                    "query": query,
-                    "error": f"Gemini API error ({resp.status_code}): {err_msg}",
-                    "latency_ms": latency_ms,
-                    "model": self.model,
-                    "cache_hit": False,
-                }
-
-        except Exception as e:
-            total_latency = round((time.time() - start_time) * 1000, 2)
-            return {
-                "provider": "gemini_grounded",
-                "provider_status": PROVIDER_ERROR,
-                "results": [],
-                "query": query,
-                "error": f"Gemini request exception: {str(e)}",
-                "latency_ms": total_latency,
-                "model": self.model,
-                "cache_hit": False,
-            }
-
-
-class SearXNGProvider(ResearchProvider):
-    """SearXNG self-hosted private search provider."""
-
-    def __init__(self, base_url: Optional[str] = None, timeout: int = 16) -> None:
-        self.base_url = base_url
-        self.timeout = timeout
-
-    def is_available(self) -> bool:
-        candidates = research_router._get_candidate_searxng_urls() if "research_router" in globals() else []
-        return bool(candidates or self.base_url)
-
-    def get_status(self) -> str:
-        return PROVIDER_LIVE if self.is_available() else PROVIDER_NOT_CONFIGURED
-
-    def search(self, query: str, num_results: int = 5, **kwargs: Any) -> Dict[str, Any]:
-        start_time = time.time()
-        results, status, error = research_router._search_searxng(query, num_results)
-        latency_ms = round((time.time() - start_time) * 1000, 2)
-        return {
-            "provider": "searxng",
-            "provider_status": status,
-            "results": [r.to_dict() for r in results],
-            "query": query,
-            "error": error,
-            "latency_ms": latency_ms,
-            "cache_hit": False,
-        }
-
-
-
 class ResearchProviderRouter:
-    """Routes research queries to the best available provider.
+    """Route every live production search through Serper.
 
-    Priority order:
-    1. Serper API (if SERPER_API_KEY configured)
-    2. Google Custom Search API (if GOOGLE_API_KEY + GOOGLE_SEARCH_CX configured)
-    3. Direct public page fetch (for company websites)
-    4. Existing web_research cache (database)
+    The in-memory/file cache owned by SerperSearchProvider is checked before
+    quota reservation. The database cache remains a local evidence fallback,
+    not an external research provider.
     """
 
     def _discover_providers(self) -> List[Dict[str, Any]]:
-        """Discover which research providers are configured and available."""
-        providers = []
-
-        # 1. Serper Search API (Primary production search provider)
-        serper_key = str(get_setting_value("SERPER_API_KEY", "") or getattr(settings, "SERPER_API_KEY", "")).strip()
-        is_serper_live = bool(serper_key and not serper_key.startswith("mock_") and not serper_key.startswith("YOUR_") and len(serper_key) > 8)
-        providers.append({
-            "name": "serper",
-            "display": "Serper Search API",
-            "configured": is_serper_live,
-            "priority": 1,
-        })
-
-        # 2. Google Custom Search (secondary if Serper not configured)
-        google_key = str(get_setting_value("GOOGLE_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")).strip()
-        google_cx = str(get_setting_value("GOOGLE_SEARCH_CX", "") or getattr(settings, "GOOGLE_SEARCH_CX", "")).strip()
-        is_google_live = bool(google_key and google_cx and not google_key.startswith("mock_") and not google_key.startswith("YOUR_"))
-        providers.append({
-            "name": "google_custom_search",
-            "display": "Google Custom Search",
-            "configured": is_google_live,
-            "priority": 2,
-        })
-
-        # SearXNG is exposed only for explicit local diagnostics, never automatic routing.
-        diagnostics_enabled = bool(getattr(settings, "SEARXNG_DIAGNOSTICS_ENABLED", False))
-        searxng_url = str(getattr(settings, "SEARXNG_BASE_URL", "") or get_setting_value("SEARXNG_BASE_URL", "http://localhost:8080")).strip()
-        providers.append({
-            "name": "searxng",
-            "display": "SearXNG Private Search",
-            "configured": bool(searxng_url) and diagnostics_enabled,
-            "priority": 3,
-        })
-
-        # Direct public page fetch (always available)
-        providers.append({
-            "name": "public_page_fetch",
-            "display": "Public Company Page Fetch",
-            "configured": True,
-            "priority": 4,
-        })
-
-        # Database cache (always available)
-        providers.append({
-            "name": "database_cache",
-            "display": "Web Research Cache",
-            "configured": True,
-            "priority": 5,
-        })
-
-        return sorted(providers, key=lambda p: p["priority"])
+        serper_key = str(
+            get_setting_value("SERPER_API_KEY", "")
+            or getattr(settings, "SERPER_API_KEY", "")
+        ).strip()
+        is_serper_live = bool(
+            serper_key
+            and not serper_key.startswith("mock_")
+            and not serper_key.startswith("YOUR_")
+            and len(serper_key) > 8
+        )
+        return [
+            {
+                "name": "serper",
+                "display": "Serper Search API",
+                "configured": is_serper_live,
+                "priority": 1,
+            },
+            {
+                "name": "database_cache",
+                "display": "Web Research Cache",
+                "configured": True,
+                "priority": 2,
+            },
+        ]
 
     def get_provider_status(self) -> Dict[str, str]:
-        """Return status of all providers."""
-        providers = self._discover_providers()
         return {
-            p["name"]: PROVIDER_LIVE if p["configured"] else PROVIDER_NOT_CONFIGURED
-            for p in providers
+            provider["name"]: (
+                PROVIDER_LIVE if provider["configured"] else PROVIDER_NOT_CONFIGURED
+            )
+            for provider in self._discover_providers()
         }
 
     def get_best_search_provider(self) -> Optional[str]:
-        """Return the name of the best available search provider."""
-        providers = self._discover_providers()
-        for p in providers:
-            if p["configured"] and p["name"] in ("serper", "google_custom_search"):
-                return p["name"]
-        return None
+        provider = self._discover_providers()[0]
+        return "serper" if provider["configured"] else None
 
     def search(
         self,
@@ -629,29 +376,27 @@ class ResearchProviderRouter:
         free_only: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Execute a search using production providers or explicit diagnostics.
-
-        Priority order:
-        1. Serper API (Primary production search)
-        2. Google Custom Search (Secondary if configured and Serper missing)
-        3. Database Cache
-
-        SearXNG requires both SEARXNG_DIAGNOSTICS_ENABLED=true and the
-        allow_searxng_diagnostics=True call flag. It is never an automatic fallback.
-        """
-        results = []
+        """Search with Serper, optionally falling back to stored local evidence."""
+        results: List[ResearchResult] = []
         status = PROVIDER_NOT_CONFIGURED
-        error = None
+        error: Optional[str] = None
         used_provider = "none"
 
-        # 1. Serper API (Primary)
-        serper_key = str(get_setting_value("SERPER_API_KEY", "") or getattr(settings, "SERPER_API_KEY", "")).strip()
-        if not free_only and serper_key and not serper_key.startswith("mock_") and not serper_key.startswith("YOUR_"):
-            results, status, error = self._search_serper(query, num_results, **kwargs)
-            if status == PROVIDER_LIVE:
-                used_provider = "serper"
-            elif status == PROVIDER_BUDGET_EXHAUSTED:
-                # When Serper daily budget is exhausted, do NOT fall back to SearXNG
+        serper_key = str(
+            get_setting_value("SERPER_API_KEY", "")
+            or getattr(settings, "SERPER_API_KEY", "")
+        ).strip()
+        serper_configured = bool(
+            serper_key
+            and not serper_key.startswith("mock_")
+            and not serper_key.startswith("YOUR_")
+        )
+        if not free_only and serper_configured:
+            used_provider = "serper"
+            results, status, error = self._search_serper(
+                query, num_results, **kwargs
+            )
+            if status == PROVIDER_BUDGET_EXHAUSTED:
                 return {
                     "provider": "serper",
                     "provider_status": PROVIDER_BUDGET_EXHAUSTED,
@@ -660,186 +405,56 @@ class ResearchProviderRouter:
                     "error": error or "SERPER_DAILY_BUDGET_EXHAUSTED",
                 }
 
-        # 2. Google Custom Search (secondary if Serper not configured)
-        if not results and used_provider != "serper":
-            google_key = str(get_setting_value("GOOGLE_API_KEY", "")).strip()
-            google_cx = str(get_setting_value("GOOGLE_SEARCH_CX", "")).strip()
-            if not free_only and google_key and google_cx and not google_key.startswith("mock_") and not google_key.startswith("YOUR_"):
-                results, status, error = self._search_google(query, num_results)
-                if status == PROVIDER_LIVE:
-                    used_provider = "google_custom_search"
-
-        # 3. SearXNG diagnostics (explicit two-part opt-in only)
-        searxng_allowed = bool(
-            getattr(settings, "SEARXNG_DIAGNOSTICS_ENABLED", False)
-            and kwargs.get("allow_searxng_diagnostics", False)
-        )
-        if not results and searxng_allowed and used_provider == "none":
-            results, status, error = self._search_searxng(query, num_results)
-            if status == PROVIDER_LIVE:
-                used_provider = "searxng"
-
-        # 4. Database Cache fallback
         if not results and db and not free_only:
-            results, status, error = self._search_database_cache(query, db)
-            if status == PROVIDER_LIVE:
-                used_provider = "database_cache"
+            cached_results, cache_status, cache_error = self._search_database_cache(
+                query, db
+            )
+            if cached_results:
+                results = cached_results
                 status = PROVIDER_FALLBACK
+                error = cache_error
+                used_provider = "database_cache"
+            elif used_provider == "none":
+                status = cache_status
+                error = cache_error
 
-        # Store results in database for future cache
-        if db and results and status in (PROVIDER_LIVE, PROVIDER_FALLBACK):
-            for r in results:
+        if db and results and used_provider == "serper" and status == PROVIDER_LIVE:
+            for result in results:
                 try:
-                    item = WebResearchItem(
-                        company_id=company_id,
-                        query=query,
-                        title=r.title,
-                        url=r.url,
-                        source_domain=r.source_domain,
-                        snippet=r.snippet,
-                        confidence=int(r.confidence * 100),
-                        evidence_type=r.evidence_type,
-                        metadata_json={"provider": r.provider},
+                    db.add(
+                        WebResearchItem(
+                            company_id=company_id,
+                            query=query,
+                            title=result.title,
+                            url=result.url,
+                            source_domain=result.source_domain,
+                            snippet=result.snippet,
+                            confidence=int(result.confidence * 100),
+                            evidence_type=result.evidence_type,
+                            metadata_json={"provider": result.provider},
+                        )
                     )
-                    db.add(item)
-                except Exception as e:
-                    logger.warning("Failed to cache research result: %s", e)
+                except Exception as exc:
+                    logger.warning("Failed to cache research result: %s", exc)
             try:
                 db.commit()
-            except Exception as e:
+            except Exception as exc:
                 db.rollback()
-                logger.warning("Failed to commit research cache: %s", e)
+                logger.warning("Failed to commit research cache: %s", exc)
 
         return {
             "provider": used_provider,
             "provider_status": status,
-            "results": [r.to_dict() for r in results],
+            "results": [result.to_dict() for result in results],
             "query": query,
             "error": error,
         }
 
-    _cached_searxng_base: Optional[str] = None
-
-    def _get_candidate_searxng_urls(self) -> list[str]:
-        """Return candidate SearXNG base URLs in priority order."""
-        if getattr(self, "_cached_searxng_base", None):
-            return [self._cached_searxng_base]
-        if getattr(ResearchProviderRouter, "_cached_searxng_base", None):
-            return [ResearchProviderRouter._cached_searxng_base]
-
-        candidate_urls = []
-        if os.name == "nt":
-            try:
-                import subprocess
-                wsl_out = subprocess.check_output(
-                    ["wsl", "-d", "docker-desktop", "-e", "/bin/sh", "-c", "ip addr show eth0"],
-                    timeout=2,
-                    stderr=subprocess.DEVNULL,
-                ).decode("utf-8", errors="ignore")
-                m = re.search(r"inet\s+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)", wsl_out)
-                if m:
-                    candidate_urls.append(f"http://{m.group(1)}:8080")
-            except Exception:
-                pass
-
-        candidate_urls.extend([
-            os.environ.get("SEARXNG_BASE_URL", "").rstrip("/"),
-            str(getattr(settings, "SEARXNG_BASE_URL", "")).rstrip("/"),
-            "http://searxng:8080",
-            "http://localhost:8080",
-        ])
-        return list(dict.fromkeys(u for u in candidate_urls if u))
-
-    def get_searxng_base_url(self) -> Optional[str]:
-        """Detect and return the working SearXNG base URL."""
-        candidates = self._get_candidate_searxng_urls()
-        return candidates[0] if candidates else None
-
-    def _search_searxng(
-        self, query: str, num_results: int = 5
-    ) -> tuple[list[ResearchResult], str, Optional[str]]:
-        """Search via self-hosted SearXNG instance."""
-        candidate_urls = self._get_candidate_searxng_urls()
-
-        for base in candidate_urls:
-            url = f"{base}/search"
-            params = {
-                "q": query,
-                "format": "json",
-                "categories": "general,news",
-                "engines": "bing,yandex,bing news",
-                "language": "en-IN",
-            }
-            try:
-                resp = requests.get(url, params=params, timeout=16)
-                if resp.status_code == 200:
-                    ResearchProviderRouter._cached_searxng_base = base
-                    self._cached_searxng_base = base
-                    data = resp.json()
-                    raw_results = data.get("results", [])
-                    results = []
-                    for item in raw_results[:num_results]:
-                        results.append(ResearchResult(
-                            title=item.get("title", ""),
-                            url=item.get("url", ""),
-                            snippet=item.get("content", ""),
-                            provider="searxng",
-                            confidence=0.85,
-                        ))
-                    if results:
-                        return results, PROVIDER_LIVE, None
-                    if data.get("unresponsive_engines"):
-                        return [], PROVIDER_ERROR, "SearXNG search engines unavailable"
-                    return [], PROVIDER_EMPTY, "SearXNG returned no matching results"
-            except Exception as e:
-                logger.debug("SearXNG connection failed: %s", type(e).__name__)
-                continue
-        return [], PROVIDER_ERROR, "SearXNG unavailable"
-
-
-    def _search_google(
-        self, query: str, num_results: int
-    ) -> tuple[list[ResearchResult], str, Optional[str]]:
-        """Search via Google Custom Search JSON API."""
-        api_key = str(get_setting_value("GOOGLE_API_KEY", "")).strip()
-        cx = str(get_setting_value("GOOGLE_SEARCH_CX", "")).strip()
-
-        if not api_key or not cx or api_key.startswith("mock_") or api_key.startswith("YOUR_"):
-            return [], PROVIDER_NOT_CONFIGURED, "Google API key or Search Engine ID not configured"
-
-        try:
-            resp = requests.get(
-                "https://www.googleapis.com/customsearch/v1",
-                params={"key": api_key, "cx": cx, "q": query, "num": min(num_results, 10)},
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                logger.error("Google Custom Search HTTP %s: %s", resp.status_code, resp.text[:200])
-                return [], PROVIDER_ERROR, f"Google API HTTP {resp.status_code}"
-
-            data = resp.json()
-            results = []
-            for item in data.get("items", []):
-                results.append(ResearchResult(
-                    title=item.get("title", ""),
-                    url=item.get("link", ""),
-                    snippet=item.get("snippet", ""),
-                    provider="google_custom_search",
-                    confidence=0.75,
-                ))
-            return results, PROVIDER_LIVE, None
-
-        except Exception as e:
-            logger.exception("Google Custom Search error: %s", e)
-            return [], PROVIDER_ERROR, str(e)
-
     def _search_serper(
         self, query: str, num_results: int, **kwargs: Any
     ) -> tuple[list[ResearchResult], str, Optional[str]]:
-        """Search via Serper.dev API using SerperSearchProvider with budget management."""
         provider = SerperSearchProvider()
-        res = provider.search(query, num_results=num_results, **kwargs)
-        raw_results = res.get("results", []) or []
+        response = provider.search(query, num_results=num_results, **kwargs)
         results = [
             ResearchResult(
                 title=item.get("title", ""),
@@ -850,14 +465,17 @@ class ResearchProviderRouter:
                 position=item.get("position"),
                 metadata=item.get("metadata"),
             )
-            for item in raw_results
+            for item in response.get("results", []) or []
         ]
-        return results, res.get("provider_status", PROVIDER_ERROR), res.get("error")
+        return (
+            results,
+            response.get("provider_status", PROVIDER_ERROR),
+            response.get("error"),
+        )
 
     def _search_database_cache(
         self, query: str, db: Session
     ) -> tuple[list[ResearchResult], str, Optional[str]]:
-        """Search existing web_research database cache."""
         try:
             pattern = f"%{query.strip()}%"
             rows = (
@@ -873,75 +491,23 @@ class ResearchProviderRouter:
             )
             results = [
                 ResearchResult(
-                    title=r.title or "",
-                    url=r.url or "",
-                    snippet=r.snippet or "",
-                    source_domain=r.source_domain or "",
-                    confidence=(r.confidence or 50) / 100.0,
+                    title=row.title or "",
+                    url=row.url or "",
+                    snippet=row.snippet or "",
+                    source_domain=row.source_domain or "",
+                    confidence=(row.confidence or 50) / 100.0,
                     provider="database_cache",
                 )
-                for r in rows
+                for row in rows
             ]
-            return results, PROVIDER_FALLBACK if results else PROVIDER_NOT_CONFIGURED, None
-        except Exception as e:
-            logger.exception("Database cache search error: %s", e)
-            return [], PROVIDER_ERROR, str(e)
-
-    def fetch_public_page(
-        self, url: str, timeout: int = 10
-    ) -> Optional[Dict[str, Any]]:
-        """Fetch a public company page for evidence extraction.
-
-        Only fetches from public, non-authenticated pages.
-        Does NOT bypass login walls, anti-bot, or access restrictions.
-        """
-        try:
-            resp = requests.get(
-                url,
-                headers={
-                    "User-Agent": "Salesoorja-Research/1.0 (Business Intelligence)",
-                    "Accept": "text/html",
-                },
-                timeout=timeout,
-                allow_redirects=True,
+            return (
+                results,
+                PROVIDER_FALLBACK if results else PROVIDER_NOT_CONFIGURED,
+                None,
             )
-            if resp.status_code == 200:
-                # Basic text extraction (no JS rendering)
-                text = resp.text[:50000]
-                title_match = re.search(r"<title[^>]*>([^<]+)</title>", text, re.IGNORECASE)
-                title = title_match.group(1).strip() if title_match else url
-
-                # Strip HTML tags for plain text
-                clean = re.sub(r"<[^>]+>", " ", text)
-                clean = re.sub(r"\s+", " ", clean).strip()[:5000]
-
-                return {
-                    "url": url,
-                    "title": title,
-                    "text": clean,
-                    "status": "fetched",
-                    "status_code": 200,
-                }
-            elif resp.status_code in (401, 403, 429):
-                return {
-                    "url": url,
-                    "title": "",
-                    "text": "",
-                    "status": "access_restricted",
-                    "status_code": resp.status_code,
-                }
-            else:
-                return {
-                    "url": url,
-                    "title": "",
-                    "text": "",
-                    "status": "http_error",
-                    "status_code": resp.status_code,
-                }
-        except Exception as e:
-            logger.warning("Public page fetch failed for %s: %s", url, e)
-            return None
+        except Exception as exc:
+            logger.exception("Database cache search error: %s", exc)
+            return [], PROVIDER_ERROR, str(exc)
 
 
-# Singleton
 research_router = ResearchProviderRouter()

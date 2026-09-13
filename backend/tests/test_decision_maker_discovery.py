@@ -373,8 +373,7 @@ class TestResearchProviderAbstraction(unittest.TestCase):
         from services.research_provider import research_router
         status = research_router.get_provider_status()
 
-        # Should have at least 4 providers
-        self.assertGreaterEqual(len(status), 3)
+        self.assertEqual(set(status), {"serper", "database_cache"})
         # Each should report LIVE or NOT_CONFIGURED
         for name, st in status.items():
             self.assertIn(st, ["LIVE", "NOT_CONFIGURED"])
@@ -384,10 +383,12 @@ class TestResearchProviderAbstraction(unittest.TestCase):
         status = research_router.get_provider_status()
         self.assertEqual(status["database_cache"], "LIVE")
 
-    def test_public_page_fetch_always_available(self):
+    def test_no_legacy_live_provider_is_advertised(self):
         from services.research_provider import research_router
         status = research_router.get_provider_status()
-        self.assertEqual(status["public_page_fetch"], "LIVE")
+        self.assertNotIn("public_page_fetch", status)
+        self.assertNotIn("google_custom_search", status)
+        self.assertNotIn("searxng", status)
 
 
 class TestMultipleStakeholderDiscovery(unittest.TestCase):

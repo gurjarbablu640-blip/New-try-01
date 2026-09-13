@@ -18,12 +18,12 @@ export default function SettingsPage() {
   // Form State
   const [form, setForm] = useState({
     // AI Providers
-    OPENAI_API_KEY: "",
-    OPENAI_MODEL: "gpt-4o",
+    HIVE_API_KEY: "",
+    HIVE_MODEL: "deepseek-ai/DeepSeek-V4.1-Flash",
+    HIVE_ACCOUNT_MODE: "UNVERIFIED",
     GOOGLE_API_KEY: "",
-    ORCHESTRATOR_GEMINI_MODEL: "gemini-2.0-flash",
-    ORCHESTRATOR_PRIMARY_PROVIDER: "gemini",
-    ORCHESTRATOR_FALLBACK_PROVIDER: "openai",
+    GEMINI_ACCOUNT_MODE: "UNVERIFIED",
+    ORCHESTRATOR_GEMINI_MODEL: "gemini-3.1-flash-lite",
 
     // Apollo
     APOLLO_API_KEY: "",
@@ -47,7 +47,6 @@ export default function SettingsPage() {
 
     // Research & Calling
     SERPER_API_KEY: "",
-    APIFY_API_TOKEN: "",
     PILOT_PHONE_NUMBER: "+91-9876543210",
   });
 
@@ -69,12 +68,10 @@ export default function SettingsPage() {
       const data = res.data;
       setForm((prev) => ({
         ...prev,
-        OPENAI_API_KEY: data.ai_providers?.openai?.masked_key || "",
-        OPENAI_MODEL: data.ai_providers?.openai?.model || "gpt-4o",
+        HIVE_API_KEY: data.ai_providers?.deepseek?.masked_key || "",
+        HIVE_MODEL: data.ai_providers?.deepseek?.model || "deepseek-ai/DeepSeek-V4.1-Flash",
         GOOGLE_API_KEY: data.ai_providers?.gemini?.masked_key || "",
-        ORCHESTRATOR_GEMINI_MODEL: data.ai_providers?.gemini?.model || "gemini-2.0-flash",
-        ORCHESTRATOR_PRIMARY_PROVIDER: data.ai_providers?.primary_provider || "gemini",
-        ORCHESTRATOR_FALLBACK_PROVIDER: data.ai_providers?.fallback_provider || "openai",
+        ORCHESTRATOR_GEMINI_MODEL: data.ai_providers?.gemini?.model || "gemini-3.1-flash-lite",
 
         APOLLO_API_KEY: data.apollo?.masked_key || "",
 
@@ -128,7 +125,7 @@ export default function SettingsPage() {
     setTestingKey(testType);
     try {
       let res;
-      if (testType === "openai" || testType === "gemini") {
+      if (testType === "deepseek" || testType === "gemini") {
         res = await testAIProvider(testType);
       } else if (testType === "apollo") {
         res = await testApolloConnection();
@@ -150,15 +147,15 @@ export default function SettingsPage() {
 
   const renderStatusBadge = (configured, connectedStatus = null) => {
     if (connectedStatus === "CONNECTED") {
-      return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-emerald-900/60 text-emerald-300 border border-emerald-700">● LIVE — VERIFIED</span>;
+      return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-emerald-900/60 text-emerald-300 border border-emerald-700">â— LIVE â€” VERIFIED</span>;
     }
     if (connectedStatus === "AUTHENTICATION_FAILED" || connectedStatus === "CONNECTION_FAILED") {
-      return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-rose-900/60 text-rose-300 border border-rose-700">● Auth Failed</span>;
+      return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-rose-900/60 text-rose-300 border border-rose-700">â— Auth Failed</span>;
     }
     if (configured) {
-      return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-900/50 text-amber-300 border border-amber-700">● CONFIGURED — NOT LIVE TESTED</span>;
+      return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-900/50 text-amber-300 border border-amber-700">â— CONFIGURED â€” NOT LIVE TESTED</span>;
     }
-    return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700">● NOT CONFIGURED</span>;
+    return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700">â— NOT CONFIGURED</span>;
   };
 
   if (loading) {
@@ -175,7 +172,7 @@ export default function SettingsPage() {
       <div className="flex flex-col md:flex-row md:items-center md:justify-between pb-4 border-b border-zinc-800 gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-            <span>⚙️</span> System Settings & Integrations
+            <span>âš™ï¸</span> System Settings & Integrations
           </h1>
           <p className="text-sm text-zinc-400 mt-1">
             Configure secure API credentials, AI providers, Apollo pilot limits, and email channels without editing raw .env files.
@@ -186,18 +183,17 @@ export default function SettingsPage() {
             onClick={fetchSettings}
             className="px-3 py-1.5 text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded border border-zinc-700 transition"
           >
-            🔄 Reload
+            ðŸ”„ Reload
           </button>
           <button
             onClick={handleSave}
             disabled={saving}
             className="px-4 py-1.5 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded transition flex items-center gap-2 shadow"
           >
-            {saving ? "Saving..." : "💾 Save Changes"}
+            {saving ? "Saving..." : "ðŸ’¾ Save Changes"}
           </button>
         </div>
       </div>
-
       {/* Notification Banner */}
       {statusMsg && (
         <div
@@ -210,7 +206,7 @@ export default function SettingsPage() {
           }`}
         >
           <span>{statusMsg.text}</span>
-          <button onClick={() => setStatusMsg(null)} className="text-xs opacity-70 hover:opacity-100">✕</button>
+          <button onClick={() => setStatusMsg(null)} className="text-xs opacity-70 hover:opacity-100">âœ•</button>
         </div>
       )}
 
@@ -219,13 +215,13 @@ export default function SettingsPage() {
         {/* Navigation Sidebar */}
         <div className="space-y-1">
           {[
-            { id: "ai_providers", label: "AI Providers", icon: "🤖", badge: renderStatusBadge(settings?.ai_providers?.openai?.configured || settings?.ai_providers?.gemini?.configured) },
-            { id: "apollo", label: "Apollo Data Engine", icon: "🎯", badge: renderStatusBadge(settings?.apollo?.configured) },
-            { id: "smtp", label: "Outbound SMTP", icon: "📤", badge: renderStatusBadge(settings?.smtp?.configured) },
-            { id: "imap", label: "Inbound IMAP", icon: "📥", badge: renderStatusBadge(settings?.imap?.configured) },
-            { id: "research", label: "Web & Scrapers", icon: "🌐", badge: renderStatusBadge(settings?.research_sources?.serper_configured) },
-            { id: "calling", label: "Calling & Voice", icon: "📞", badge: <span className="px-2 py-0.5 text-xs bg-amber-950 text-amber-300 rounded border border-amber-800">Pilot</span> },
-            { id: "security", label: "Security & Vault", icon: "🔒", badge: <span className="px-2 py-0.5 text-xs bg-zinc-800 text-zinc-400 rounded">Masked</span> },
+            { id: "ai_providers", label: "AI Providers", icon: "ðŸ¤–", badge: renderStatusBadge(settings?.ai_providers?.deepseek?.configured || settings?.ai_providers?.gemini?.configured) },
+            { id: "apollo", label: "Apollo Data Engine", icon: "ðŸŽ¯", badge: renderStatusBadge(settings?.apollo?.configured) },
+            { id: "smtp", label: "Outbound SMTP", icon: "ðŸ“¤", badge: renderStatusBadge(settings?.smtp?.configured) },
+            { id: "imap", label: "Inbound IMAP", icon: "ðŸ“¥", badge: renderStatusBadge(settings?.imap?.configured) },
+            { id: "research", label: "Web Research", icon: "ðŸŒ", badge: renderStatusBadge(settings?.research_sources?.serper_configured) },
+            { id: "calling", label: "Calling & Voice", icon: "ðŸ“ž", badge: <span className="px-2 py-0.5 text-xs bg-amber-950 text-amber-300 rounded border border-amber-800">Pilot</span> },
+            { id: "security", label: "Security & Vault", icon: "ðŸ”’", badge: <span className="px-2 py-0.5 text-xs bg-zinc-800 text-zinc-400 rounded">Masked</span> },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -251,125 +247,82 @@ export default function SettingsPage() {
           {activeTab === "ai_providers" && (
             <div className="space-y-6">
               <div className="border-b border-zinc-800 pb-3">
-                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                  <span>🤖</span> AI Models & Providers
-                </h2>
+                <h2 className="text-lg font-semibold text-white">DeepSeek + Gemini</h2>
                 <p className="text-xs text-zinc-400 mt-0.5">
-                  Configure OpenAI and Google Gemini credentials. Fallback to deterministic internal metrology reasoning is always enabled.
+                  Fixed production chain: DeepSeek primary, Gemini fallback, deterministic gates final.
                 </p>
               </div>
 
-              {/* Provider Preference Selector */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-lg bg-zinc-950/60 border border-zinc-800/80">
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">Primary Orchestrator Provider</label>
-                  <select
-                    value={form.ORCHESTRATOR_PRIMARY_PROVIDER}
-                    onChange={(e) => setForm({ ...form, ORCHESTRATOR_PRIMARY_PROVIDER: e.target.value })}
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-200 focus:border-indigo-500 outline-none"
-                  >
-                    <option value="gemini">Google Gemini (Default / Recommended)</option>
-                    <option value="openai">OpenAI ChatGPT</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">Fallback Provider</label>
-                  <select
-                    value={form.ORCHESTRATOR_FALLBACK_PROVIDER}
-                    onChange={(e) => setForm({ ...form, ORCHESTRATOR_FALLBACK_PROVIDER: e.target.value })}
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-200 focus:border-indigo-500 outline-none"
-                  >
-                    <option value="openai">OpenAI ChatGPT</option>
-                    <option value="gemini">Google Gemini</option>
-                    <option value="deterministic">Internal Deterministic Logic (Zero LLM)</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Google Gemini Configuration */}
               <div className="p-4 rounded-lg bg-zinc-950/40 border border-zinc-800 space-y-3">
                 <div className="flex items-center justify-between">
+                  <span className="font-semibold text-sm text-zinc-200">DeepSeek via Hive</span>
                   <div className="flex items-center gap-2">
-                    <span className="font-semibold text-sm text-zinc-200">Google Gemini</span>
-                    {renderStatusBadge(settings?.ai_providers?.gemini?.configured, testResults.gemini?.status)}
+                    {renderStatusBadge(settings?.ai_providers?.deepseek?.configured, testResults.deepseek?.status)}
+                    <button
+                      type="button"
+                      disabled={testingKey === "deepseek"}
+                      onClick={() => runTest("deepseek")}
+                      className="px-2.5 py-1 text-xs bg-zinc-800 hover:bg-zinc-700 text-indigo-300 border border-zinc-700 rounded"
+                    >
+                      {testingKey === "deepseek" ? "Testing..." : "Test Connection"}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    disabled={testingKey === "gemini"}
-                    onClick={() => runTest("gemini")}
-                    className="px-2.5 py-1 text-xs bg-zinc-800 hover:bg-zinc-700 text-indigo-300 border border-zinc-700 rounded transition"
-                  >
-                    {testingKey === "gemini" ? "Testing..." : "Test Connection"}
-                  </button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-zinc-400 mb-1">GOOGLE_API_KEY</label>
-                    <input
-                      type="password"
-                      value={form.GOOGLE_API_KEY}
-                      onChange={(e) => setForm({ ...form, GOOGLE_API_KEY: e.target.value })}
-                      placeholder="AIzaSy••••••••"
-                      className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-zinc-400 mb-1">Model Name</label>
-                    <input
-                      type="text"
-                      value={form.ORCHESTRATOR_GEMINI_MODEL}
-                      onChange={(e) => setForm({ ...form, ORCHESTRATOR_GEMINI_MODEL: e.target.value })}
-                      className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none"
-                    />
-                  </div>
+                  <input
+                    type="password"
+                    value={form.HIVE_API_KEY}
+                    onChange={(e) => setForm({ ...form, HIVE_API_KEY: e.target.value })}
+                    placeholder="HIVE_API_KEY"
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-200 font-mono"
+                  />
+                  <input
+                    type="text"
+                    value={form.HIVE_MODEL}
+                    onChange={(e) => setForm({ ...form, HIVE_MODEL: e.target.value })}
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-200"
+                  />
                 </div>
-                {testResults.gemini && (
-                  <div className={`text-xs p-2 rounded ${testResults.gemini.status === "CONNECTED" ? "bg-emerald-950/60 text-emerald-300" : "bg-rose-950/60 text-rose-300"}`}>
-                    {testResults.gemini.message}
+                {testResults.deepseek && (
+                  <div className="text-xs p-2 rounded bg-zinc-900 text-zinc-300">
+                    {testResults.deepseek.message}
                   </div>
                 )}
               </div>
 
-              {/* OpenAI Configuration */}
               <div className="p-4 rounded-lg bg-zinc-950/40 border border-zinc-800 space-y-3">
                 <div className="flex items-center justify-between">
+                  <span className="font-semibold text-sm text-zinc-200">Google Gemini fallback</span>
                   <div className="flex items-center gap-2">
-                    <span className="font-semibold text-sm text-zinc-200">OpenAI</span>
-                    {renderStatusBadge(settings?.ai_providers?.openai?.configured, testResults.openai?.status)}
+                    {renderStatusBadge(settings?.ai_providers?.gemini?.configured, testResults.gemini?.status)}
+                    <button
+                      type="button"
+                      disabled={testingKey === "gemini"}
+                      onClick={() => runTest("gemini")}
+                      className="px-2.5 py-1 text-xs bg-zinc-800 hover:bg-zinc-700 text-indigo-300 border border-zinc-700 rounded"
+                    >
+                      {testingKey === "gemini" ? "Testing..." : "Test Connection"}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    disabled={testingKey === "openai"}
-                    onClick={() => runTest("openai")}
-                    className="px-2.5 py-1 text-xs bg-zinc-800 hover:bg-zinc-700 text-indigo-300 border border-zinc-700 rounded transition"
-                  >
-                    {testingKey === "openai" ? "Testing..." : "Test Connection"}
-                  </button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-zinc-400 mb-1">OPENAI_API_KEY</label>
-                    <input
-                      type="password"
-                      value={form.OPENAI_API_KEY}
-                      onChange={(e) => setForm({ ...form, OPENAI_API_KEY: e.target.value })}
-                      placeholder="sk-proj-••••••••"
-                      className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-zinc-400 mb-1">Model Name</label>
-                    <input
-                      type="text"
-                      value={form.OPENAI_MODEL}
-                      onChange={(e) => setForm({ ...form, OPENAI_MODEL: e.target.value })}
-                      className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none"
-                    />
-                  </div>
+                  <input
+                    type="password"
+                    value={form.GOOGLE_API_KEY}
+                    onChange={(e) => setForm({ ...form, GOOGLE_API_KEY: e.target.value })}
+                    placeholder="GOOGLE_API_KEY"
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-200 font-mono"
+                  />
+                  <input
+                    type="text"
+                    value={form.ORCHESTRATOR_GEMINI_MODEL}
+                    onChange={(e) => setForm({ ...form, ORCHESTRATOR_GEMINI_MODEL: e.target.value })}
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-200"
+                  />
                 </div>
-                {testResults.openai && (
-                  <div className={`text-xs p-2 rounded ${testResults.openai.status === "CONNECTED" ? "bg-emerald-950/60 text-emerald-300" : "bg-rose-950/60 text-rose-300"}`}>
-                    {testResults.openai.message}
+                {testResults.gemini && (
+                  <div className="text-xs p-2 rounded bg-zinc-900 text-zinc-300">
+                    {testResults.gemini.message}
                   </div>
                 )}
               </div>
@@ -381,7 +334,7 @@ export default function SettingsPage() {
             <div className="space-y-6">
               <div className="border-b border-zinc-800 pb-3">
                 <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                  <span>🎯</span> Apollo Lead Discovery & Enrichment
+                  <span>ðŸŽ¯</span> Apollo Lead Discovery & Enrichment
                 </h2>
                 <p className="text-xs text-zinc-400 mt-0.5">
                   Industrial B2B data provider for manufacturing plant decision-makers.
@@ -390,9 +343,9 @@ export default function SettingsPage() {
 
               {/* Pilot Safety Guard Banner */}
               <div className="p-4 rounded-lg bg-amber-950/40 border border-amber-800/80 flex items-start gap-3">
-                <span className="text-xl">🛡️</span>
+                <span className="text-xl">ðŸ›¡ï¸</span>
                 <div>
-                  <h4 className="text-sm font-semibold text-amber-200">Live Pilot Hard Cap: Maximum 5–6 Contacts</h4>
+                  <h4 className="text-sm font-semibold text-amber-200">Live Pilot Hard Cap: Maximum 5â€“6 Contacts</h4>
                   <p className="text-xs text-amber-300/80 mt-1">
                     To prevent accidental credit exhaustion during pilot onboarding, the backend strictly enforces a hard limit of 6 contacts per search batch.
                   </p>
@@ -420,7 +373,7 @@ export default function SettingsPage() {
                     type="password"
                     value={form.APOLLO_API_KEY}
                     onChange={(e) => setForm({ ...form, APOLLO_API_KEY: e.target.value })}
-                    placeholder="apollo_api_key_••••••••"
+                    placeholder="apollo_api_key_â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                     className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-200 focus:border-indigo-500 outline-none font-mono"
                   />
                 </div>
@@ -440,7 +393,7 @@ export default function SettingsPage() {
               <div className="border-b border-zinc-800 pb-3 flex items-center justify-between">
                 <div>
                   <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                    <span>📤</span> Outbound Email (SMTP)
+                    <span>ðŸ“¤</span> Outbound Email (SMTP)
                   </h2>
                   <p className="text-xs text-zinc-400 mt-0.5">
                     Transports personalized HTML campaigns, calibration reports, and quotation follow-ups.
@@ -448,7 +401,7 @@ export default function SettingsPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <span className={`px-2.5 py-1 text-xs font-semibold rounded-full border ${form.OUTBOUND_TEST_MODE ? "bg-amber-950 text-amber-300 border-amber-700" : "bg-emerald-950 text-emerald-300 border-emerald-700"}`}>
-                    {form.OUTBOUND_TEST_MODE ? "🛡️ TEST MODE (Safe)" : "🚀 LIVE MASS DISPATCH"}
+                    {form.OUTBOUND_TEST_MODE ? "ðŸ›¡ï¸ TEST MODE (Safe)" : "ðŸš€ LIVE MASS DISPATCH"}
                   </span>
                 </div>
               </div>
@@ -505,7 +458,7 @@ export default function SettingsPage() {
                       type="password"
                       value={form.SMTP_PASSWORD}
                       onChange={(e) => setForm({ ...form, SMTP_PASSWORD: e.target.value })}
-                      placeholder="••••••••"
+                      placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                       className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none font-mono"
                     />
                   </div>
@@ -568,7 +521,7 @@ export default function SettingsPage() {
               <div className="border-b border-zinc-800 pb-3 flex items-center justify-between">
                 <div>
                   <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                    <span>📥</span> Inbound Email (IMAP)
+                    <span>ðŸ“¥</span> Inbound Email (IMAP)
                   </h2>
                   <p className="text-xs text-zinc-400 mt-0.5">
                     Monitors customer replies, procurement inquiries, and objection signals.
@@ -579,7 +532,7 @@ export default function SettingsPage() {
                   onClick={copySMTPToIMAP}
                   className="px-2.5 py-1 text-xs bg-indigo-950 text-indigo-300 border border-indigo-800 hover:bg-indigo-900 rounded transition"
                 >
-                  🔗 Copy Credentials from SMTP
+                  ðŸ”— Copy Credentials from SMTP
                 </button>
               </div>
 
@@ -635,7 +588,7 @@ export default function SettingsPage() {
                       type="password"
                       value={form.IMAP_PASSWORD}
                       onChange={(e) => setForm({ ...form, IMAP_PASSWORD: e.target.value })}
-                      placeholder="••••••••"
+                      placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                       className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none font-mono"
                     />
                   </div>
@@ -655,7 +608,7 @@ export default function SettingsPage() {
             <div className="space-y-6">
               <div className="border-b border-zinc-800 pb-3">
                 <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                  <span>🌐</span> Web & Regulatory Research Scrapers
+                  <span>ðŸŒ</span> Web & Regulatory Research
                 </h2>
                 <p className="text-xs text-zinc-400 mt-0.5">
                   Powers the Regulatory Radar, corporate press release scanner, and NABL directory lookups.
@@ -669,17 +622,7 @@ export default function SettingsPage() {
                     type="password"
                     value={form.SERPER_API_KEY}
                     onChange={(e) => setForm({ ...form, SERPER_API_KEY: e.target.value })}
-                    placeholder="serper_key_••••••••"
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1">Apify Actor API Token</label>
-                  <input
-                    type="password"
-                    value={form.APIFY_API_TOKEN}
-                    onChange={(e) => setForm({ ...form, APIFY_API_TOKEN: e.target.value })}
-                    placeholder="apify_api_••••••••"
+                    placeholder="serper_key_â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                     className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none font-mono"
                   />
                 </div>
@@ -692,7 +635,7 @@ export default function SettingsPage() {
             <div className="space-y-6">
               <div className="border-b border-zinc-800 pb-3">
                 <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                  <span>📞</span> Calling & Voice Agent Pilot
+                  <span>ðŸ“ž</span> Calling & Voice Agent Pilot
                 </h2>
                 <p className="text-xs text-zinc-400 mt-0.5">
                   Controlled voice agent for pre-call briefs and live pilot call verification.
@@ -722,7 +665,7 @@ export default function SettingsPage() {
             <div className="space-y-6">
               <div className="border-b border-zinc-800 pb-3">
                 <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                  <span>🔒</span> Secret Storage & Zero-Trust Architecture
+                  <span>ðŸ”’</span> Secret Storage & Zero-Trust Architecture
                 </h2>
                 <p className="text-xs text-zinc-400 mt-0.5">
                   How Salesoorja protects sensitive API keys and credentials.
@@ -731,13 +674,13 @@ export default function SettingsPage() {
 
               <div className="p-4 rounded-lg bg-zinc-950/40 border border-zinc-800 space-y-3 text-xs text-zinc-300 leading-relaxed">
                 <div className="flex items-center gap-2 text-indigo-400 font-semibold">
-                  <span>🛡️</span> Zero Plaintext Secret Exposure
+                  <span>ðŸ›¡ï¸</span> Zero Plaintext Secret Exposure
                 </div>
                 <p>
-                  API keys and passwords are encrypted and persisted strictly in the backend. When querying settings from the frontend, values are masked with <code>••••••••</code>.
+                  API keys and passwords are encrypted and persisted strictly in the backend. When querying settings from the frontend, values are masked with <code>â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢</code>.
                 </p>
                 <div className="flex items-center gap-2 text-indigo-400 font-semibold pt-2">
-                  <span>⚡</span> Dynamic Runtime Overrides
+                  <span>âš¡</span> Dynamic Runtime Overrides
                 </div>
                 <p>
                   Any updates made through this interface immediately take effect across the AI Orchestrator, Apollo Adapter, and SMTP Dispatcher without requiring container restarts.

@@ -71,13 +71,13 @@ def list_runs():
         return sorted(runs, key=lambda r: r['created_at'], reverse=True)[:30]
 
 def provider_status():
-    from config import settings
-    url = str(getattr(settings, 'SEARXNG_BASE_URL', '') or '').strip()
-    key = str(get_setting_value('APOLLO_API_KEY', '') or '').strip()
-    configured = bool(key and not key.lower().startswith(('mock', 'your', 'placeholder')))
+    serper_key = str(get_setting_value('SERPER_API_KEY', '') or '').strip()
+    apollo_key = str(get_setting_value('APOLLO_API_KEY', '') or '').strip()
+    serper_configured = bool(serper_key and not serper_key.lower().startswith(('mock', 'your', 'placeholder')))
+    apollo_configured = bool(apollo_key and not apollo_key.lower().startswith(('mock', 'your', 'placeholder')))
     return {'providers': [
-        {'id':'searxng','name':'SearXNG public search','configured':bool(url),'available':bool(url),'reason':'Public search; connectivity checked during each run. No paid search fallback.'},
-        {'id':'apollo','name':'Apollo','configured':configured,'available':configured,'reason':'Explicit opt-in only; at most six candidate enrichment attempts per run. Credentials not live-tested.'},
+        {'id':'serper','name':'Serper production search','configured':serper_configured,'available':serper_configured,'reason':'Only live company, trigger, and facility research provider.'},
+        {'id':'apollo','name':'Apollo','configured':apollo_configured,'available':apollo_configured,'reason':'Explicit post-qualification enrichment only; credentials not live-tested.'},
     ]}
 
 def public_contacts(evidence):
@@ -159,7 +159,15 @@ def candidate_payload(candidate):
     evidence = candidate.evidence_sources or []
     import tldextract
     extractor = tldextract.TLDExtract(cache_dir=None, suffix_list_urls=())
-    domains = {extractor(urlparse(item.get('url', '')).hostname or '').top_domain_under_public_suffix
+
+    def registrable_domain(url):
+        extracted = extractor(urlparse(url).hostname or '')
+        modern_value = getattr(extracted, 'top_domain_under_public_suffix', '')
+        if modern_value:
+            return modern_value
+        return '.'.join(part for part in (extracted.domain, extracted.suffix) if part)
+
+    domains = {registrable_domain(item.get('url', ''))
                for item in evidence
                if item.get('url', '').startswith(('https://', 'http://'))
                and 'mock' not in json.dumps(item).lower()}

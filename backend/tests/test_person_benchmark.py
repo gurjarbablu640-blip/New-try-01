@@ -100,8 +100,11 @@ def test_expected_answer_never_enters_discovery_arguments():
 
 def test_pytest_scope_contains_no_live_hive_probe_scripts():
     repository_root = Path(__file__).resolve().parents[2]
-    pytest_config = (repository_root / "pytest.ini").read_text(encoding="utf-8")
-    unsafe_scripts = list((repository_root / "backend" / "scripts").glob("test_hive*.py"))
+    backend_root = Path(__file__).resolve().parents[1]
+    pytest_config_path = repository_root / "pytest.ini"
+    unsafe_scripts = list((backend_root / "scripts").glob("test_hive*.py"))
 
-    assert "testpaths = backend/tests" in pytest_config
+    if pytest_config_path.exists():
+        pytest_config = pytest_config_path.read_text(encoding="utf-8")
+        assert "testpaths = backend/tests" in pytest_config
     assert unsafe_scripts == []

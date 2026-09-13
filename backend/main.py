@@ -32,8 +32,6 @@ app.add_middleware(CORSMiddleware, allow_origins=origins or ["*"], allow_credent
 from routes.api import router as api_router  # noqa: E402
 from routes.pipeline import router as pipeline_router  # noqa: E402
 from routes.leads import router as leads_router  # noqa: E402
-from routes.scraper import router as scraper_router  # noqa: E402
-from routes.outreach import router as outreach_router  # noqa: E402
 from routes.activities import router as activities_router  # noqa: E402
 from routes.export import router as export_router  # noqa: E402
 from routes.sales_os import router as sales_os_router  # noqa: E402
@@ -55,8 +53,6 @@ from routes.contact_research import router as contact_research_router  # noqa: E
 app.include_router(api_router)
 app.include_router(pipeline_router)
 app.include_router(leads_router)
-app.include_router(scraper_router)
-app.include_router(outreach_router)
 app.include_router(activities_router)
 app.include_router(export_router)
 app.include_router(sales_os_router)

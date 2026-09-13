@@ -353,23 +353,6 @@ class TestIntelligenceRefinements(unittest.TestCase):
         self.assertEqual(len(clean), 1)
         self.assertIn("commissions new EV manufacturing plant", clean[0]["title"])
 
-    def test_discover_facility_pages_production_service(self):
-        from services.crawl4ai_pipeline import discover_facility_pages
-
-        sample_html = """
-        <html>
-          <body>
-            <a href="/manufacturing-facilities">Our Manufacturing Facilities</a>
-            <a href="/plants/manesar">Manesar Plant</a>
-            <a href="/investor-relations">Investor Relations</a>
-            <a href="/contact-us">Contact Us</a>
-          </body>
-        </html>
-        """
-        pages = discover_facility_pages("example.com", html_text=sample_html)
-        self.assertGreaterEqual(len(pages), 2)
-        self.assertTrue(any("manufacturing-facilities" in p or "plants" in p for p in pages))
-
     def test_cross_company_candidate_rejected(self):
         from services.decision_maker_discovery import classify_company_evidence, score_candidate_functional_ownership
 

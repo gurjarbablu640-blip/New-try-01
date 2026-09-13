@@ -171,12 +171,10 @@ class DeepFacilityResolver:
         domain: str,
         company_name: str,
         known_city: Optional[str] = None,
-        deerflow_adapter: Optional[Any] = None,
     ) -> Tuple[List[str], int]:
         """Fetch plant and facility evidence directly from company's official domain."""
         import urllib.request
         snippets = []
-        deerflow_jobs = 0
         paths = ["contact-us", "contact", "locations", "facilities", "manufacturing-facilities", ""]
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -199,28 +197,10 @@ class DeepFacilityResolver:
                                 snippets.append(clean_line)
                     if snippets:
                         break
-            except Exception as e:
-                # If static HTTP fails with challenge/redirect and deerflow is available, escalate
-                if deerflow_adapter and getattr(deerflow_adapter, "enabled", False) and path in ("contact-us", "contact"):
-                    try:
-                        logger.info("Escalating %s to DeerFlow browser for location extraction", url)
-                        res = deerflow_adapter.dispatch_research_task(
-                            company_name=company_name,
-                            domain=domain,
-                            target_urls=[url],
-                            focus_areas=["plants", "locations", "facilities"],
-                        )
-                        deerflow_jobs += 1
-                        extracted = res.get("data", {}).get("extracted_text", "")
-                        for line in extracted.split("\n"):
-                            clean_line = line.strip()
-                            if 20 < len(clean_line) < 250 and any(c in clean_line.lower() for c in INDUSTRIAL_CLUSTERS):
-                                snippets.append(clean_line)
-                    except Exception as df_err:
-                        logger.warning("DeerFlow escalation failed for %s: %s", domain, df_err)
+            except Exception:
                 continue
 
-        return snippets, deerflow_jobs
+        return snippets, 0
 
 
 # Global instance

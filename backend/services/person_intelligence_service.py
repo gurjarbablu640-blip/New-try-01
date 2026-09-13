@@ -1689,37 +1689,6 @@ def verify_candidate_stage_b(
                         company_domain=company_domain,
                         source_date=str(r.get("date") or r.get("source_date") or ""),
                     )
-                    if "linkedin.com/in/" in u.lower():
-                        try:
-                            from services.linkedin_mcp_provider import linkedin_mcp_provider
-                            if linkedin_mcp_provider and linkedin_mcp_provider.enabled and linkedin_mcp_provider.get_status().get("status") == "READY":
-                                exp_res = linkedin_mcp_provider.verify_candidate_experience(
-                                    profile_url=u,
-                                    target_company=company_name,
-                                    target_facility=facility_name,
-                                    target_city=city,
-                                )
-                                target_exp = exp_res.get("target_experience") or {}
-                                mcp_snip = f"{exp_res.get('current_title', '')} at {company_name}. {target_exp.get('dates', '')} {target_exp.get('location', '')}".strip()
-                                packet.add_source(
-                                    url=u,
-                                    title=f"{exp_res.get('name', cand_name)} - {exp_res.get('current_title', '')} | LinkedIn",
-                                    snippet=mcp_snip or s,
-                                    source_type="LINKEDIN_PROFILE",
-                                    company_domain=company_domain,
-                                    source_date="2026-09-13",
-                                )
-                                if exp_res.get("is_contradicted") or exp_res.get("current_employment") == "CONTRADICTED":
-                                    packet.current_employment = "CONTRADICTED"
-                                elif exp_res.get("current_employment") == "VERIFIED":
-                                    packet.current_employment = "VERIFIED"
-                                mcp_fac = exp_res.get("facility_relationship")
-                                if mcp_fac in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER"):
-                                    packet.facility_relationship = mcp_fac
-                                elif mcp_fac == "STRONG" and packet.facility_relationship not in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER"):
-                                    packet.facility_relationship = "STRONG"
-                        except Exception as mcp_err:
-                            logger.debug("Stage B LinkedIn MCP verification skip: %s", mcp_err)
         except Exception as e:
             logger.warning("Stage B verification query '%s' failed for %s: %s", q, cand_name, e)
 
@@ -2487,9 +2456,6 @@ def discover_and_rank_decision_makers(
         "hive_input_tokens": 0,
         "hive_output_tokens": 0,
         "deepseek_queries_generated": 0,
-        "linkedin_mcp_status": "DISABLED",
-        "linkedin_mcp_candidates_found": 0,
-        "linkedin_mcp_verifications": 0,
         "query_audit": [],
         "search_errors": [],
         "source_yield": {
@@ -2611,136 +2577,6 @@ def discover_and_rank_decision_makers(
         max_company_budget = max_company_queries
 
     stopped_early = False
-
-    # Phase 0: Optional Read-Only LinkedIn MCP Verification Sidecar
-    mcp_provider = None
-    try:
-        from services.linkedin_mcp_provider import linkedin_mcp_provider
-        mcp_provider = linkedin_mcp_provider
-    except Exception as e:
-        logger.debug("LinkedIn MCP provider import failed: %s", e)
-
-    if mcp_provider and mcp_provider.enabled:
-        status_info = mcp_provider.get_status()
-        telemetry["linkedin_mcp_status"] = status_info.get("status", "DISABLED")
-        if status_info.get("status") == "READY":
-            try:
-                # 1. Resolve company profile and numeric URN
-                comp_info = mcp_provider.resolve_company(company_name, domain=company_domain)
-                comp_urn = comp_info.get("company_urn") if comp_info else None
-                telemetry["linkedin_mcp_company_urn"] = comp_urn
-                telemetry["linkedin_mcp_company_slug"] = comp_info.get("company_slug") if comp_info else None
-
-                # 2. Search senior decision-makers (unseeded, using role hierarchy)
-                discovered = mcp_provider.search_decision_makers(
-                    company_name=company_name,
-                    company_urn=comp_urn,
-                    company_slug=comp_info.get("company_slug") if comp_info else None,
-                    city=city,
-                    facility_name=facility_name,
-                    max_candidates=mcp_provider.max_candidates,
-                )
-                telemetry["linkedin_mcp_candidates_found"] = len(discovered)
-
-                # 3. For each candidate found, verify profile Experience
-                for disc in discovered:
-                    p_url = disc.get("profile_url")
-                    if not p_url:
-                        continue
-                    exp_verif = mcp_provider.verify_candidate_experience(
-                        profile_url=p_url,
-                        target_company=company_name,
-                        target_facility=facility_name,
-                        target_city=city,
-                    )
-                    telemetry["linkedin_mcp_verifications"] = telemetry.get("linkedin_mcp_verifications", 0) + 1
-
-                    cand_name = exp_verif.get("name") or disc.get("name")
-                    cand_title = exp_verif.get("current_title") or disc.get("title")
-
-                    # Check human entity
-                    is_human, _ = is_human_person_candidate(cand_name, company_name=company_name)
-                    if not is_human:
-                        telemetry["non_human_rejected"] += 1
-                        continue
-
-                    # Construct snippet from experience
-                    target_exp = exp_verif.get("target_experience") or {}
-                    exp_snippet = f"{cand_title} at {company_name}. {target_exp.get('dates', '')} {target_exp.get('location', '')} {target_exp.get('description', '')}".strip()
-
-                    packet = create_person_evidence_packet(
-                        candidate_name=cand_name,
-                        current_title=cand_title,
-                        target_company=company_name,
-                        target_facility=facility_name,
-                        target_city=city,
-                        target_state=INDIAN_CITIES_TO_STATE.get(city.lower(), ""),
-                        initial_source={
-                            "url": p_url,
-                            "title": f"{cand_name} - {cand_title} - {company_name} | LinkedIn",
-                            "snippet": exp_snippet if exp_verif.get("current_employment") == "VERIFIED" else f"{exp_verif.get('headline')} {exp_snippet}",
-                            "source_type": "LINKEDIN_PROFILE",
-                            "source_date": "2026-09-13",
-                        },
-                        company_domain=company_domain,
-                        facility_aliases=facility_aliases,
-                    )
-
-                    # Apply exact LinkedIn MCP parsed employment and facility attributes
-                    # (Respecting Correction 1 & Correction 7)
-                    if exp_verif.get("is_contradicted") or exp_verif.get("current_employment") == "CONTRADICTED":
-                        packet.current_employment = "CONTRADICTED"
-                    elif exp_verif.get("current_employment") == "VERIFIED":
-                        packet.current_employment = "VERIFIED"
-
-                    mcp_fac_rel = exp_verif.get("facility_relationship")
-                    if mcp_fac_rel in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER"):
-                        packet.facility_relationship = mcp_fac_rel
-                    elif mcp_fac_rel == "STRONG":
-                        if packet.facility_relationship not in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER"):
-                            packet.facility_relationship = "STRONG"
-
-                    packet.derive()
-
-                    mcp_cand_dict = {
-                        "name": cand_name,
-                        "title": cand_title,
-                        "company": company_name,
-                        "facility": facility_name or city,
-                        "location": exp_verif.get("profile_location") or city or facility_name,
-                        "current_employment": packet.current_employment,
-                        "facility_relationship": packet.facility_relationship,
-                        "authority_class": packet.function_ownership,
-                        "person_score": packet.score,
-                        "person_confidence": packet.confidence,
-                        "contact_route": packet.contact_route,
-                        "source_url": p_url,
-                        "source_type": "LINKEDIN_PROFILE",
-                        "source_provenance": "LINKEDIN_MCP",
-                        "evidence_snippet": exp_snippet[:500],
-                        "evidence_packet": packet.to_dict(),
-                        "function_verified": exp_verif.get("function_verified", False),
-                        "authority_verified": exp_verif.get("authority_verified", False),
-                    }
-
-                    key = (_normalize_person_name(cand_name), _normalize_company_name(company_name))
-                    existing_index = candidate_indexes.get(key)
-                    if existing_index is None:
-                        candidate_indexes[key] = len(all_candidates)
-                        all_candidates.append(mcp_cand_dict)
-                    elif _person_sort_key(mcp_cand_dict) < _person_sort_key(all_candidates[existing_index]):
-                        all_candidates[existing_index] = mcp_cand_dict
-
-            except Exception as mcp_err:
-                logger.warning("LinkedIn MCP discovery error: %s", mcp_err)
-                telemetry["linkedin_mcp_error"] = type(mcp_err).__name__
-
-    if _has_sufficient_evidence(all_candidates):
-        stopped_early = True
-        telemetry["stopped_early"] = True
-        telemetry["early_stop_reason"] = "SUFFICIENT_EVIDENCE_LINKEDIN_MCP"
-        if serper_budget_manager:
-            serper_budget_manager.record_search_stopped_early(1)
 
     if not stopped_early:
         # 1. Initial Tier: 3-5 intelligent queries

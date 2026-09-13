@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from services import contact_research as s
-from services.research_provider import ResearchProviderRouter, PROVIDER_ERROR, PROVIDER_NOT_CONFIGURED
+from services.research_provider import ResearchProviderRouter, PROVIDER_NOT_CONFIGURED
 
 class ContactResearchTests(unittest.TestCase):
     def setUp(self):
@@ -29,11 +29,11 @@ class ContactResearchTests(unittest.TestCase):
         s.ACTIVE = 'busy'
         with self.assertRaises(RuntimeError): s.start_run([1])
         with self.assertRaises(ValueError): s.start_run(list(range(51)))
-    def test_free_search_never_calls_paid_searxng_or_cache(self):
+    def test_free_only_search_skips_external_and_database_calls(self):
         router = ResearchProviderRouter()
-        with patch.object(router,'_search_google') as google, patch.object(router,'_search_serper') as serper, patch.object(router,'_search_database_cache') as cache, patch.object(router,'_search_searxng') as searxng:
+        with patch.object(router,'_search_serper') as serper, patch.object(router,'_search_database_cache') as cache:
             result = router.search('example',free_only=True)
-        google.assert_not_called(); serper.assert_not_called(); searxng.assert_not_called(); cache.assert_not_called()
+        serper.assert_not_called(); cache.assert_not_called()
         self.assertEqual(result['provider_status'],PROVIDER_NOT_CONFIGURED)
     def test_csv_neutralizes_formula(self):
         csv = s.export_csv({'results':[{'company_id':1,'company_name':'=CMD()','candidates':[],'public_contacts':[{'type':'email','value':'qa@example.com','status':'PUBLICLY_LISTED_UNVERIFIED','source_url':'https://example.com'}]}]})
@@ -95,16 +95,6 @@ class ContactResearchTests(unittest.TestCase):
         self.assertIs(merged, old)
         self.assertEqual(merged.verification_status, 'PERSON_REJECTED')
         self.assertEqual(len(merged.evidence_sources), 2)
-
-    def test_searx_engine_failure_is_not_empty_success(self):
-        response = MagicMock(status_code=200)
-        response.json.return_value = {'results': [], 'unresponsive_engines': [['google', 'timeout']]}
-        with patch('services.research_provider.requests.get', return_value=response) as request:
-            results, status, error = ResearchProviderRouter()._search_searxng('test')
-        self.assertEqual(status, PROVIDER_ERROR)
-        self.assertEqual(request.call_count, 1)
-
-
 
     def test_actual_domain_library_and_confidence_gate(self):
         from types import SimpleNamespace

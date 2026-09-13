@@ -1,7 +1,7 @@
 """Source Verification and Citation Normalization Pipeline.
 
 Enforces Salesoorja Evidence Invariants:
-1. LLM-discovered sources (e.g. from UnoRouter glm-5.3-search:free) are DISCOVERY EVIDENCE only.
+1. LLM-discovered sources are DISCOVERY EVIDENCE only.
 2. An LLM-generated claim can NEVER be promoted directly to:
    - TRIGGER_VERIFIED
    - FACILITY_VERIFIED

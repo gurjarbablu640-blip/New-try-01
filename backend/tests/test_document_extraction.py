@@ -1,13 +1,10 @@
-import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from services.document_extraction import (
     extract_local_pdf_with_docling,
     extract_pdf_bytes,
-    extract_url_with_crawl4ai,
 )
 
 
@@ -49,32 +46,5 @@ class DocumentExtractionTests(unittest.TestCase):
             self.assertEqual(result.status, "SUCCESS")
             self.assertEqual(result.text, "# Extracted locally")
 
-    def test_crawl4ai_rejects_non_public_and_non_http_urls(self):
-        result = asyncio.run(extract_url_with_crawl4ai("file:///etc/passwd", enabled=True))
-        self.assertEqual(result.status, "REJECTED")
-
-    def test_crawl4ai_uses_injected_async_crawler_for_public_url(self):
-        class Outcome:
-            markdown = "Public page"
-
-        class Crawler:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                return False
-
-            async def arun(self, *, url):
-                assert url == "https://example.com/page"
-                return Outcome()
-
-        # Avoid DNS in this unit test; the URL policy itself is covered by rejection.
-        with patch("services.document_extraction._public_http_url", return_value=(True, "")):
-            result = asyncio.run(extract_url_with_crawl4ai("https://example.com/page", enabled=True, crawler=Crawler()))
-            self.assertEqual(result.status, "SUCCESS")
-            self.assertEqual(result.text, "Public page")
-
-
 if __name__ == "__main__":
     unittest.main()
-

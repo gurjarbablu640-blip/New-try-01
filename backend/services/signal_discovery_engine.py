@@ -521,7 +521,7 @@ def discover_new_calibration_opportunities(
 def generate_industrial_trigger_query(company_name: str) -> str:
     """Generate an industrial trigger query with negative financial and stock keywords.
 
-    Ensures web and SearXNG research prioritizes capex, commissioning, plant expansions,
+    Ensures Serper research prioritizes capex, commissioning, plant expansions,
     machinery setup, and metrology rather than stock prices, brokerage ratings, and equity noise.
     """
     clean_name = company_name.strip()
@@ -590,7 +590,7 @@ def generate_adaptive_trigger_queries(
     clean_name = re.sub(r"\b(Limited|Ltd\.?|Pvt\.?|Private|LLP|Inc\.?)\b", "", company_name, flags=re.IGNORECASE).strip()
     full_name = company_name.strip()
 
-    # Pass 1: High-yield event queries (uncluttered booleans that SearXNG engines handle reliably)
+    # Pass 1: High-yield event queries with uncluttered boolean terms
     pass1 = [
         f'"{clean_name}" "new plant" OR "plant expansion" OR "commissioning" -stock -share',
         f'"{clean_name}" "commercial production" OR "capacity expansion" -stock',
@@ -657,5 +657,4 @@ def expand_trigger_queries_with_gemini(
     except Exception as e:
         logger.debug(f"Gemini query expansion skipped: {e}")
         return []
-
 

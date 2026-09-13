@@ -1,5 +1,4 @@
 """Application configuration — loaded from environment variables."""
-import os
 from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,12 +28,8 @@ class Settings(BaseSettings):
 
     # Google / Gemini
     GOOGLE_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""
     GOOGLE_MAPS_API_KEY: str = ""
-    GOOGLE_SEARCH_CX: str = ""  # Google Custom Search Engine ID
-
-    # Serper.dev Search API
-    SERPER_API_KEY: str = ""
-
     # Zero-Cost LLM Cost Policy & Account Verification
     LLM_COST_POLICY: str = "ZERO_COST_ONLY"
     ALLOW_PAID_LLM: bool = False
@@ -42,30 +37,6 @@ class Settings(BaseSettings):
     # Gemini Settings & Account Verification
     GEMINI_ACCOUNT_MODE: str = "FREE_NO_BILLING"  # Allowed: FREE_NO_BILLING, PAID, UNVERIFIED (Default: FREE_NO_BILLING)
     ORCHESTRATOR_GEMINI_MODEL: str = "gemini-3.1-flash-lite"
-
-    # Groq Settings & Account Verification
-    GROQ_API_KEY: str = ""
-    GROQ_ACCOUNT_MODE: str = "UNVERIFIED"  # Allowed: FREE, PAID, UNVERIFIED (Default: UNVERIFIED)
-    GROQ_MODEL: str = "openai/gpt-oss-20b"
-
-    # OpenRouter Settings & Account Verification
-    OPENROUTER_API_KEY: str = ""
-    OPENROUTER_ACCOUNT_MODE: str = "UNVERIFIED"  # Allowed: FREE, PAID, UNVERIFIED (Default: UNVERIFIED)
-    OPENROUTER_MODEL: str = "meta-llama/llama-3.3-70b-instruct:free"
-
-    # Cloudflare Settings & Account Verification
-    CLOUDFLARE_ACCOUNT_ID: str = ""
-    CLOUDFLARE_API_TOKEN: str = ""
-    CLOUDFLARE_ACCOUNT_MODE: str = "UNVERIFIED"  # Allowed: FREE, PAID, UNVERIFIED (Default: UNVERIFIED)
-    CLOUDFLARE_MODEL: str = "@cf/meta/llama-3.1-8b-instruct"
-
-    # UnoRouter Settings & Zero-Cost Route
-    UNOROUTER_API_KEY: str = ""
-    UNOROUTER_ENABLED: bool = True
-    UNOROUTER_BASE_URL: str = "https://api.unorouter.com/v1"
-    UNOROUTER_MODEL: str = "glm-5.3-search:free"
-    UNOROUTER_ACCOUNT_MODE: str = "FREE"  # Allowed: FREE, PAID, UNVERIFIED (Default: FREE for approved zero-cost routes)
-    UNOROUTER_TIMEOUT: int = 90
 
     # Hive Settings & Promotional-Credit Safety
     HIVE_API_KEY: str = ""
@@ -77,19 +48,7 @@ class Settings(BaseSettings):
     HIVE_INPUT_USD_PER_MILLION_TOKENS: float = 0.15
     HIVE_OUTPUT_USD_PER_MILLION_TOKENS: float = 0.60
 
-    # LLM Reasoning Cache
-    LLM_CACHE_ENABLED: bool = True
-    LLM_CACHE_DIR: str = "data/llm_cache"
-    LLM_CACHE_TTL_DAYS: int = 30
-
-    # OpenAI / ChatGPT (Retained for manual/explicit use only; blocked when ALLOW_PAID_LLM=False)
-    OPENAI_API_KEY: str = ""
-    OPENAI_MODEL: str = "gpt-4o"
-
-    # Orchestrator LLM Settings (Zero-Cost Safe)
-    ORCHESTRATOR_PRIMARY_PROVIDER: str = "gemini"
-    ORCHESTRATOR_FALLBACK_PROVIDER: str = "groq"
-    ORCHESTRATOR_OPENAI_MODEL: str = "gpt-4o"
+    # Orchestrator LLM Settings
     ORCHESTRATOR_MAX_ITERATIONS: int = 6
     ORCHESTRATOR_TOKEN_BUDGET: int = 20000
 
@@ -123,22 +82,6 @@ class Settings(BaseSettings):
     SERPER_BUDGET_TIMEZONE: str = "Asia/Kolkata"
     SERPER_INITIAL_QUERIES_PER_COMPANY: int = 4
     SERPER_MAX_QUERIES_PER_COMPANY: int = 10
-    SEARXNG_BASE_URL: str = "http://localhost:8080"
-    SEARXNG_AUTO_FALLBACK: bool = False
-    SEARXNG_DIAGNOSTICS_ENABLED: bool = False
-
-    # DeerFlow Service Adapter (Isolated HTTP boundary)
-    DEERFLOW_BASE_URL: str = os.getenv("DEERFLOW_BASE_URL", "http://deerflow:8001" if os.path.exists("/.dockerenv") else "http://localhost:8001")
-    DEERFLOW_ENABLED: bool = True
-    DEERFLOW_TIMEOUT_SECONDS: int = 60
-
-    # LinkedIn MCP Service Provider (Optional Read-Only Sidecar)
-    LINKEDIN_MCP_ENABLED: bool = False
-    LINKEDIN_MCP_URL: str = "http://127.0.0.1:8765/mcp"
-    LINKEDIN_MCP_HOST_HEADER: str = ""
-    LINKEDIN_MCP_TIMEOUT_SECONDS: int = 180
-    LINKEDIN_MCP_MAX_CANDIDATES: int = 3
-
     # App settings
     SECRET_KEY: str = "change-me-in-production"
     DEBUG: bool = True

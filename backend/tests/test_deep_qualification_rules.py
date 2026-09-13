@@ -161,17 +161,6 @@ class TestDeepQualificationRules(unittest.TestCase):
         self.assertEqual(classify_contact_evidence_level("quality@company.com"), "GENERIC_DEPARTMENTAL")
         self.assertEqual(classify_contact_evidence_level("info@company.com"), "CORPORATE_SWITCHBOARD_CONTACT")
 
-    def test_official_deerflow_status_and_custom_playwright_service(self):
-        """Phase 1 & 2: Custom Playwright service is distinct from official ByteDance DeerFlow."""
-        from services.browser_research_adapter import (
-            OFFICIAL_DEERFLOW_STATUS,
-            browser_research_adapter,
-        )
-        self.assertEqual(OFFICIAL_DEERFLOW_STATUS, "WAITING_FOR_VERIFIED_ZERO_COST_MODEL")
-        status = browser_research_adapter.get_status()
-        self.assertIn(status.get("service"), ("browser_research_service", "disabled", "unreachable"))
-        self.assertEqual(status.get("official_deerflow_status"), "WAITING_FOR_VERIFIED_ZERO_COST_MODEL")
-
     def test_production_ready_vs_apollo_ready_semantics(self):
         """Phase 4: Apollo-ready and research-qualified leads are NOT production-ready."""
         candidate = {

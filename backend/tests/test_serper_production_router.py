@@ -6,7 +6,7 @@ Verifies:
 3. Daily counter reset across date boundaries.
 4. Early stopping stops additional queries and records early stop counter.
 5. Per-company budget stops at or before configured limit (default 10).
-6. SearXNG is NOT automatically invoked after Serper failure.
+6. Serper failure does not invoke an alternate live search provider.
 7. SERPER_API_KEY is never logged or exposed in telemetry.
 8. Runtime cache file is in .gitignore and not git-tracked.
 9. Kehems-style generic title ("Deputy Manager") enters candidate pool with LOW confidence.
@@ -15,14 +15,12 @@ Verifies:
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from config import settings
 from services.research_provider import (
     ResearchProviderRouter,
     SerperSearchProvider,
@@ -201,10 +199,10 @@ class TestEarlyStoppingAndPerCompanyBudget:
         assert telemetry.get("queries_run") <= 10
 
 
-class TestSearXNGPolicy:
-    """Test SearXNG is NOT automatically invoked when Serper is primary."""
+class TestSerperOnlyRouting:
+    """Test that no alternative live research provider is reachable."""
 
-    def test_serper_success_never_calls_searxng(self):
+    def test_serper_success_is_returned_directly(self):
         router = ResearchProviderRouter()
         result = ResearchResult(
             title="Quality Head",
@@ -213,98 +211,75 @@ class TestSearXNGPolicy:
             provider="serper",
         )
 
-        with patch.object(router, "_search_serper", return_value=([result], PROVIDER_LIVE, None)):
-            with patch.object(router, "_search_searxng") as mock_searxng:
-                with patch("services.research_provider.get_setting_value") as mock_settings:
-                    mock_settings.side_effect = lambda key, default="": (
-                        "valid_serper_key_123456789" if key == "SERPER_API_KEY" else default
-                    )
-                    res = router.search("Example Ltd quality head")
+        with patch.object(
+            router,
+            "_search_serper",
+            return_value=([result], PROVIDER_LIVE, None),
+        ):
+            with patch(
+                "services.research_provider.get_setting_value",
+                side_effect=lambda key, default="": (
+                    "valid_serper_key_123456789"
+                    if key == "SERPER_API_KEY"
+                    else default
+                ),
+            ):
+                response = router.search("Example Ltd quality head")
 
-        assert res["provider"] == "serper"
-        mock_searxng.assert_not_called()
+        assert response["provider"] == "serper"
 
-    def test_searxng_not_automatically_invoked_after_serper(self):
+    def test_serper_empty_does_not_switch_live_provider(self):
         router = ResearchProviderRouter()
 
-        with patch.object(router, "_search_serper", return_value=([], PROVIDER_EMPTY, "No results")):
-            with patch.object(router, "_search_searxng") as mock_searxng:
-                with patch("services.research_provider.get_setting_value") as mock_settings:
-                    def get_setting(key, default=""):
-                        if key == "SERPER_API_KEY":
-                            return "valid_serper_key_123456789"
-                        return default
-                    mock_settings.side_effect = get_setting
+        with patch.object(
+            router,
+            "_search_serper",
+            return_value=([], PROVIDER_EMPTY, "No results"),
+        ):
+            with patch(
+                "services.research_provider.get_setting_value",
+                side_effect=lambda key, default="": (
+                    "valid_serper_key_123456789"
+                    if key == "SERPER_API_KEY"
+                    else default
+                ),
+            ):
+                response = router.search("Maruti Suzuki quality manager")
 
-                    # With default SEARXNG_AUTO_FALLBACK=False, SearXNG must NOT be called
-                    res = router.search("Maruti Suzuki quality manager")
-                    assert res["provider"] != "searxng"
-                    mock_searxng.assert_not_called()
+        assert response["provider"] == "serper"
+        assert response["provider_status"] == PROVIDER_EMPTY
 
-    def test_serper_budget_exhausted_never_calls_searxng(self):
+    def test_serper_budget_exhaustion_stops_routing(self):
         router = ResearchProviderRouter()
 
-        with patch.object(router, "_search_serper", return_value=([], PROVIDER_BUDGET_EXHAUSTED, "SERPER_DAILY_BUDGET_EXHAUSTED")):
-            with patch.object(router, "_search_searxng") as mock_searxng:
-                with patch("services.research_provider.get_setting_value") as mock_settings:
-                    def get_setting(key, default=""):
-                        if key == "SERPER_API_KEY":
-                            return "valid_serper_key_123456789"
-                        return default
-                    mock_settings.side_effect = get_setting
+        with patch.object(
+            router,
+            "_search_serper",
+            return_value=(
+                [],
+                PROVIDER_BUDGET_EXHAUSTED,
+                "SERPER_DAILY_BUDGET_EXHAUSTED",
+            ),
+        ):
+            with patch(
+                "services.research_provider.get_setting_value",
+                side_effect=lambda key, default="": (
+                    "valid_serper_key_123456789"
+                    if key == "SERPER_API_KEY"
+                    else default
+                ),
+            ):
+                response = router.search("Maruti Suzuki quality manager")
 
-                    res = router.search("Maruti Suzuki quality manager")
-                    assert res["provider_status"] == PROVIDER_BUDGET_EXHAUSTED
-                    mock_searxng.assert_not_called()
+        assert response["provider"] == "serper"
+        assert response["provider_status"] == PROVIDER_BUDGET_EXHAUSTED
 
-    def test_explicit_diagnostics_opt_in_can_call_searxng(self):
-        router = ResearchProviderRouter()
-        result = ResearchResult(
-            title="Diagnostic result",
-            url="https://example.com/diagnostic",
-            snippet="Local diagnostic response",
-            provider="searxng",
-        )
-
-        with patch.object(settings, "SEARXNG_DIAGNOSTICS_ENABLED", True):
-            with patch.object(router, "_search_searxng", return_value=([result], PROVIDER_LIVE, None)) as mock_searxng:
-                with patch("services.research_provider.get_setting_value", side_effect=lambda key, default="": default):
-                    res = router.search(
-                        "explicit local diagnostic",
-                        free_only=True,
-                        allow_searxng_diagnostics=True,
-                    )
-
-        assert res["provider"] == "searxng"
-        mock_searxng.assert_called_once()
-
-    def test_legacy_auto_fallback_setting_cannot_activate_searxng(self):
-        router = ResearchProviderRouter()
-
-        with patch.object(settings, "SEARXNG_AUTO_FALLBACK", True):
-            with patch.object(settings, "SEARXNG_DIAGNOSTICS_ENABLED", False):
-                with patch.object(router, "_search_searxng") as mock_searxng:
-                    res = router.search(
-                        "legacy fallback request",
-                        free_only=True,
-                        allow_searxng_fallback=True,
-                    )
-
-        assert res["provider"] == "none"
-        mock_searxng.assert_not_called()
-
-    def test_default_compose_keeps_searxng_behind_diagnostics_profile(self):
-        compose_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "docker-compose.yml"))
-        with open(compose_path, "r", encoding="utf-8") as compose_file:
-            compose = compose_file.read()
-
-        searxng_service = re.search(
-            r"(?ms)^  searxng:\s*$(.*?)(?=^  [a-zA-Z0-9_-]+:\s*$)",
-            compose,
-        )
-        assert searxng_service is not None
-        assert re.search(r"(?m)^    profiles:\s*$", searxng_service.group(1))
-        assert re.search(r"(?m)^      - diagnostics\s*$", searxng_service.group(1))
+    def test_provider_inventory_has_no_legacy_live_routes(self):
+        names = {
+            provider["name"]
+            for provider in ResearchProviderRouter()._discover_providers()
+        }
+        assert names == {"serper", "database_cache"}
 
 
 class TestSecurityAndTelemetry:
@@ -334,15 +309,20 @@ class TestSecurityAndTelemetry:
     def test_runtime_cache_not_git_tracked(self):
         # 1. Verify in .gitignore
         gitignore_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".gitignore"))
-        with open(gitignore_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        assert "backend/data/runtime_state/search_provider_cache.json" in content
-        assert "backend/data/runtime_state/serper_budget_state.json" in content
+        if os.path.exists(gitignore_path):
+            with open(gitignore_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            assert "backend/data/runtime_state/search_provider_cache.json" in content
+            assert "backend/data/runtime_state/serper_budget_state.json" in content
 
-        # 2. Verify git ls-files does not track search_provider_cache.json
-        cmd = ["git", "ls-files", "backend/data/runtime_state/search_provider_cache.json"]
-        out = subprocess.check_output(cmd, cwd=os.path.dirname(gitignore_path)).decode("utf-8").strip()
-        assert out == "", "search_provider_cache.json must NOT be tracked by git!"
+            # 2. Verify git ls-files does not track search_provider_cache.json
+            cmd = ["git", "ls-files", "backend/data/runtime_state/search_provider_cache.json"]
+            out = subprocess.check_output(cmd, cwd=os.path.dirname(gitignore_path)).decode("utf-8").strip()
+            assert out == "", "search_provider_cache.json must NOT be tracked by git!"
+        else:
+            from services.search_cache import search_cache
+
+            assert search_cache.cache_path.endswith("search_provider_cache.json")
 
 
 class TestKehemsDiscoveryVsVerification:

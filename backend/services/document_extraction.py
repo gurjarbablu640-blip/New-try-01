@@ -1,20 +1,15 @@
 """Optional, isolated document extraction adapters.
 
 The existing :mod:`document_extractor` remains the dependency-safe fallback.  This
-module deliberately does not add Docling or Crawl4AI to the requirements file;
-callers can opt in through feature flags and dependency injection.
+module deliberately does not add Docling to the requirements file; callers can
+opt in through feature flags and dependency injection.
 """
 from __future__ import annotations
 
-import asyncio
-import inspect
-import ipaddress
 import os
-import socket
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
-from urllib.parse import urlparse
+from typing import Any, Mapping
 
 MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
 MAX_TEXT_CHARS = 2_000_000
@@ -95,62 +90,3 @@ def extract_local_pdf_with_docling(path: str | os.PathLike[str], *, enabled: boo
         return _result("UNAVAILABLE", source=source, adapter="docling", warning="Optional Docling package is not installed.")
     except Exception as exc:
         return _result("FAILED", source=source, adapter="docling", warning=f"Docling conversion failed: {str(exc)[:160]}")
-
-
-def _public_http_url(url: str) -> tuple[bool, str]:
-    try:
-        parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
-            return False, "Only credential-free http(s) URLs are allowed."
-        if parsed.port not in (None, 80, 443):
-            return False, "Non-standard URL ports are blocked."
-        host = parsed.hostname.rstrip(".")
-        try:
-            address = ipaddress.ip_address(host)
-            if not address.is_global:
-                return False, "Private, loopback, link-local, and reserved destinations are blocked."
-        except ValueError:
-            infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
-            if not infos or any(not ipaddress.ip_address(info[4][0]).is_global for info in infos):
-                return False, "URL resolves to a non-public destination."
-        return True, ""
-    except (OSError, ValueError):
-        return False, "URL host could not be validated."
-
-
-async def extract_url_with_crawl4ai(url: str, *, enabled: bool | None = None, crawler: Any = None, crawler_factory: Callable[[], Any] | None = None) -> ExtractionResult:
-    """Run Crawl4AI in-process for one validated public URL.
-
-    The Crawl4AI Docker/API server is intentionally unsupported by this boundary.
-    """
-    if enabled is None:
-        enabled = os.getenv("SALESOORJA_CRAWL4AI_ENABLED", "0").lower() in {"1", "true", "yes"}
-    if not enabled:
-        return _result("DISABLED", source=url, adapter="crawl4ai", warning="Crawl4AI adapter is disabled.")
-    valid, reason = _public_http_url(url)
-    if not valid:
-        return _result("REJECTED", source=url, adapter="crawl4ai", warning=reason)
-    try:
-        if crawler is None:
-            if crawler_factory is None:
-                from crawl4ai import AsyncWebCrawler  # optional import
-
-                crawler_factory = AsyncWebCrawler
-            crawler = crawler_factory()
-        async def run() -> Any:
-            async with crawler as active:
-                return await active.arun(url=url)
-        outcome = await run()
-        text = getattr(outcome, "markdown", None) or getattr(outcome, "extracted_content", None) or str(outcome)
-        return _result("SUCCESS" if text.strip() else "EXTRACTION_UNCERTAIN", source=url, adapter="crawl4ai", text=text, warning=None if text.strip() else "Crawl4AI returned no text.")
-    except ImportError:
-        return _result("UNAVAILABLE", source=url, adapter="crawl4ai", warning="Optional Crawl4AI package is not installed.")
-    except Exception as exc:
-        return _result("FAILED", source=url, adapter="crawl4ai", warning=f"Crawl4AI extraction failed: {str(exc)[:160]}")
-
-
-def extract_url_with_crawl4ai_sync(url: str, **kwargs: Any) -> ExtractionResult:
-    """Synchronous convenience wrapper for non-async parent code."""
-    if inspect.iscoroutinefunction(extract_url_with_crawl4ai):
-        return asyncio.run(extract_url_with_crawl4ai(url, **kwargs))
-    raise RuntimeError("Unexpected Crawl4AI adapter state")

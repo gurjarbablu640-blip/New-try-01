@@ -3,7 +3,7 @@
 Provides endpoints for:
 - Masked settings status retrieval
 - Secure credential updating
-- Connection testing for OpenAI, Gemini, Apollo, SMTP, and IMAP
+- Connection testing for DeepSeek, Gemini, Apollo, SMTP, and IMAP
 - Customer/Prospect manual onboarding into CRM & Intelligence loop
 """
 from datetime import date
@@ -36,12 +36,13 @@ def get_db():
 
 # Pydantic Schemas
 class SettingsUpdateRequest(BaseModel):
-    OPENAI_API_KEY: Optional[str] = None
-    OPENAI_MODEL: Optional[str] = None
+    HIVE_API_KEY: Optional[str] = None
+    HIVE_MODEL: Optional[str] = None
+    HIVE_ACCOUNT_MODE: Optional[str] = None
+    HIVE_ALLOW_PAID_OVERAGE: Optional[bool] = None
     GOOGLE_API_KEY: Optional[str] = None
+    GEMINI_ACCOUNT_MODE: Optional[str] = None
     ORCHESTRATOR_GEMINI_MODEL: Optional[str] = None
-    ORCHESTRATOR_PRIMARY_PROVIDER: Optional[str] = None
-    ORCHESTRATOR_FALLBACK_PROVIDER: Optional[str] = None
     APOLLO_API_KEY: Optional[str] = None
     SMTP_HOST: Optional[str] = None
     SMTP_PORT: Optional[int] = None
@@ -57,12 +58,11 @@ class SettingsUpdateRequest(BaseModel):
     IMAP_PASSWORD: Optional[str] = None
     IMAP_USE_SSL: Optional[bool] = None
     SERPER_API_KEY: Optional[str] = None
-    APIFY_API_TOKEN: Optional[str] = None
     PILOT_PHONE_NUMBER: Optional[str] = None
 
 
 class TestAIRequest(BaseModel):
-    provider: str = "gemini"  # openai or gemini
+    provider: str = "deepseek"
 
 
 class ManualProspectRequest(BaseModel):
@@ -100,7 +100,7 @@ def update_settings_endpoint(payload: SettingsUpdateRequest):
 
 @router.post("/settings/test-ai")
 def test_ai_endpoint(payload: TestAIRequest):
-    """Tests connection to OpenAI or Google Gemini."""
+    """Tests connection to DeepSeek or Google Gemini."""
     return test_ai_provider_connection(payload.provider)
 
 
