@@ -339,7 +339,7 @@ def execute(run_id):
                         company_id, db,
                         max_queries=run['max_queries'],
                         max_apollo_enrichments=min(1, max(0, 6-run['apollo_attempts'])) if run['use_apollo'] else 0,
-                        free_only=True,
+                        free_only=False,
                         additional_evidence=official,
                         before_apollo=reserve_apollo_attempt,
                     )

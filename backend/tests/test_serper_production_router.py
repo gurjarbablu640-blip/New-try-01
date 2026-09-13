@@ -204,6 +204,26 @@ class TestEarlyStoppingAndPerCompanyBudget:
 class TestSearXNGPolicy:
     """Test SearXNG is NOT automatically invoked when Serper is primary."""
 
+    def test_serper_success_never_calls_searxng(self):
+        router = ResearchProviderRouter()
+        result = ResearchResult(
+            title="Quality Head",
+            url="https://example.com/quality-head",
+            snippet="Quality Head at Example Ltd",
+            provider="serper",
+        )
+
+        with patch.object(router, "_search_serper", return_value=([result], PROVIDER_LIVE, None)):
+            with patch.object(router, "_search_searxng") as mock_searxng:
+                with patch("services.research_provider.get_setting_value") as mock_settings:
+                    mock_settings.side_effect = lambda key, default="": (
+                        "valid_serper_key_123456789" if key == "SERPER_API_KEY" else default
+                    )
+                    res = router.search("Example Ltd quality head")
+
+        assert res["provider"] == "serper"
+        mock_searxng.assert_not_called()
+
     def test_searxng_not_automatically_invoked_after_serper(self):
         router = ResearchProviderRouter()
 
@@ -236,6 +256,55 @@ class TestSearXNGPolicy:
                     res = router.search("Maruti Suzuki quality manager")
                     assert res["provider_status"] == PROVIDER_BUDGET_EXHAUSTED
                     mock_searxng.assert_not_called()
+
+    def test_explicit_diagnostics_opt_in_can_call_searxng(self):
+        router = ResearchProviderRouter()
+        result = ResearchResult(
+            title="Diagnostic result",
+            url="https://example.com/diagnostic",
+            snippet="Local diagnostic response",
+            provider="searxng",
+        )
+
+        with patch.object(settings, "SEARXNG_DIAGNOSTICS_ENABLED", True):
+            with patch.object(router, "_search_searxng", return_value=([result], PROVIDER_LIVE, None)) as mock_searxng:
+                with patch("services.research_provider.get_setting_value", side_effect=lambda key, default="": default):
+                    res = router.search(
+                        "explicit local diagnostic",
+                        free_only=True,
+                        allow_searxng_diagnostics=True,
+                    )
+
+        assert res["provider"] == "searxng"
+        mock_searxng.assert_called_once()
+
+    def test_legacy_auto_fallback_setting_cannot_activate_searxng(self):
+        router = ResearchProviderRouter()
+
+        with patch.object(settings, "SEARXNG_AUTO_FALLBACK", True):
+            with patch.object(settings, "SEARXNG_DIAGNOSTICS_ENABLED", False):
+                with patch.object(router, "_search_searxng") as mock_searxng:
+                    res = router.search(
+                        "legacy fallback request",
+                        free_only=True,
+                        allow_searxng_fallback=True,
+                    )
+
+        assert res["provider"] == "none"
+        mock_searxng.assert_not_called()
+
+    def test_default_compose_keeps_searxng_behind_diagnostics_profile(self):
+        compose_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "docker-compose.yml"))
+        with open(compose_path, "r", encoding="utf-8") as compose_file:
+            compose = compose_file.read()
+
+        searxng_service = re.search(
+            r"(?ms)^  searxng:\s*$(.*?)(?=^  [a-zA-Z0-9_-]+:\s*$)",
+            compose,
+        )
+        assert searxng_service is not None
+        assert re.search(r"(?m)^    profiles:\s*$", searxng_service.group(1))
+        assert re.search(r"(?m)^      - diagnostics\s*$", searxng_service.group(1))
 
 
 class TestSecurityAndTelemetry:
@@ -584,5 +653,3 @@ class TestTaskLevelSerperBudgetEnforcement:
             with pytest.raises(SerperBudgetExhaustedError) as exc_info:
                 clean_budget_manager.reserve_request(1)
             assert "task budget exhausted" in str(exc_info.value).lower()
-
-

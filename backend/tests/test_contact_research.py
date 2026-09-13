@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from services import contact_research as s
-from services.research_provider import ResearchProviderRouter, PROVIDER_ERROR
+from services.research_provider import ResearchProviderRouter, PROVIDER_ERROR, PROVIDER_NOT_CONFIGURED
 
 class ContactResearchTests(unittest.TestCase):
     def setUp(self):
@@ -29,12 +29,12 @@ class ContactResearchTests(unittest.TestCase):
         s.ACTIVE = 'busy'
         with self.assertRaises(RuntimeError): s.start_run([1])
         with self.assertRaises(ValueError): s.start_run(list(range(51)))
-    def test_free_search_never_calls_paid_or_cache(self):
+    def test_free_search_never_calls_paid_searxng_or_cache(self):
         router = ResearchProviderRouter()
-        with patch.object(router,'_search_google') as google, patch.object(router,'_search_serper') as serper, patch.object(router,'_search_database_cache') as cache, patch.object(router,'_search_searxng',return_value=([],PROVIDER_ERROR,'unavailable')):
+        with patch.object(router,'_search_google') as google, patch.object(router,'_search_serper') as serper, patch.object(router,'_search_database_cache') as cache, patch.object(router,'_search_searxng') as searxng:
             result = router.search('example',free_only=True)
-        google.assert_not_called(); serper.assert_not_called(); cache.assert_not_called()
-        self.assertEqual(result['provider_status'],PROVIDER_ERROR)
+        google.assert_not_called(); serper.assert_not_called(); searxng.assert_not_called(); cache.assert_not_called()
+        self.assertEqual(result['provider_status'],PROVIDER_NOT_CONFIGURED)
     def test_csv_neutralizes_formula(self):
         csv = s.export_csv({'results':[{'company_id':1,'company_name':'=CMD()','candidates':[],'public_contacts':[{'type':'email','value':'qa@example.com','status':'PUBLICLY_LISTED_UNVERIFIED','source_url':'https://example.com'}]}]})
         self.assertIn("'=CMD()",csv)
@@ -71,6 +71,7 @@ class ContactResearchTests(unittest.TestCase):
         observed = []
         def fail_pipeline(*args, **kwargs):
             observed.append(kwargs['max_apollo_enrichments'])
+            observed.append(kwargs['free_only'])
             for unused in range(10):
                 kwargs['before_apollo']()
             raise RuntimeError('provider failure with SECRET')
@@ -81,7 +82,7 @@ class ContactResearchTests(unittest.TestCase):
             s.execute(run['id'])
         saved = s.get_run(run['id'])
         self.assertEqual(saved['apollo_attempts'], 6)
-        self.assertEqual(observed, [1, 0])
+        self.assertEqual(observed, [1, False, 0, False])
         self.assertEqual(saved['status'], 'completed_with_errors')
         self.assertNotIn('SECRET', str(saved))
 

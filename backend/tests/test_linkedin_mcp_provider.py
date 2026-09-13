@@ -533,6 +533,34 @@ class TestLinkedInMCPExperienceVerification:
 class TestLinkedInMCPIntegrationPipeline:
     """Verify integration with discover_and_rank_decision_makers in person_intelligence_service."""
 
+    def test_linkedin_mcp_failure_never_invokes_searxng(self):
+        from services.person_intelligence_service import discover_and_rank_decision_makers
+        from services.linkedin_mcp_provider import linkedin_mcp_provider
+        from services.research_provider import ResearchProviderRouter, PROVIDER_ERROR
+
+        router = ResearchProviderRouter()
+        with patch.object(linkedin_mcp_provider, "_explicit_enabled", True), \
+             patch.object(linkedin_mcp_provider, "get_status", return_value={"status": "SERVER_UNAVAILABLE", "message": "Connection refused"}), \
+             patch.object(router, "_search_serper", return_value=([], PROVIDER_ERROR, "Serper unavailable")), \
+             patch.object(router, "_search_searxng") as mock_searxng, \
+             patch("services.research_provider.get_setting_value") as mock_settings:
+            mock_settings.side_effect = lambda key, default="": (
+                "valid_serper_key_123456789" if key == "SERPER_API_KEY" else default
+            )
+            result = discover_and_rank_decision_makers(
+                company_name="Acme Ltd",
+                facility_name="Sanand Plant",
+                city="Sanand",
+                search_router=router,
+                max_candidates=2,
+                max_company_queries=1,
+                max_stage_b_searches=0,
+                search_workers=1,
+            )
+
+        assert result["telemetry"]["linkedin_mcp_status"] == "SERVER_UNAVAILABLE"
+        mock_searxng.assert_not_called()
+
     def test_linkedin_mcp_failure_clean_fallback_without_lowering_gates(self):
         """Correction 11: LinkedIn MCP failure cleanly falls back to public Serper without lowering qualification gates."""
         from services.person_intelligence_service import discover_and_rank_decision_makers

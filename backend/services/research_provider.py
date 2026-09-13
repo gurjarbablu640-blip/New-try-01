@@ -545,8 +545,8 @@ class ResearchProviderRouter:
     """Routes research queries to the best available provider.
 
     Priority order:
-    1. Google Custom Search API (if GOOGLE_API_KEY + GOOGLE_SEARCH_CX configured)
-    2. Serper API (if SERPER_API_KEY configured)
+    1. Serper API (if SERPER_API_KEY configured)
+    2. Google Custom Search API (if GOOGLE_API_KEY + GOOGLE_SEARCH_CX configured)
     3. Direct public page fetch (for company websites)
     4. Existing web_research cache (database)
     """
@@ -576,13 +576,13 @@ class ResearchProviderRouter:
             "priority": 2,
         })
 
-        # 3. SearXNG Private Self-Hosted Search (OPTIONAL fallback, disabled by default)
-        auto_fallback = bool(getattr(settings, "SEARXNG_AUTO_FALLBACK", False))
+        # SearXNG is exposed only for explicit local diagnostics, never automatic routing.
+        diagnostics_enabled = bool(getattr(settings, "SEARXNG_DIAGNOSTICS_ENABLED", False))
         searxng_url = str(getattr(settings, "SEARXNG_BASE_URL", "") or get_setting_value("SEARXNG_BASE_URL", "http://localhost:8080")).strip()
         providers.append({
             "name": "searxng",
             "display": "SearXNG Private Search",
-            "configured": bool(searxng_url) and auto_fallback,
+            "configured": bool(searxng_url) and diagnostics_enabled,
             "priority": 3,
         })
 
@@ -616,7 +616,7 @@ class ResearchProviderRouter:
         """Return the name of the best available search provider."""
         providers = self._discover_providers()
         for p in providers:
-            if p["configured"] and p["name"] in ("serper", "google_custom_search", "searxng"):
+            if p["configured"] and p["name"] in ("serper", "google_custom_search"):
                 return p["name"]
         return None
 
@@ -629,13 +629,15 @@ class ResearchProviderRouter:
         free_only: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Execute a search using the best available provider with automatic fallback.
+        """Execute a search using production providers or explicit diagnostics.
 
         Priority order:
         1. Serper API (Primary production search)
         2. Google Custom Search (Secondary if configured and Serper missing)
-        3. SearXNG Private Instance (OPTIONAL fallback, disabled by default)
-        4. Database Cache
+        3. Database Cache
+
+        SearXNG requires both SEARXNG_DIAGNOSTICS_ENABLED=true and the
+        allow_searxng_diagnostics=True call flag. It is never an automatic fallback.
         """
         results = []
         status = PROVIDER_NOT_CONFIGURED
@@ -667,11 +669,10 @@ class ResearchProviderRouter:
                 if status == PROVIDER_LIVE:
                     used_provider = "google_custom_search"
 
-        # 3. SearXNG fallback (OPTIONAL only; disabled by default in production; allowed when free_only=True or explicitly requested)
+        # 3. SearXNG diagnostics (explicit two-part opt-in only)
         searxng_allowed = bool(
-            free_only
-            or kwargs.get("allow_searxng_fallback", False)
-            or getattr(settings, "SEARXNG_AUTO_FALLBACK", False)
+            getattr(settings, "SEARXNG_DIAGNOSTICS_ENABLED", False)
+            and kwargs.get("allow_searxng_diagnostics", False)
         )
         if not results and searxng_allowed and used_provider == "none":
             results, status, error = self._search_searxng(query, num_results)

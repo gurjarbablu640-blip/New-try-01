@@ -63,6 +63,8 @@ services:
   searxng:
     image: searxng/searxng:latest
     container_name: salesoorja-searxng
+    profiles:
+      - diagnostics
     restart: unless-stopped
     ports:
       - "8080:8080"
@@ -120,6 +122,7 @@ services:
       APIFY_API_TOKEN: ${APIFY_API_TOKEN}
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY}
       SEARXNG_BASE_URL: http://searxng:8080
+      SEARXNG_DIAGNOSTICS_ENABLED: ${SEARXNG_DIAGNOSTICS_ENABLED:-false}
       DEERFLOW_BASE_URL: http://deerflow:8001
       DEERFLOW_ENABLED: "true"
       LINKEDIN_MCP_ENABLED: ${LINKEDIN_MCP_ENABLED:-false}
@@ -172,6 +175,7 @@ services:
       APIFY_API_TOKEN: ${APIFY_API_TOKEN}
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY}
       SEARXNG_BASE_URL: http://searxng:8080
+      SEARXNG_DIAGNOSTICS_ENABLED: ${SEARXNG_DIAGNOSTICS_ENABLED:-false}
       DEERFLOW_BASE_URL: http://deerflow:8001
       DEERFLOW_ENABLED: "true"
       SECRET_KEY: ${SECRET_KEY}

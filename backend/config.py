@@ -125,6 +125,7 @@ class Settings(BaseSettings):
     SERPER_MAX_QUERIES_PER_COMPANY: int = 10
     SEARXNG_BASE_URL: str = "http://localhost:8080"
     SEARXNG_AUTO_FALLBACK: bool = False
+    SEARXNG_DIAGNOSTICS_ENABLED: bool = False
 
     # DeerFlow Service Adapter (Isolated HTTP boundary)
     DEERFLOW_BASE_URL: str = os.getenv("DEERFLOW_BASE_URL", "http://deerflow:8001" if os.path.exists("/.dockerenv") else "http://localhost:8001")
