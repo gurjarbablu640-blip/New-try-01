@@ -446,10 +446,27 @@ def generate_person_search_queries(
 
 
 # ── Phase 6, 7, 8: Entity Evaluation & Scoring ──────────────────────────────
+STRONG_CURRENT_PATTERNS = [
+    r"\bpresent\b",
+    r"\bcurrently\b",
+    r"\bcurrent\s+role\b",
+    r"\bcurrently\s+(?:serves|serving|working|leads|heading|at|with)\b",
+    r"\bserves\s+as\b",
+    r"\bworking\s+at\b",
+    r"\b(?:202[0-6]|jan\s+202[0-6]|feb\s+202[0-6]|mar\s+202[0-6]|apr\s+202[0-6]|may\s+202[0-6]|jun\s+202[0-6]|jul\s+202[0-6]|aug\s+202[0-6]|sep\s+202[0-6]|oct\s+202[0-6]|nov\s+202[0-6]|dec\s+202[0-6])\s*[-–—to]+\s*present\b",
+    r"\b202[4-6]\s*[-–—to]+\s*present\b",
+    r"experience:\s*.*?\bpresent\b",
+    r"\bleads\s+the\b",
+    r"\bresponsible\s+for\b",
+]
+
+
 def classify_current_employment(snippet: str, title: str, company_name: str) -> str:
     """Classify current employment status from public evidence.
 
     Values: VERIFIED, PROBABLE, UNKNOWN, STALE, CONTRADICTED.
+    Strict rule: Retrieval date or page year alone does NOT create VERIFIED without
+    an explicit current-employment signal (Present, Currently, current role, serves as, etc.).
     """
     clean_title = (title or "").strip()
     clean_snippet = (snippet or "").strip()
@@ -477,7 +494,6 @@ def classify_current_employment(snippet: str, title: str, company_name: str) -> 
         return False
 
     # 1. Direct Contradiction via Title headline: "@<Company>" or "at <Company>"
-    # Example: "AVP Quality @Crompton", "Plant QA at Elecon", "Quality Head at Tata Motors" when company is Schneider
     headline_match = re.search(r"(?:@|\bat\s+)\s*([A-Za-z0-9\s&.-]{3,35})(?:\s*[-–—|•,]|\s*I\s*|\.\s|$)", clean_title)
     if headline_match:
         other_comp = headline_match.group(1).strip()
@@ -516,11 +532,10 @@ def classify_current_employment(snippet: str, title: str, company_name: str) -> 
         if re.search(fp, combined):
             return "CONTRADICTED"
 
-    # 4. Closed date ranges for target company ending in past (<= 2023)
-    # Example: "Schneider Electric ... Jan 2007 – Nov 2009", "2007 - 2009 · 2 yrs"
+    # 4. Closed date ranges for target company ending in past (<= 2024)
     closed_date_patterns = [
-        r"\b" + re.escape(base_comp) + r"[\w\s,()·–-]{0,50}\b(?:19\d{2}|20[01]\d|202[0-3])\s*[-–—to]+\s*(?:19\d{2}|20[01]\d|202[0-3])\b",
-        r"\b(?:19\d{2}|20[01]\d|202[0-3])\s*[-–—to]+\s*(?:19\d{2}|20[01]\d|202[0-3])\b[\w\s,()·–-]{0,50}\b" + re.escape(base_comp),
+        r"\b" + re.escape(base_comp) + r"[\w\s,()·–-]{0,50}\b(?:19\d{2}|20[01]\d|202[0-4])\s*[-–—to]+\s*(?:19\d{2}|20[01]\d|202[0-4])\b",
+        r"\b(?:19\d{2}|20[01]\d|202[0-4])\s*[-–—to]+\s*(?:19\d{2}|20[01]\d|202[0-4])\b[\w\s,()·–-]{0,50}\b" + re.escape(base_comp),
     ]
     for cdp in closed_date_patterns:
         if re.search(cdp, combined):
@@ -539,27 +554,24 @@ def classify_current_employment(snippet: str, title: str, company_name: str) -> 
         if curr_at_comp and not is_target_comp(curr_at_comp):
             return "CONTRADICTED"
 
-    # 6. Verified current indicators for target company
+    # 6. Target company verification
     has_company = is_target_comp(combined)
     if not has_company:
         return "UNKNOWN"
 
-    present_terms = [r"\bpresent\b", r"\bcurrently\b", r"\bserving\s+as\b", r"\bleads\s+the\b", r"\bresponsible\s+for\b"]
-    has_present = any(re.search(pt, combined) for pt in present_terms)
-    has_current_exp = bool(
-        re.search(r"experience:\s*.*?" + re.escape(base_comp), combined)
-        or (comp_clean and re.search(r"experience:\s*.*?" + re.escape(comp_clean[:8]), combined))
-        or re.search(re.escape(base_comp) + r"[\w\s,()·–-]{0,100}\b(?:202[4-6]|present)\b", combined)
-        or (has_company and re.search(r"\b(?:202[0-6]|fy\s*2[4-6])\s*[-–—to]+\s*present\b", combined))
-        or (has_company and re.search(r"experience:\s*.*?\bpresent\b", combined))
+    has_experience_target = bool(
+        (base_comp and len(base_comp) >= 3 and re.search(r"experience:\s*.*?" + re.escape(base_comp), combined))
+        or (comp_clean and len(comp_clean) >= 3 and re.search(r"experience:\s*.*?" + re.escape(comp_clean[:8]), combined))
     )
+    has_strong_present = any(re.search(pt, combined) for pt in STRONG_CURRENT_PATTERNS) or has_experience_target
+    has_recent_year = any(y in combined for y in ["2024", "2025", "2026", "fy 25", "fy 26", "fy25", "fy26"])
 
-    has_recent_year = any(y in combined for y in ["2024", "2025", "2026", "fy 25", "fy 26"])
-
-    if has_current_exp or (has_company and has_present and (has_recent_year or "present" in combined)):
+    # Strict: Only explicit current-employment signals create VERIFIED
+    if has_strong_present:
         return "VERIFIED"
 
-    if has_company and (has_present or has_recent_year):
+    # Page date or recent year without explicit present is PROBABLE, never VERIFIED
+    if has_recent_year:
         return "PROBABLE"
 
     return "UNKNOWN"
@@ -1231,6 +1243,7 @@ class PersonEvidencePacket:
     facility_aliases: List[str] = field(default_factory=list)
 
     employment_sources: List[Dict[str, Any]] = field(default_factory=list)
+    employment_proofs: List[Dict[str, Any]] = field(default_factory=list)
     facility_sources: List[Dict[str, Any]] = field(default_factory=list)
     function_sources: List[Dict[str, Any]] = field(default_factory=list)
     authority_sources: List[Dict[str, Any]] = field(default_factory=list)
@@ -1281,7 +1294,101 @@ class PersonEvidencePacket:
         # 1. Employment evidence: mentions company or experience
         c_clean = re.sub(r"[^\w\s]", " ", self.target_company.lower()).strip()
         c_tokens = [t for t in c_clean.split() if t not in COMPANY_SUFFIX_TOKENS and len(t) >= 3]
-        if (c_tokens and any(t in text for t in c_tokens)) or "experience" in text or "present" in text or "linkedin.com/in/" in url.lower():
+        has_company_mention = bool((c_tokens and any(t in text for t in c_tokens)) or "experience" in text or "present" in text or "linkedin.com/in/" in url.lower())
+
+        if has_company_mention:
+            st = classify_current_employment(snippet, title, self.target_company)
+            base_comp = re.sub(
+                r"\s+(?:India|Technologies|Solutions|Industries|Limited|Ltd|Pvt\s+Ltd|Private\s+Limited)\b.*",
+                "",
+                self.target_company,
+                flags=re.IGNORECASE,
+            ).strip().lower()
+            has_exp_target = bool(
+                (base_comp and len(base_comp) >= 3 and re.search(r"experience:\s*.*?" + re.escape(base_comp), text))
+                or (c_clean and len(c_clean) >= 3 and re.search(r"experience:\s*.*?" + re.escape(c_clean[:8]), text))
+            )
+            has_present_sig = any(re.search(p, text, re.IGNORECASE) for p in STRONG_CURRENT_PATTERNS) or has_exp_target
+            has_recent_yr = any(y in text for y in ["2025", "2026", "fy 25", "fy 26", "fy25", "fy26"])
+            has_hist_yr = any(y in text for y in ["2019", "2020", "2021", "2022", "2023", "2024"]) or recency == "OLDER"
+
+            retrieval_date = NOW_DT.strftime("%Y-%m-%d")
+            pub_date = source_date or ("2026" if recency == "CURRENT" else ("2025" if recency == "RECENT" else ""))
+
+            if st == "CONTRADICTED":
+                date_signal = "CONTRADICTED"
+                proof_category = "CONTRADICTED_EMPLOYMENT"
+                strength = "CONTRADICTING"
+            elif stype == "PROFESSIONAL_DIRECTORY":
+                # Directory is SUPPORTING ONLY. Directory-only evidence != VERIFIED
+                date_signal = "DIRECTORY_RECORD"
+                proof_category = "RECENT_DIRECTORY_EVIDENCE"
+                strength = "SUPPORTING_ONLY"
+            elif stype in ("ANNUAL_REPORT", "PUBLIC_DOCUMENT") or url.lower().endswith(".pdf") or "annual report" in (title or "").lower():
+                if has_present_sig:
+                    date_signal = "PRESENT"
+                    proof_category = "CURRENT_OFFICIAL_DOCUMENT"
+                    strength = "STRONG_CURRENT_PROOF"
+                else:
+                    date_signal = "HISTORICAL" if has_hist_yr else "UNDATED"
+                    proof_category = "HISTORICAL_EMPLOYMENT" if has_hist_yr else "UNDATED_EMPLOYMENT"
+                    strength = "SUPPORTING_ONLY"
+            elif stype in ("COMPANY_PUBLIC_POST", "COMPANY_POST") or "linkedin.com/posts" in url.lower():
+                if has_present_sig:
+                    date_signal = "PRESENT"
+                    proof_category = "CURRENT_COMPANY_POST"
+                    strength = "STRONG_CURRENT_PROOF"
+                else:
+                    date_signal = "HISTORICAL" if has_hist_yr else "UNDATED"
+                    proof_category = "HISTORICAL_EMPLOYMENT" if has_hist_yr else "UNDATED_EMPLOYMENT"
+                    strength = "SUPPORTING_ONLY"
+            elif stype == "OFFICIAL_COMPANY_PAGE":
+                if has_present_sig:
+                    date_signal = "PRESENT"
+                    proof_category = "CURRENT_PROFILE_EVIDENCE"
+                    strength = "STRONG_CURRENT_PROOF"
+                else:
+                    date_signal = "UNDATED"
+                    proof_category = "UNDATED_EMPLOYMENT"
+                    strength = "SUPPORTING_ONLY"
+            elif stype == "CONFERENCE_TECHNICAL":
+                # Conference biography is SUPPORTING ONLY
+                date_signal = "CONFERENCE_BIOGRAPHY"
+                proof_category = "CURRENT_EVENT_EVIDENCE" if (recency in ("CURRENT", "RECENT") or has_recent_yr) else "HISTORICAL_EMPLOYMENT"
+                strength = "SUPPORTING_ONLY"
+            elif stype in ("LINKEDIN_SEARCH_SNIPPET", "PUBLIC_WEB_BIO"):
+                if has_present_sig:
+                    date_signal = "PRESENT"
+                    proof_category = "CURRENT_PROFILE_EVIDENCE"
+                    strength = "STRONG_CURRENT_PROOF"
+                elif has_recent_yr:
+                    date_signal = "RECENT_YEAR"
+                    proof_category = "UNDATED_EMPLOYMENT"
+                    strength = "SUPPORTING_ONLY"
+                else:
+                    date_signal = "HISTORICAL" if has_hist_yr else "UNDATED"
+                    proof_category = "HISTORICAL_EMPLOYMENT" if has_hist_yr else "UNDATED_EMPLOYMENT"
+                    strength = "SUPPORTING_ONLY"
+            else:
+                date_signal = "UNDATED"
+                proof_category = "UNDATED_EMPLOYMENT"
+                strength = "SUPPORTING_ONLY"
+
+            proof_record = {
+                "source_url": url,
+                "source_title": title,
+                "snippet": snippet[:400],
+                "source_type": stype,
+                "publication_date": pub_date,
+                "retrieval_date": retrieval_date,
+                "employment_date_signal": date_signal,
+                "target_company": self.target_company,
+                "candidate_name": self.candidate_name,
+                "classification": proof_category,
+                "strength": strength,
+                "recency": recency,
+            }
+            self.employment_proofs.append(proof_record)
             self.employment_sources.append(src_record)
 
         # 2. Facility evidence: mentions target city, state, facility, aliases, or other Indian industrial cities
@@ -1311,36 +1418,26 @@ class PersonEvidencePacket:
     def derive(self) -> None:
         """Deterministically derive multi-source verified attributes."""
         # 1. Current Employment
-        has_fresh_verified = False
-        has_older_verified = False
-        has_probable = False
-        has_contradicted = False
+        # Correction 2: Contradiction strictly overrides corroboration
+        has_contradicted = (
+            any(p.get("classification") == "CONTRADICTED_EMPLOYMENT" for p in self.employment_proofs)
+            or any(classify_current_employment(s.get("snippet", ""), s.get("title", ""), self.target_company) == "CONTRADICTED" for s in self.employment_sources)
+        )
+        has_strong_current_proof = any(p.get("strength") == "STRONG_CURRENT_PROOF" for p in self.employment_proofs)
+        has_supporting_proof = any(p.get("strength") == "SUPPORTING_ONLY" for p in self.employment_proofs)
 
-        for s in self.employment_sources:
-            stype = s.get("source_type", "")
-            recency = s.get("recency", "UNDATED")
-            st = classify_current_employment(s.get("title", ""), s.get("snippet", ""), self.target_company)
-            if st == "CONTRADICTED":
-                has_contradicted = True
-            elif st == "VERIFIED":
-                # An older company post or public document (>365 days) alone cannot establish current employment
-                if stype in ("COMPANY_PUBLIC_POST", "ANNUAL_REPORT", "PUBLIC_DOCUMENT") and recency == "OLDER":
-                    has_older_verified = True
-                else:
-                    has_fresh_verified = True
-            elif st == "PROBABLE":
-                has_probable = True
-
-        if has_contradicted and not has_fresh_verified:
+        if has_contradicted:
             self.current_employment = "CONTRADICTED"
-        elif has_fresh_verified:
+        elif has_strong_current_proof:
             self.current_employment = "VERIFIED"
-        elif has_older_verified and has_probable:
-            self.current_employment = "PROBABLE"
-        elif has_older_verified:
-            self.current_employment = "PROBABLE" if any(s.get("recency") == "RECENT" for s in self.employment_sources) else "UNKNOWN"
-        elif has_probable:
-            self.current_employment = "PROBABLE"
+        elif has_supporting_proof:
+            # Supporting-only evidence (directory, old post, conference bio, undated snippet) may corroborate facility/function
+            # but must NOT independently create VERIFIED current employment.
+            has_recent_support = any(
+                p.get("recency") in ("CURRENT", "RECENT") or p.get("employment_date_signal") in ("RECENT_YEAR", "DIRECTORY_RECORD")
+                for p in self.employment_proofs
+            )
+            self.current_employment = "PROBABLE" if has_recent_support else "UNKNOWN"
         else:
             self.current_employment = "UNKNOWN"
 
@@ -1405,8 +1502,10 @@ class PersonEvidencePacket:
         else:
             self.contact_route = "HOLD"
 
-        # 6. Cross-Source Corroboration (Tasks 2 & 3)
+        # 6. Cross-Source Corroboration (Phase 2)
         # Fuses historical plant/post evidence with fresh verified employment
+        # Example A: 2024 plant post ("Plant Head, Nashik") + 2026 profile ("Present" at target company)
+        # -> CURRENT_EMPLOYMENT = VERIFIED, FACILITY_RELATIONSHIP uses the plant post.
         has_plant_evidence = self.facility_relationship in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER")
         has_post_or_doc_facility = any(
             s.get("source_type") in ("COMPANY_PUBLIC_POST", "ANNUAL_REPORT", "PUBLIC_DOCUMENT")
@@ -1444,6 +1543,10 @@ class PersonEvidencePacket:
             "authority_sources_count": len(self.authority_sources),
             "post_sources_count": len(self.post_sources),
             "document_sources_count": len(self.document_sources),
+            "employment_proofs": self.employment_proofs,
+            "strong_current_proofs_count": sum(1 for p in self.employment_proofs if p.get("strength") == "STRONG_CURRENT_PROOF"),
+            "supporting_proofs_count": sum(1 for p in self.employment_proofs if p.get("strength") == "SUPPORTING_ONLY"),
+            "contradicting_proofs_count": sum(1 for p in self.employment_proofs if p.get("strength") == "CONTRADICTING"),
         }
 
 
@@ -1537,24 +1640,31 @@ def verify_candidate_stage_b(
         facility_aliases=aliases,
     )
 
+    clean_domain = company_domain.lower().removeprefix("www.").strip() if company_domain else ""
     query_candidates = [
-        f'"{cand_name}" "{company_name}"',
-        f'"{cand_name}" "{company_name}" "{city}"' if city else f'"{cand_name}" "{company_name}" plant quality',
+        f'"{cand_name}" "{company_name}" present',
         f'site:linkedin.com/in "{cand_name}" "{company_name}"',
     ]
+    if city:
+        query_candidates.append(f'"{cand_name}" "{company_name}" "{city}"')
+    else:
+        query_candidates.append(f'"{cand_name}" "{company_name}" current')
+
     for al in aliases:
         if al and al.lower() not in (city.lower(), company_name.lower()):
             query_candidates.append(f'"{cand_name}" "{company_name}" "{al}"')
             break
-    if len(query_candidates) < max_searches:
-        query_candidates.append(f'"{cand_name}" "{company_name}" plant quality')
-    if len(query_candidates) < max_searches:
-        query_candidates.append(f'"{cand_name}" "{company_name}" quality manager')
 
-    # Deduplicate while preserving order, bounded to min(max_searches, 5)
+    if clean_domain:
+        query_candidates.append(f'site:{clean_domain} "{cand_name}"')
+    query_candidates.append(f'"{cand_name}" "{company_name}" current')
+    query_candidates.append(f'"{cand_name}" "{company_name}" 2026')
+    query_candidates.append(f'"{cand_name}" "{company_name}" plant quality')
+
+    # Deduplicate while preserving order, bounded to min(max_searches, 4)
     dedup_queries: List[str] = []
     for q in query_candidates:
-        if q not in dedup_queries and len(dedup_queries) < min(max_searches, 5):
+        if q not in dedup_queries and len(dedup_queries) < min(max_searches, 4):
             dedup_queries.append(q)
 
     for q in dedup_queries:

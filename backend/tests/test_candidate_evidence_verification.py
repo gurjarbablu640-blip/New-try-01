@@ -474,3 +474,186 @@ class TestSourceCoverageExpansionAndGroupFallback:
         assert packet.score >= 85.0
 
 
+class TestCurrentEmploymentCorroborationAndHardening:
+    """Rigorous regression tests for current employment evidence corroboration and gates."""
+
+    def test_older_plant_evidence_plus_current_profile_yields_verified(self):
+        """Older plant post (facility) + fresh profile with Present (employment) -> VERIFIED + plant link."""
+        packet = PersonEvidencePacket(
+            candidate_name="Rajesh Patil",
+            current_title="Plant Quality Head",
+            target_company="Bharat Forge Limited",
+            target_facility="Mundhwa Plant",
+            target_city="Pune",
+            target_state="maharashtra",
+        )
+        # 2024 company post establishing plant link
+        packet.add_source(
+            url="https://www.linkedin.com/posts/bharatforge_mundhwa-plant-milestone-111",
+            title="Bharat Forge Mundhwa Plant Operational Update",
+            snippet="Rajesh Patil, Plant Quality Head at the Mundhwa Pune manufacturing unit, confirmed CMM metrology readiness.",
+            source_type="COMPANY_PUBLIC_POST",
+            source_date="2024-03-20",
+        )
+        # 2026 public profile confirming active employment
+        packet.add_source(
+            url="https://in.linkedin.com/in/rajesh-patil-bf",
+            title="Rajesh Patil - Plant Quality Head - Bharat Forge Limited | LinkedIn",
+            snippet="Plant Quality Head at Bharat Forge Limited. Jan 2021 - Present · 5 yrs 8 mos. Pune, Maharashtra.",
+            source_type="LINKEDIN_SEARCH_SNIPPET",
+            source_date="2026-07-15",
+        )
+        packet.derive()
+
+        assert packet.current_employment == "VERIFIED"
+        assert packet.facility_relationship in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER")
+        assert packet.cross_source_corroborated is True
+        assert packet.confidence == "HIGH"
+        assert packet.score >= 85.0
+
+    def test_older_plant_evidence_alone_yields_not_verified(self):
+        """Older plant evidence without a current source remains PROBABLE/UNKNOWN and NOT VERIFIED."""
+        packet = PersonEvidencePacket(
+            candidate_name="Rajesh Patil",
+            current_title="Plant Quality Head",
+            target_company="Bharat Forge Limited",
+            target_facility="Mundhwa Plant",
+            target_city="Pune",
+            target_state="maharashtra",
+        )
+        # Only older 2024 post
+        packet.add_source(
+            url="https://www.linkedin.com/posts/bharatforge_mundhwa-plant-milestone-111",
+            title="Bharat Forge Mundhwa Plant Operational Update",
+            snippet="Rajesh Patil, Plant Quality Head at the Mundhwa Pune manufacturing unit, confirmed CMM metrology readiness.",
+            source_type="COMPANY_PUBLIC_POST",
+            source_date="2024-03-20",
+        )
+        packet.derive()
+
+        assert packet.current_employment != "VERIFIED"
+        assert packet.current_employment in ("UNKNOWN", "PROBABLE")
+        assert packet.confidence != "HIGH"
+
+    def test_current_profile_at_another_employer_yields_contradicted(self):
+        """Current profile showing another employer yields CONTRADICTED and LOW confidence."""
+        packet = PersonEvidencePacket(
+            candidate_name="Vikas Sharma",
+            current_title="Head Quality",
+            target_company="Thermax Limited",
+            target_facility="Chinchwad Plant",
+            target_city="Pune",
+            target_state="maharashtra",
+        )
+        packet.add_source(
+            url="https://in.linkedin.com/in/vikas-sharma-qa",
+            title="Vikas Sharma - Head Quality - Crompton Greaves | LinkedIn",
+            snippet="Head Quality at Crompton Greaves Consumer Electricals. Experience: Thermax Limited (2015 - 2020 · 5 yrs).",
+            source_type="LINKEDIN_SEARCH_SNIPPET",
+            source_date="2026-06-10",
+        )
+        packet.derive()
+
+        assert packet.current_employment == "CONTRADICTED"
+        assert packet.confidence == "LOW"
+
+    def test_contradiction_overrides_corroboration(self):
+        """Correction 2: Newer conflicting employer strictly overrides older target-company plant evidence."""
+        packet = PersonEvidencePacket(
+            candidate_name="Nitin Joshi",
+            current_title="Plant Head",
+            target_company="Endurance Technologies Limited",
+            target_facility="Waluj Plant",
+            target_city="Aurangabad",
+            target_state="maharashtra",
+        )
+        # Older 2023 plant post mentioning candidate at target facility
+        packet.add_source(
+            url="https://www.linkedin.com/posts/endurance-tech_waluj-plant-milestone",
+            title="Endurance Technologies Waluj Plant Recognition",
+            snippet="Nitin Joshi, Plant Head at Waluj Plant Aurangabad, receives excellence award.",
+            source_type="COMPANY_PUBLIC_POST",
+            source_date="2023-08-15",
+        )
+        # Newer 2026 profile showing candidate at another company
+        packet.add_source(
+            url="https://in.linkedin.com/in/nitin-joshi-operations",
+            title="Nitin Joshi - Vice President Operations - Varroc Engineering | LinkedIn",
+            snippet="Vice President Operations at Varroc Engineering. Jan 2024 - Present · 2 yrs 8 mos. Pune, India.",
+            source_type="LINKEDIN_SEARCH_SNIPPET",
+            source_date="2026-08-01",
+        )
+        packet.derive()
+
+        # Contradiction MUST override corroboration
+        assert packet.current_employment == "CONTRADICTED"
+        assert packet.confidence == "LOW"
+        assert packet.cross_source_corroborated is False
+
+    def test_present_marker_at_target_company_yields_verified(self):
+        """Explicit 'Present' marker for target company creates VERIFIED current employment."""
+        packet = PersonEvidencePacket(
+            candidate_name="Sanjay Kulkarni",
+            current_title="DGM Quality",
+            target_company="Bharat Forge Limited",
+            target_facility="Pune Plant",
+            target_city="Pune",
+        )
+        packet.add_source(
+            url="https://in.linkedin.com/in/sanjay-kulkarni-bf",
+            title="Sanjay Kulkarni - DGM Quality - Bharat Forge Limited | LinkedIn",
+            snippet="DGM Quality at Bharat Forge Limited. Nov 2019 – Present · 6 yrs 10 mos. Pune Area, India.",
+            source_type="LINKEDIN_SEARCH_SNIPPET",
+            source_date="2026-09-01",
+        )
+        packet.derive()
+
+        assert packet.current_employment == "VERIFIED"
+
+    def test_page_retrieval_date_alone_does_not_verify_employment(self):
+        """Correction 3: Fresh page/retrieval date alone without explicit current/present signal is NOT VERIFIED."""
+        packet = PersonEvidencePacket(
+            candidate_name="Anil Deshmukh",
+            current_title="General Manager Quality",
+            target_company="Thermax Limited",
+            target_facility="Chinchwad Plant",
+            target_city="Pune",
+        )
+        # Retrieved today in 2026, but content is an undated/historical bio without present/currently
+        packet.add_source(
+            url="https://thermaxglobal.com/news/engineering-symposium-overview",
+            title="Thermax Engineering Symposium",
+            snippet="Anil Deshmukh, General Manager Quality at Thermax Limited, spoke about industrial boiler fabrication standards.",
+            source_type="OFFICIAL_COMPANY_PAGE",
+            source_date="2026-09-12",
+        )
+        packet.derive()
+
+        # Page date alone cannot create VERIFIED
+        assert packet.current_employment != "VERIFIED"
+        assert packet.current_employment in ("UNKNOWN", "PROBABLE")
+
+    def test_directory_only_evidence_does_not_verify_employment(self):
+        """Correction 4: Directory-only sources alone must NOT create VERIFIED current employment."""
+        packet = PersonEvidencePacket(
+            candidate_name="Mahesh Shinde",
+            current_title="Quality Manager",
+            target_company="Endurance Technologies Limited",
+            target_facility="Waluj Plant",
+            target_city="Aurangabad",
+        )
+        packet.add_source(
+            url="https://www.zaubacorp.com/company-officers/ENDURANCE-TECHNOLOGIES/123",
+            title="Endurance Technologies Key Officers Directory",
+            snippet="Mahesh Shinde is listed as Quality Manager at Endurance Technologies Limited Waluj Unit.",
+            source_type="PROFESSIONAL_DIRECTORY",
+            source_date="2026-01-10",
+        )
+        packet.derive()
+
+        assert packet.current_employment != "VERIFIED"
+        assert packet.current_employment in ("UNKNOWN", "PROBABLE")
+        assert packet.confidence != "HIGH"
+
+
+
