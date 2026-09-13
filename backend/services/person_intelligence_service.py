@@ -2635,6 +2635,7 @@ def discover_and_rank_decision_makers(
                 discovered = mcp_provider.search_decision_makers(
                     company_name=company_name,
                     company_urn=comp_urn,
+                    company_slug=comp_info.get("company_slug") if comp_info else None,
                     city=city,
                     facility_name=facility_name,
                     max_candidates=mcp_provider.max_candidates,

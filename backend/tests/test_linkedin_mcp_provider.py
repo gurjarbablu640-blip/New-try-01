@@ -113,6 +113,15 @@ class TestLinkedInMCPSafetyAndAllowlist:
         assert "search_people" in READ_ONLY_ALLOWLIST
         assert "get_company_employees" in READ_ONLY_ALLOWLIST
 
+    def test_structured_content_is_preferred_for_typed_tool_results(self, provider):
+        payload = {"url": "https://www.linkedin.com/company/example/", "sections": {"about": "Example Ltd"}}
+        with patch.object(provider, "_send_jsonrpc", return_value={
+            "content": [{"type": "text", "text": "typed tool result"}],
+            "structuredContent": payload,
+            "isError": False,
+        }):
+            assert provider.invoke_tool("get_company_profile", {"company_name": "example"}) == payload
+
 
 class TestLinkedInMCPStatusAndErrorHandling:
     """Verify clean status detection and safety error classification."""
@@ -249,12 +258,29 @@ class TestLinkedInMCPCompanyAndPeopleSearch:
             "employee_count": 5000,
             "website": "https://www.ramkrishnaforgings.com",
         }
-        with patch.object(provider, "invoke_tool", return_value=mock_profile):
+        with patch.object(provider, "invoke_tool", return_value=mock_profile) as invoke_tool:
             info = provider.resolve_company("Ramkrishna Forgings", domain="ramkrishnaforgings.com")
             assert info is not None
             assert info["company_name"] == "Ramkrishna Forgings Limited"
             assert info["company_slug"] == "ramkrishna-forgings"
             assert info["company_urn"] == "1817109"
+            invoke_tool.assert_called_once_with(
+                "get_company_profile",
+                {"company_name": "ramkrishna-forgings"},
+            )
+
+    def test_resolve_company_parses_sidecar_sections_and_references(self, provider):
+        sidecar_payload = {
+            "url": "https://www.linkedin.com/company/ramkrishna-forgings/",
+            "sections": {"about": "Ramkrishna Forgings Limited\nAutomotive component manufacturer"},
+            "references": {"about": [{"kind": "company_urn", "url": "/search/results/people/", "value": "1817109"}]},
+        }
+        with patch.object(provider, "invoke_tool", return_value=sidecar_payload):
+            info = provider.resolve_company("Ramkrishna Forgings Limited")
+        assert info["company_name"] == "Ramkrishna Forgings Limited"
+        assert info["company_slug"] == "ramkrishna-forgings"
+        assert info["company_urn"] == "1817109"
+        assert info["company_url"] == "https://www.linkedin.com/company/ramkrishna-forgings/"
 
     def test_senior_authority_role_order_in_search(self, provider):
         """Search decision makers queries senior authority roles before fallback ICs."""
@@ -293,14 +319,53 @@ class TestLinkedInMCPCompanyAndPeopleSearch:
             assert search_args["current_company"] == "1817109"
             assert search_args["location"] == "Jamshedpur"
 
+    def test_missing_company_urn_uses_company_keywords_without_invalid_facet(self, provider):
+        recorded_args = []
+
+        def fake_invoke(tool_name: str, args: Dict[str, Any]):
+            recorded_args.append(args)
+            return {"results": [{
+                "name": "Arun Kumar",
+                "headline": "Plant Head at Ramkrishna Forgings Limited",
+                "profile_url": "https://www.linkedin.com/in/arun-kumar-planthead",
+            }]}
+
+        with patch.object(provider, "invoke_tool", side_effect=fake_invoke):
+            provider.search_decision_makers(
+                company_name="Ramkrishna Forgings Limited",
+                company_urn=None,
+                city="Jamshedpur",
+                max_candidates=1,
+            )
+
+        assert "current_company" not in recorded_args[0]
+        assert '"Ramkrishna Forgings Limited"' in recorded_args[0]["keywords"]
+
+    def test_rate_limit_stops_before_additional_linkedin_searches(self, provider):
+        with patch.object(
+            provider,
+            "invoke_tool",
+            side_effect=LinkedInMCPRateLimitError("LinkedIn rate limit reached"),
+        ) as invoke_tool:
+            with pytest.raises(LinkedInMCPRateLimitError):
+                provider.search_decision_makers(
+                    company_name="Ramkrishna Forgings Limited",
+                    company_urn=None,
+                    city="Jamshedpur",
+                    max_candidates=3,
+                )
+        assert invoke_tool.call_count == 1
+
     def test_expected_control_person_not_injected_into_smoke_search(self, provider):
         """Correction 2: Benchmark answer leakage guard.
 
         DO NOT pass 'Krishna Kumar Jha' into search. Discovery must run unseeded.
         """
         recorded_keywords = []
+        recorded_calls = []
 
         def fake_invoke(tool_name: str, args: Dict[str, Any]):
+            recorded_calls.append((tool_name, args))
             if tool_name == "search_people":
                 recorded_keywords.append(args.get("keywords", ""))
             return {"results": []}
@@ -319,6 +384,34 @@ class TestLinkedInMCPCompanyAndPeopleSearch:
                 assert "krishna" not in kw.lower()
                 assert "jha" not in kw.lower()
                 assert "krishna kumar jha" not in kw.lower()
+
+            employee_call = next(call for call in recorded_calls if call[0] == "get_company_employees")
+            assert employee_call[1] == {
+                "company_name": "ramkrishna-forgings",
+                "keywords": "Quality",
+            }
+
+    def test_people_search_parses_sidecar_person_references(self, provider):
+        sidecar_payload = {
+            "url": "https://www.linkedin.com/search/results/people/",
+            "sections": {"search_results": "Senior quality leaders"},
+            "references": {"search_results": [{
+                "kind": "person",
+                "url": "/in/arun-kumar-planthead/",
+                "text": "Arun Kumar",
+                "context": "Plant Head at Ramkrishna Forgings",
+            }]},
+        }
+        with patch.object(provider, "invoke_tool", return_value=sidecar_payload):
+            results = provider.search_decision_makers(
+                company_name="Ramkrishna Forgings Limited",
+                company_urn="1817109",
+                company_slug="ramkrishna-forgings",
+                city="Jamshedpur",
+                max_candidates=1,
+            )
+        assert results[0]["name"] == "Arun Kumar"
+        assert results[0]["profile_url"] == "https://www.linkedin.com/in/arun-kumar-planthead/"
 
 
 class TestLinkedInMCPExperienceVerification:
@@ -341,7 +434,7 @@ class TestLinkedInMCPExperienceVerification:
                 }
             ],
         }
-        with patch.object(provider, "invoke_tool", return_value=profile_data):
+        with patch.object(provider, "invoke_tool", return_value=profile_data) as invoke_tool:
             verif = provider.verify_candidate_experience(
                 profile_url="https://linkedin.com/in/sanjay-sharma",
                 target_company="ABC Forgings Ltd",
@@ -351,6 +444,32 @@ class TestLinkedInMCPExperienceVerification:
             assert verif["is_contradicted"] is False
             assert verif["function_verified"] is True
             assert verif["authority_verified"] is True
+            invoke_tool.assert_called_once_with(
+                "get_person_profile",
+                {
+                    "linkedin_username": "https://linkedin.com/in/sanjay-sharma",
+                    "sections": "experience",
+                },
+            )
+
+    def test_experience_parses_sidecar_raw_sections(self, provider):
+        sidecar_payload = {
+            "url": "https://www.linkedin.com/in/sanjay-sharma/",
+            "sections": {
+                "main_profile": "Sanjay Sharma\nHead Quality at ABC Forgings Ltd\nPune, Maharashtra, India",
+                "experience": "Experience\nHead Quality\nABC Forgings Ltd · Full-time\nJan 2024 – Present\nPune, Maharashtra, India\nLeading plant quality and metrology labs.",
+            },
+        }
+        with patch.object(provider, "invoke_tool", return_value=sidecar_payload):
+            verification = provider.verify_candidate_experience(
+                profile_url="https://www.linkedin.com/in/sanjay-sharma/",
+                target_company="ABC Forgings Ltd",
+                target_city="Pune",
+            )
+        assert verification["name"] == "Sanjay Sharma"
+        assert verification["current_employment"] == "VERIFIED"
+        assert verification["current_title"] == "Head Quality"
+        assert verification["target_experience"]["location"] == "Pune, Maharashtra, India"
 
     def test_newer_other_employer_overrides_older_target_present(self, provider):
         """Correction 7: Newer Experience entry at another employer CONTRADICTS older target company entry."""

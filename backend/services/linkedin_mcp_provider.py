@@ -284,6 +284,12 @@ class LinkedInMCPProvider:
                             err_text += str(c["text"]) + " "
                     self._classify_and_raise_error(err_text or "Tool call failed.")
 
+                structured_content = res.get("structuredContent") or res.get("structured_content")
+                if isinstance(structured_content, dict):
+                    if set(structured_content) == {"result"}:
+                        return structured_content["result"]
+                    return structured_content
+
                 content_items = res.get("content", [])
                 if content_items and isinstance(content_items, list):
                     first_text = content_items[0].get("text", "")
@@ -496,6 +502,76 @@ class LinkedInMCPProvider:
 
     # ── High-Level Business Domain Operations ─────────────────────────────────
 
+    @staticmethod
+    def _section_text(payload: Dict[str, Any], section: str) -> str:
+        sections = payload.get("sections") or {}
+        return str(sections.get(section) or "") if isinstance(sections, dict) else ""
+
+    @staticmethod
+    def _section_references(payload: Dict[str, Any], section: str) -> List[Dict[str, Any]]:
+        references = payload.get("references") or {}
+        items = references.get(section, []) if isinstance(references, dict) else []
+        return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+    @staticmethod
+    def _absolute_linkedin_url(url: str) -> str:
+        clean_url = str(url or "").strip()
+        return f"https://www.linkedin.com{clean_url}" if clean_url.startswith("/") else clean_url
+
+    @classmethod
+    def _extract_people_items(cls, payload: Any, direct_key: str) -> List[Dict[str, Any]]:
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if not isinstance(payload, dict):
+            return []
+        direct_items = payload.get(direct_key)
+        if isinstance(direct_items, list):
+            return [item for item in direct_items if isinstance(item, dict)]
+        section = "search_results" if direct_key == "results" else "employees"
+        items: List[Dict[str, Any]] = []
+        for reference in cls._section_references(payload, section):
+            if reference.get("kind") != "person":
+                continue
+            items.append({
+                "name": str(reference.get("text") or "").strip(),
+                "headline": str(reference.get("context") or "").strip(),
+                "profile_url": cls._absolute_linkedin_url(str(reference.get("url") or "")),
+                "location": "",
+            })
+        return items
+
+    @staticmethod
+    def _parse_profile_lines(text: str) -> List[str]:
+        return [line.strip() for line in str(text or "").splitlines() if line.strip()]
+
+    @classmethod
+    def _parse_experience_section(cls, text: str, target_company: str) -> List[Dict[str, Any]]:
+        lines = cls._parse_profile_lines(text)
+        target_tokens = [
+            token for token in re.findall(r"[a-z0-9]+", target_company.lower())
+            if token not in {"limited", "ltd", "private", "pvt", "inc", "corp", "corporation"}
+        ]
+        experiences: List[Dict[str, Any]] = []
+        for index, line in enumerate(lines):
+            if not target_tokens or not all(token in line.lower() for token in target_tokens[:2]):
+                continue
+            title = lines[index - 1] if index > 0 and lines[index - 1].lower() != "experience" else ""
+            following = lines[index + 1:index + 7]
+            dates = next((item for item in following if re.search(r"\b(?:19|20)\d{2}\b", item)), "")
+            date_index = following.index(dates) if dates in following else -1
+            after_dates = following[date_index + 1:] if date_index >= 0 else following
+            location = next((item for item in after_dates if "," in item or "india" in item.lower()), "")
+            description = " ".join(item for item in after_dates if item != location)[:200]
+            experiences.append({
+                "company": line.split("·", 1)[0].strip(),
+                "title": title,
+                "dates": dates,
+                "is_current": "present" in dates.lower() or "current" in dates.lower(),
+                "location": location,
+                "description": description,
+            })
+        return experiences
+
     def resolve_company(self, company_name: str, domain: str = "") -> Optional[Dict[str, Any]]:
         """Resolve company profile on LinkedIn and extract slug and numeric company_urn."""
         clean_name = re.sub(r"\b(limited|ltd|private|pvt|corp|corporation|inc)\b", "", company_name.lower()).strip()
@@ -504,14 +580,14 @@ class LinkedInMCPProvider:
             return self._company_cache[cache_key]
 
         # Extract slug from domain or clean name
-        company_query = clean_name
-        if domain:
-            dom_slug = domain.lower().removeprefix("www.").split(".")[0]
-            if len(dom_slug) >= 4:
-                company_query = dom_slug
+        company_query = re.sub(r"[^a-z0-9]+", "-", clean_name).strip("-")
+        if not company_query and domain:
+            company_query = domain.lower().removeprefix("www.").split(".")[0]
 
         try:
-            profile_data = self.invoke_tool("get_company_profile", {"company_name_or_url": company_query})
+            profile_data = self.invoke_tool("get_company_profile", {"company_name": company_query})
+        except (LinkedInMCPAuthError, LinkedInMCPRateLimitError):
+            raise
         except Exception as e:
             logger.warning("Could not resolve company '%s' on LinkedIn MCP: %s", company_name, e)
             return None
@@ -521,6 +597,10 @@ class LinkedInMCPProvider:
 
         # Extract numeric URN from about section or company_urn entry
         raw_urn = str(profile_data.get("company_urn") or profile_data.get("urn") or "")
+        for reference in self._section_references(profile_data, "about"):
+            if reference.get("kind") == "company_urn" and reference.get("value"):
+                raw_urn = str(reference["value"])
+                break
         m_digits = re.search(r"(\d+)", raw_urn)
         if m_digits:
             company_urn = m_digits.group(1)
@@ -529,7 +609,9 @@ class LinkedInMCPProvider:
             m_urn = re.search(r"urn:li:(?:company|fsd_company):(\d+)", str(profile_data))
             company_urn = m_urn.group(1) if m_urn else raw_urn
 
-        slug = str(profile_data.get("universal_name") or profile_data.get("slug") or company_query)
+        company_url = str(profile_data.get("url") or "")
+        slug_match = re.search(r"linkedin\.com/company/([^/?#]+)", company_url, re.IGNORECASE)
+        slug = str(profile_data.get("universal_name") or profile_data.get("slug") or (slug_match.group(1) if slug_match else company_query))
         result = {
             "company_name": profile_data.get("name") or company_name,
             "company_slug": slug,
@@ -537,6 +619,7 @@ class LinkedInMCPProvider:
             "employee_count": profile_data.get("employee_count"),
             "website": profile_data.get("website") or domain,
             "headline": profile_data.get("headline") or profile_data.get("tagline") or "",
+            "company_url": company_url or f"https://www.linkedin.com/company/{slug}/",
         }
         self._company_cache[cache_key] = result
         return result
@@ -545,6 +628,7 @@ class LinkedInMCPProvider:
         self,
         company_name: str,
         company_urn: Optional[str] = None,
+        company_slug: Optional[str] = None,
         city: Optional[str] = None,
         facility_name: Optional[str] = None,
         max_candidates: Optional[int] = None,
@@ -555,20 +639,22 @@ class LinkedInMCPProvider:
         seen_profile_urls: Set[str] = set()
 
         # Target company identifier for LinkedIn search (numeric URN preferred)
-        comp_target = company_urn if company_urn else company_name
+        comp_target = company_urn if company_urn and str(company_urn).isdigit() else None
+        company_keywords = f' "{company_name}"' if not comp_target else ""
 
         # Priority 1: Senior Authority Roles (Plant Head, Head Quality, QA Head, Metrology Head)
-        senior_query = '("Plant Head" OR "Factory Head" OR "Unit Head" OR "Head Quality" OR "Plant Quality Head" OR "QA Head" OR "Metrology")'
+        senior_query = '("Plant Head" OR "Factory Head" OR "Unit Head" OR "Head Quality" OR "Plant Quality Head" OR "QA Head" OR "Metrology")' + company_keywords
         try:
             search_args: Dict[str, Any] = {
                 "keywords": senior_query,
-                "current_company": comp_target,
             }
+            if comp_target:
+                search_args["current_company"] = comp_target
             if city:
                 search_args["location"] = city
 
             raw_results = self.invoke_tool("search_people", search_args)
-            items = raw_results if isinstance(raw_results, list) else raw_results.get("results", []) if isinstance(raw_results, dict) else []
+            items = self._extract_people_items(raw_results, "results")
 
             for item in items:
                 if not isinstance(item, dict):
@@ -580,22 +666,25 @@ class LinkedInMCPProvider:
                     candidates.append(parsed)
                     if len(candidates) >= limit:
                         break
+        except (LinkedInMCPAuthError, LinkedInMCPRateLimitError):
+            raise
         except Exception as e:
             logger.warning("Senior people search failed on LinkedIn MCP: %s", e)
 
         # Priority 2: Quality Leadership Managers if slots remain
         if len(candidates) < limit:
-            mgr_query = '("Quality Manager" OR "Operations Manager" OR "Maintenance Head")'
+            mgr_query = '("Quality Manager" OR "Operations Manager" OR "Maintenance Head")' + company_keywords
             try:
                 search_args = {
                     "keywords": mgr_query,
-                    "current_company": comp_target,
                 }
+                if comp_target:
+                    search_args["current_company"] = comp_target
                 if city:
                     search_args["location"] = city
 
                 raw_results = self.invoke_tool("search_people", search_args)
-                items = raw_results if isinstance(raw_results, list) else raw_results.get("results", []) if isinstance(raw_results, dict) else []
+                items = self._extract_people_items(raw_results, "results")
                 for item in items:
                     if not isinstance(item, dict):
                         continue
@@ -606,15 +695,21 @@ class LinkedInMCPProvider:
                         candidates.append(parsed)
                         if len(candidates) >= limit:
                             break
+            except (LinkedInMCPAuthError, LinkedInMCPRateLimitError):
+                raise
             except Exception as e:
                 logger.warning("Manager search failed on LinkedIn MCP: %s", e)
 
         # Priority 3: Company Employees endpoint fallback
         if len(candidates) < limit:
             try:
-                comp_slug = comp_target
-                emp_results = self.invoke_tool("get_company_employees", {"company": comp_slug, "keyword": "Quality"})
-                items = emp_results if isinstance(emp_results, list) else emp_results.get("employees", []) if isinstance(emp_results, dict) else []
+                employee_company = company_slug or re.sub(r"[^a-z0-9]+", "-", company_name.lower()).strip("-")
+                employee_company = re.sub(r"-(?:limited|ltd|private|pvt)$", "", employee_company).strip("-")
+                emp_results = self.invoke_tool(
+                    "get_company_employees",
+                    {"company_name": employee_company, "keywords": "Quality"},
+                )
+                items = self._extract_people_items(emp_results, "employees")
                 for item in items:
                     if not isinstance(item, dict):
                         continue
@@ -625,6 +720,8 @@ class LinkedInMCPProvider:
                         candidates.append(parsed)
                         if len(candidates) >= limit:
                             break
+            except (LinkedInMCPAuthError, LinkedInMCPRateLimitError):
+                raise
             except Exception as e:
                 logger.debug("Company employees search fallback failed: %s", e)
 
@@ -647,7 +744,12 @@ class LinkedInMCPProvider:
           tied to that specific experience entry.
         """
         try:
-            profile_data = self.invoke_tool("get_person_profile", {"url_or_username": profile_url, "sections": "experience"})
+            profile_data = self.invoke_tool(
+                "get_person_profile",
+                {"linkedin_username": profile_url, "sections": "experience"},
+            )
+        except (LinkedInMCPAuthError, LinkedInMCPRateLimitError):
+            raise
         except Exception as e:
             logger.warning("Failed to get profile experience for %s: %s", profile_url, e)
             return {
@@ -668,10 +770,14 @@ class LinkedInMCPProvider:
                 "experiences": [],
             }
 
-        name = profile_data.get("name") or profile_data.get("full_name") or ""
-        headline = profile_data.get("headline") or ""
-        profile_location = profile_data.get("location") or profile_data.get("geo_location") or ""
-        experiences_raw = profile_data.get("experience") or profile_data.get("experiences") or []
+        main_profile_lines = self._parse_profile_lines(self._section_text(profile_data, "main_profile"))
+        name = profile_data.get("name") or profile_data.get("full_name") or (main_profile_lines[0] if main_profile_lines else "")
+        headline = profile_data.get("headline") or (main_profile_lines[1] if len(main_profile_lines) > 1 else "")
+        profile_location = profile_data.get("location") or profile_data.get("geo_location") or next((line for line in main_profile_lines[2:8] if "," in line), "")
+        experiences_raw = profile_data.get("experience") or profile_data.get("experiences") or self._parse_experience_section(
+            self._section_text(profile_data, "experience"),
+            target_company,
+        )
 
         # Target company matching helper
         comp_clean = re.sub(r"\b(limited|ltd|private|pvt|corp|corporation|inc)\b", "", target_company.lower()).strip()
