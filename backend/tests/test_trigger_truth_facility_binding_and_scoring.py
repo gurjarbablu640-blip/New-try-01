@@ -181,9 +181,9 @@ class TestScoringDecompression:
         }
         person = {
             "name": "Dharmendra Chouhan",
-            "current_employment": "PROBABLE",
+            "current_employment": "VERIFIED",
             "facility_relationship": "FACILITY_OWNER",
-            "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+            "authority_class": "FACILITY_OWNER",
             "person_confidence": "HIGH",
             "person_score": 82.0,
         }
@@ -227,9 +227,9 @@ class TestScoringDecompression:
         }
         person = {
             "name": "Ravi Singh",
-            "current_employment": "PROBABLE",
+            "current_employment": "VERIFIED",
             "facility_relationship": "FACILITY_FUNCTION_OWNER",
-            "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+            "authority_class": "FACILITY_OWNER",
             "person_confidence": "MEDIUM",
             "person_score": 78.0,
         }

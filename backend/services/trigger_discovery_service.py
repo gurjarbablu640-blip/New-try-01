@@ -1512,12 +1512,16 @@ def compute_lead_qualification_score(
     if fac_rel in ("OTHER_FACILITY_OWNER", "FACILITY_CONTRADICTED"):
         return 55.0, "HOLD", "HOLD_FACILITY_MISMATCH", [f"Candidate '{p_name}' is located at a different facility ({fac_rel})."]
 
+    # Current employment must be strictly VERIFIED for contact enrichment (PROBABLE / UNKNOWN must HOLD)
+    if emp_status != "VERIFIED":
+        return 65.0, "HOLD", "HOLD_PERSON_CURRENT_EMPLOYMENT", [
+            f"Candidate '{p_name}' current employment status is {emp_status}. Verified current employment is strictly mandatory for contact enrichment."
+        ]
+
     # Junior IC hard block
     if auth_class == "JUNIOR_IC" or p_conf == "LOW" or p_score < 65.0:
         return 65.0, "HOLD", "HOLD_AUTHORITY_INSUFFICIENT", [f"Candidate '{p_name}' lacks plant decision authority or score < 65."]
 
-    if emp_status not in ("VERIFIED", "PROBABLE"):
-        return 68.0, "HOLD", "HOLD_PERSON_UNCERTAIN", [f"Candidate '{p_name}' current employment status is {emp_status}."]
 
     # Person-Facility Relationship Gate:
     # Plant-specific requires verified plant ownership (FACILITY_OWNER or FACILITY_FUNCTION_OWNER).

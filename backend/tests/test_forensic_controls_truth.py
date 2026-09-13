@@ -247,3 +247,99 @@ class TestForensicAuthoritativeControls:
         assert band == "P1"
         assert status == "READY_FOR_CONTACT_ENRICHMENT"
 
+
+class TestCurrentEmploymentMandatoryGate:
+    """Regression tests verifying that current employment VERIFIED is strictly mandatory for READY_FOR_CONTACT_ENRICHMENT."""
+
+    @pytest.fixture
+    def base_lead_context(self):
+        trigger = {
+            "is_valid": True,
+            "trigger_type": "CAPACITY_EXPANSION",
+            "recency_tier": "CURRENT",
+            "source_tier": "TIER_A",
+            "facility_relationship": "DIRECT",
+            "discovered_facility": "Sanand Plant",
+            "discovered_city": "Sanand",
+            "discovered_state": "gujarat",
+        }
+        binding = {
+            "linkage": TRIGGER_FACILITY_DIRECT,
+            "target_facility": "Sanand Plant",
+            "target_city": "Sanand",
+        }
+        return trigger, binding
+
+    def test_verified_facility_authority_yields_ready(self, base_lead_context):
+        """VERIFIED + facility + authority -> READY_FOR_CONTACT_ENRICHMENT."""
+        trigger, binding = base_lead_context
+        person = {
+            "name": "Rajesh Sharma",
+            "current_employment": "VERIFIED",
+            "facility_relationship": "FACILITY_OWNER",
+            "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+            "person_confidence": "HIGH",
+            "person_score": 88.0,
+        }
+        score, band, status, reasons = compute_lead_qualification_score(
+            trigger, person, binding, "Automotive"
+        )
+        assert band == "P1"
+        assert status == "READY_FOR_CONTACT_ENRICHMENT"
+        assert len(reasons) == 0
+
+    def test_probable_facility_authority_yields_hold(self, base_lead_context):
+        """PROBABLE + facility + authority -> HOLD (HOLD_PERSON_CURRENT_EMPLOYMENT)."""
+        trigger, binding = base_lead_context
+        person = {
+            "name": "Rajesh Sharma",
+            "current_employment": "PROBABLE",
+            "facility_relationship": "FACILITY_OWNER",
+            "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+            "person_confidence": "HIGH",
+            "person_score": 88.0,
+        }
+        score, band, status, reasons = compute_lead_qualification_score(
+            trigger, person, binding, "Automotive"
+        )
+        assert band == "HOLD"
+        assert status == "HOLD_PERSON_CURRENT_EMPLOYMENT"
+        assert any("verified current employment is strictly mandatory" in r.lower() for r in reasons)
+
+    def test_unknown_facility_authority_yields_hold(self, base_lead_context):
+        """UNKNOWN + facility + authority -> HOLD (HOLD_PERSON_CURRENT_EMPLOYMENT)."""
+        trigger, binding = base_lead_context
+        person = {
+            "name": "Rajesh Sharma",
+            "current_employment": "UNKNOWN",
+            "facility_relationship": "FACILITY_OWNER",
+            "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+            "person_confidence": "HIGH",
+            "person_score": 88.0,
+        }
+        score, band, status, reasons = compute_lead_qualification_score(
+            trigger, person, binding, "Automotive"
+        )
+        assert band == "HOLD"
+        assert status == "HOLD_PERSON_CURRENT_EMPLOYMENT"
+        assert any("verified current employment is strictly mandatory" in r.lower() for r in reasons)
+
+    def test_contradicted_facility_authority_yields_hold(self, base_lead_context):
+        """CONTRADICTED + facility + authority -> HOLD (HOLD_PERSON_CONTRADICTED)."""
+        trigger, binding = base_lead_context
+        person = {
+            "name": "Rajesh Sharma",
+            "current_employment": "CONTRADICTED",
+            "facility_relationship": "FACILITY_OWNER",
+            "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+            "person_confidence": "HIGH",
+            "person_score": 88.0,
+        }
+        score, band, status, reasons = compute_lead_qualification_score(
+            trigger, person, binding, "Automotive"
+        )
+        assert band == "HOLD"
+        assert status == "HOLD_PERSON_CONTRADICTED"
+        assert any("contradicted" in r.lower() for r in reasons)
+
+
