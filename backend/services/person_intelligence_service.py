@@ -30,6 +30,7 @@ import html
 import io
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -776,6 +777,10 @@ def compute_deterministic_person_score(
         score_src = 10.0
     elif source_quality == "LINKEDIN_SEARCH_SNIPPET":
         score_src = 8.0
+    elif source_quality in ("CONFERENCE_TECHNICAL", "TRADE_MEDIA"):
+        score_src = 7.0
+    elif source_quality == "PROFESSIONAL_DIRECTORY":
+        score_src = 3.0
     else:
         score_src = 5.0
 
@@ -787,16 +792,19 @@ def compute_deterministic_person_score(
     # - facility is contradicted or other facility
     # - current employment is contradicted or stale
     # - role is junior individual contributor without authority
+    # - source is only a professional directory (Task 4)
     if (
         facility_relationship in ("OTHER_FACILITY_OWNER", "FACILITY_CONTRADICTED")
         or current_employment in ("CONTRADICTED", "STALE")
         or authority_class == "JUNIOR_IC"
+        or source_quality == "PROFESSIONAL_DIRECTORY"
     ):
-        confidence = "LOW"
+        confidence = "LOW" if (source_quality == "PROFESSIONAL_DIRECTORY" and total_score < 70.0) else ("MEDIUM" if source_quality == "PROFESSIONAL_DIRECTORY" else "LOW")
     elif (
         total_score >= 85.0
         and current_employment == "VERIFIED"
         and facility_relationship in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER", "GROUP_FUNCTION_OWNER")
+        and source_quality != "PROFESSIONAL_DIRECTORY"
     ):
         confidence = "HIGH"
     elif total_score >= 70.0 and current_employment in ("VERIFIED", "PROBABLE"):
@@ -906,8 +914,16 @@ PERSON_ROLE_PATTERN = (
 )
 
 
+DIRECTORY_DOMAINS = {
+    "kompass.com", "zaubacorp.com", "indiamart.com", "tofler.in", "justdial.com",
+    "tradeindia.com", "instafinancials.com", "crunchbase.com", "zoominfo.com",
+    "apollo.io", "lusha.com", "rocketreach.co", "signalhire.com", "aeroleads.com",
+    "lead411.com",
+}
+
+
 def classify_person_source(url: str, title: str = "", company_domain: str = "") -> str:
-    """Classify the public source surface used to discover a candidate."""
+    """Classify the public source surface used to discover or verify a candidate."""
     parsed = urlparse(url or "")
     host = parsed.netloc.lower().removeprefix("www.")
     path = parsed.path.lower()
@@ -915,6 +931,8 @@ def classify_person_source(url: str, title: str = "", company_domain: str = "") 
     combined = f"{title} {path}".lower()
     is_official = bool(clean_domain and (host == clean_domain or host.endswith(f".{clean_domain}")))
 
+    if any(d in host for d in DIRECTORY_DOMAINS):
+        return "PROFESSIONAL_DIRECTORY"
     if "linkedin.com/in/" in (url or "").lower():
         return "LINKEDIN_SEARCH_SNIPPET"
     if path.endswith(".pdf") or any(term in combined for term in ("annual-report", "annual_report", "annual report")):
@@ -931,6 +949,304 @@ def classify_person_source(url: str, title: str = "", company_domain: str = "") 
     )):
         return "TRADE_MEDIA"
     return "PUBLIC_WEB_BIO"
+
+
+SOURCE_PRIORITY_ORDER = [
+    "OFFICIAL_COMPANY_PAGE",
+    "ANNUAL_REPORT",
+    "COMPANY_PUBLIC_POST",
+    "LINKEDIN_SEARCH_SNIPPET",
+    "CONFERENCE_TECHNICAL",
+    "TRADE_MEDIA",
+    "PUBLIC_WEB_BIO",
+    "PROFESSIONAL_DIRECTORY",
+]
+
+
+@dataclass
+class PersonEvidencePacket:
+    """Structured multi-source evidence packet grounding candidate qualification."""
+    candidate_name: str
+    current_title: str
+    target_company: str
+    target_facility: str = ""
+    target_city: str = ""
+    target_state: str = ""
+
+    employment_sources: List[Dict[str, Any]] = field(default_factory=list)
+    facility_sources: List[Dict[str, Any]] = field(default_factory=list)
+    function_sources: List[Dict[str, Any]] = field(default_factory=list)
+    authority_sources: List[Dict[str, Any]] = field(default_factory=list)
+
+    current_employment: str = "UNKNOWN"
+    facility_relationship: str = "UNKNOWN"
+    function_ownership: str = "UNPROVEN"
+    authority: str = "UNKNOWN"
+    confidence: str = "LOW"
+    score: float = 0.0
+    source_types: List[str] = field(default_factory=list)
+
+    def add_source(
+        self,
+        url: str,
+        title: str,
+        snippet: str,
+        source_type: str = "",
+        company_domain: str = "",
+    ) -> None:
+        """Classifies and attaches a search result to the evidence packet."""
+        stype = source_type or classify_person_source(url, title, company_domain=company_domain)
+        if stype not in self.source_types:
+            self.source_types.append(stype)
+
+        src_record = {
+            "url": url,
+            "title": title,
+            "snippet": snippet[:400],
+            "source_type": stype,
+        }
+
+        text = f"{title}. {snippet}".strip().lower()
+
+        # 1. Employment evidence: mentions company or experience
+        c_clean = re.sub(r"[^\w\s]", " ", self.target_company.lower()).strip()
+        c_tokens = [t for t in c_clean.split() if t not in COMPANY_SUFFIX_TOKENS and len(t) >= 3]
+        if (c_tokens and any(t in text for t in c_tokens)) or "experience" in text or "present" in text or "linkedin.com/in/" in url.lower():
+            self.employment_sources.append(src_record)
+
+        # 2. Facility evidence: mentions target city, state, facility, or other Indian industrial cities
+        t_city = self.target_city.lower().strip() if self.target_city else ""
+        t_fac = self.target_facility.lower().strip() if self.target_facility else ""
+        has_target = (t_city and t_city in text) or (t_fac and any(w in text for w in t_fac.split() if len(w) >= 4))
+        has_other_city = any(re.search(rf"\b{c}\b", text) for c in INDIAN_CITIES_TO_STATE if c != t_city)
+        if has_target or has_other_city or any(w in text for w in ["plant", "works", "facility", "unit", "factory", "site", "location:"]):
+            self.facility_sources.append(src_record)
+
+        # 3. Function evidence: mentions quality, QA, QC, metrology, calibration, testing, operations
+        if any(w in text for w in ["quality", "qa", "qc", "metrology", "calibration", "inspection", "testing", "operations", "manufacturing"]):
+            self.function_sources.append(src_record)
+
+        # 4. Authority evidence: mentions leadership titles
+        if any(w in text for w in ["head", "manager", "vp", "vice president", "director", "general manager", "gm", "lead", "engineer", "specialist", "officer"]):
+            self.authority_sources.append(src_record)
+
+    def derive(self) -> None:
+        """Deterministically derive multi-source verified attributes."""
+        # 1. Current Employment
+        has_verified = False
+        has_probable = False
+        has_contradicted = False
+        for s in self.employment_sources:
+            st = classify_current_employment(s.get("title", ""), s.get("snippet", ""), self.target_company)
+            if st == "CONTRADICTED":
+                has_contradicted = True
+            elif st == "VERIFIED":
+                has_verified = True
+            elif st == "PROBABLE":
+                has_probable = True
+
+        if has_contradicted and not has_verified:
+            self.current_employment = "CONTRADICTED"
+        elif has_verified:
+            self.current_employment = "VERIFIED"
+        elif has_probable:
+            self.current_employment = "PROBABLE"
+        else:
+            self.current_employment = "UNKNOWN"
+
+        # 2. Facility Relationship
+        combined_fac_text = " ".join(f"{s.get('title', '')} {s.get('snippet', '')}" for s in self.facility_sources[:5])
+        fac_rel = classify_facility_relationship(
+            self.current_title,
+            combined_fac_text,
+            self.target_facility,
+            self.target_city,
+            target_state=self.target_state,
+        )
+
+        # Task 4 Directory Rule: Directory sources alone must NOT create plant-specific ownership
+        if self.source_types and all(stype == "PROFESSIONAL_DIRECTORY" for stype in self.source_types):
+            if fac_rel in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER"):
+                fac_rel = "FUNCTIONALLY_RELEVANT"
+
+        self.facility_relationship = fac_rel
+
+        # 3. Function Ownership & Authority
+        combined_fn_text = " ".join(f"{s.get('title', '')} {s.get('snippet', '')}" for s in self.function_sources[:5])
+        auth_class = classify_authority_class(self.current_title, combined_fn_text)
+        self.function_ownership = auth_class
+
+        t_lower = self.current_title.lower()
+        if auth_class == "JUNIOR_IC":
+            self.authority = "JUNIOR_IC"
+        elif any(w in t_lower for w in ["head", "director", "vp", "vice president", "general manager", "gm", "manager", "lead"]):
+            self.authority = "DECISION_MAKER"
+        else:
+            self.authority = "INFLUENCER"
+
+        # 4. Score and Confidence
+        dominant_src = "PUBLIC_WEB_BIO"
+        for p in SOURCE_PRIORITY_ORDER:
+            if p in self.source_types:
+                dominant_src = p
+                break
+
+        score, conf = compute_deterministic_person_score(
+            current_employment=self.current_employment,
+            facility_relationship=self.facility_relationship,
+            authority_class=self.function_ownership,
+            title=self.current_title,
+            source_quality=dominant_src,
+        )
+
+        # Task 4 Directory Rule: Directory alone must never yield HIGH confidence
+        if self.source_types and all(stype == "PROFESSIONAL_DIRECTORY" for stype in self.source_types):
+            conf = "LOW" if score < 70.0 else "MEDIUM"
+
+        self.score = score
+        self.confidence = conf
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "candidate_name": self.candidate_name,
+            "current_title": self.current_title,
+            "target_company": self.target_company,
+            "target_facility": self.target_facility,
+            "target_city": self.target_city,
+            "target_state": self.target_state,
+            "current_employment": self.current_employment,
+            "facility_relationship": self.facility_relationship,
+            "function_ownership": self.function_ownership,
+            "authority": self.authority,
+            "confidence": self.confidence,
+            "score": self.score,
+            "source_types": self.source_types,
+            "employment_sources_count": len(self.employment_sources),
+            "facility_sources_count": len(self.facility_sources),
+            "function_sources_count": len(self.function_sources),
+            "authority_sources_count": len(self.authority_sources),
+        }
+
+
+def create_person_evidence_packet(
+    candidate_name: str,
+    current_title: str,
+    target_company: str,
+    target_facility: str = "",
+    target_city: str = "",
+    target_state: str = "",
+    initial_source: Optional[Dict[str, Any]] = None,
+    company_domain: str = "",
+) -> PersonEvidencePacket:
+    """Factory creating and initializing a PersonEvidencePacket."""
+    packet = PersonEvidencePacket(
+        candidate_name=candidate_name,
+        current_title=current_title,
+        target_company=target_company,
+        target_facility=target_facility,
+        target_city=target_city,
+        target_state=target_state,
+    )
+    if initial_source:
+        packet.add_source(
+            url=str(initial_source.get("url") or ""),
+            title=str(initial_source.get("title") or ""),
+            snippet=str(initial_source.get("snippet") or initial_source.get("evidence_snippet") or ""),
+            source_type=str(initial_source.get("source_type") or ""),
+            company_domain=company_domain,
+        )
+    packet.derive()
+    return packet
+
+
+def verify_candidate_stage_b(
+    candidate: Dict[str, Any],
+    company_name: str,
+    facility_name: str = "",
+    city: str = "",
+    search_router: Any = None,
+    max_searches: int = 3,
+    company_domain: str = "",
+    telemetry: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Stage B: Targeted exact-name verification searches for an independently discovered candidate.
+
+    Runs up to max_searches (max 3) targeted queries:
+    1. "{name}" "{company}"
+    2. "{name}" "{company}" "{city}" (or quality if city empty)
+    3. site:linkedin.com/in "{name}" "{company}"
+    Collects multi-source evidence into a PersonEvidencePacket and updates candidate attributes.
+    """
+    if search_router is None:
+        from services.research_provider import research_router
+        search_router = research_router
+
+    cand_name = str(candidate.get("name") or "").strip()
+    cand_title = str(candidate.get("title") or "").strip()
+    if not cand_name:
+        return candidate
+
+    packet = create_person_evidence_packet(
+        candidate_name=cand_name,
+        current_title=cand_title,
+        target_company=company_name,
+        target_facility=facility_name,
+        target_city=city,
+        target_state=str(candidate.get("state") or ""),
+        initial_source={
+            "url": str(candidate.get("source_url") or ""),
+            "title": str(candidate.get("title") or ""),
+            "snippet": str(candidate.get("evidence_snippet") or ""),
+            "source_type": str(candidate.get("source_type") or ""),
+        },
+        company_domain=company_domain,
+    )
+
+    queries = [
+        f'"{cand_name}" "{company_name}"',
+        f'"{cand_name}" "{company_name}" "{city}"' if city else f'"{cand_name}" "{company_name}" plant quality',
+        f'site:linkedin.com/in "{cand_name}" "{company_name}"',
+    ]
+
+    for q in queries[:max_searches]:
+        try:
+            search_res = search_router.search(q, num_results=5)
+            if telemetry is not None:
+                telemetry["queries_run"] = telemetry.get("queries_run", 0) + 1
+                telemetry["stage_b_queries_run"] = telemetry.get("stage_b_queries_run", 0) + 1
+            results = search_res.get("results", []) or []
+            cand_tokens = [t.lower() for t in cand_name.split() if len(t) >= 3]
+            for r in results:
+                u = str(r.get("url") or "")
+                t = str(r.get("title") or "")
+                s = str(r.get("snippet") or "")
+                comb_lower = f"{t} {s}".lower()
+                if not cand_tokens or any(tok in comb_lower for tok in cand_tokens):
+                    packet.add_source(url=u, title=t, snippet=s, company_domain=company_domain)
+        except Exception as e:
+            logger.warning("Stage B verification query '%s' failed for %s: %s", q, cand_name, e)
+
+    packet.derive()
+
+    cand_copy = dict(candidate)
+    cand_copy["current_employment"] = packet.current_employment
+    cand_copy["facility_relationship"] = packet.facility_relationship
+    cand_copy["authority_class"] = packet.function_ownership
+    cand_copy["person_score"] = packet.score
+    cand_copy["person_confidence"] = packet.confidence
+    cand_copy["evidence_packet"] = packet.to_dict()
+
+    top_snippets = []
+    for src_list in (packet.employment_sources, packet.facility_sources):
+        for s in src_list:
+            snip = s.get("snippet", "").strip()
+            if snip and snip not in top_snippets:
+                top_snippets.append(snip)
+                break
+    if top_snippets:
+        cand_copy["evidence_snippet"] = " ... ".join(top_snippets)[:500]
+
+    return cand_copy
 
 
 def _candidate_from_fields(
@@ -954,19 +1270,24 @@ def _candidate_from_fields(
         return None
     source_url = str(item.get("url") or "")
     source_type = classify_person_source(source_url, title_raw, company_domain)
-    current_employment = classify_current_employment(snippet_raw, title_raw, company_name)
     target_state = str(item.get("state") or "")
-    facility_relationship = classify_facility_relationship(
-        clean_title, snippet_raw, facility_name, city, target_state=target_state
+
+    packet = create_person_evidence_packet(
+        candidate_name=name,
+        current_title=clean_title,
+        target_company=company_name,
+        target_facility=facility_name,
+        target_city=city,
+        target_state=target_state,
+        initial_source={
+            "url": source_url,
+            "title": title_raw,
+            "snippet": snippet_raw,
+            "source_type": source_type,
+        },
+        company_domain=company_domain,
     )
-    authority_class = classify_authority_class(clean_title, snippet_raw)
-    score, confidence = compute_deterministic_person_score(
-        current_employment=current_employment,
-        facility_relationship=facility_relationship,
-        authority_class=authority_class,
-        title=clean_title,
-        source_quality=source_type,
-    )
+
     return {
         "name": re.sub(r"\s+", " ", name).strip(),
         "title": clean_title,
@@ -974,14 +1295,15 @@ def _candidate_from_fields(
         "facility": facility_name or city,
         "location": item.get("location") or city or facility_name,
         "source_date": item.get("source_date") or item.get("published_date") or item.get("date") or "",
-        "current_employment": current_employment,
-        "facility_relationship": facility_relationship,
-        "authority_class": authority_class,
-        "person_score": score,
-        "person_confidence": confidence,
+        "current_employment": packet.current_employment,
+        "facility_relationship": packet.facility_relationship,
+        "authority_class": packet.function_ownership,
+        "person_score": packet.score,
+        "person_confidence": packet.confidence,
         "source_url": source_url,
         "source_type": source_type,
         "evidence_snippet": snippet_raw[:500],
+        "evidence_packet": packet.to_dict(),
         **({"source_page": item["source_page"]} if item.get("source_page") else {}),
     }
 
@@ -1897,6 +2219,38 @@ def discover_and_rank_decision_makers(
                 fetch_record["error"] = type(error).__name__
             telemetry["public_source_fetches"].append(fetch_record)
 
+    all_candidates.sort(key=_person_sort_key)
+    all_candidates = all_candidates[:15]
+
+    # STAGE B: Targeted Exact-Name Verification
+    # For serious candidates discovered in Stage A, run up to 3 targeted verification searches
+    # to ground current employment, exact facility location, and authority.
+    verified_candidates = []
+    serious_candidates = [
+        c for c in all_candidates
+        if float(c.get("person_score", 0.0) or 0.0) >= 50.0
+        and str(c.get("authority_class") or "") != "JUNIOR_IC"
+    ][:2]
+    serious_keys = {_normalize_person_name(str(c.get("name") or "")) for c in serious_candidates}
+
+    for candidate in all_candidates:
+        c_name_norm = _normalize_person_name(str(candidate.get("name") or ""))
+        if c_name_norm in serious_keys:
+            updated_cand = verify_candidate_stage_b(
+                candidate=candidate,
+                company_name=company_name,
+                facility_name=facility_name,
+                city=city,
+                search_router=search_router,
+                max_searches=3,
+                company_domain=company_domain,
+                telemetry=telemetry,
+            )
+            verified_candidates.append(updated_cand)
+        else:
+            verified_candidates.append(candidate)
+
+    all_candidates = verified_candidates
     all_candidates.sort(key=_person_sort_key)
     all_candidates = all_candidates[:15]
     candidates_before_llm = [dict(candidate) for candidate in all_candidates]
