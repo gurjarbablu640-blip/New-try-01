@@ -512,3 +512,77 @@ class TestCrashSafetyAndProcessRestart:
         with pytest.raises(SerperBudgetExhaustedError):
             proc2_manager.reserve_request(1)
 
+
+class TestTaskLevelSerperBudgetEnforcement:
+    """Test task-level hard budget mechanism requested in Section 1.
+
+    Requirements:
+    - Task cap = 5: requests 1-5 allowed, request 6 blocked.
+    - Coexists with production 1500/day limit without altering it.
+    - Cache hits do NOT consume either live-request budget.
+    """
+
+    def test_task_budget_cap_enforcement_request_6_blocked(self, clean_budget_manager):
+        with clean_budget_manager.task_budget(5):
+            # Requests 1 to 5 succeed
+            for i in range(5):
+                assert clean_budget_manager.can_request() is True
+                assert clean_budget_manager.reserve_request(1) is True
+
+            # Task budget is now exhausted
+            assert clean_budget_manager.can_request() is False
+            status = clean_budget_manager.get_task_budget_status()
+            assert status["task_requests_used"] == 5
+            assert status["task_budget_cap"] == 5
+            assert status["task_remaining"] == 0
+
+            # Request 6 MUST be blocked with SerperBudgetExhaustedError
+            with pytest.raises(SerperBudgetExhaustedError) as exc_info:
+                clean_budget_manager.reserve_request(1)
+            assert "task budget exhausted" in str(exc_info.value).lower()
+
+        # Outside the task_budget context, daily limit room remains intact
+        assert clean_budget_manager.live_requests_today == 5
+        assert clean_budget_manager.remaining_daily_budget == 1495
+        assert clean_budget_manager.can_request() is True
+
+    def test_cache_hits_do_not_consume_task_budget(self, clean_budget_manager):
+        provider = SerperSearchProvider(api_key="valid_key", budget_manager=clean_budget_manager)
+        mock_cache = MagicMock()
+        mock_cache.get.return_value = {
+            "provider": "serper",
+            "provider_status": PROVIDER_LIVE,
+            "results": [{"title": "Cached Title", "link": "https://example.com", "snippet": "Cached"}],
+            "query": "Cached Query",
+            "cache_hit": True,
+        }
+        provider.cache = mock_cache
+
+        with clean_budget_manager.task_budget(5):
+            for _ in range(10):
+                res = provider.search("Cached Query", use_cache=True)
+                assert res["cache_hit"] is True
+
+            status = clean_budget_manager.get_task_budget_status()
+            assert status["task_requests_used"] == 0
+            assert clean_budget_manager.live_requests_today == 0
+            assert clean_budget_manager.cache_hits_today == 10
+            assert clean_budget_manager.can_request() is True
+
+    def test_task_budget_cap_24_request_25_blocked(self, clean_budget_manager):
+        """Hard task cap = 24: requests 1-24 allowed, request 25 strictly blocked."""
+        with clean_budget_manager.task_budget(24):
+            for i in range(24):
+                assert clean_budget_manager.can_request() is True
+                assert clean_budget_manager.reserve_request(1) is True
+
+            assert clean_budget_manager.can_request() is False
+            status = clean_budget_manager.get_task_budget_status()
+            assert status["task_requests_used"] == 24
+            assert status["task_remaining"] == 0
+
+            with pytest.raises(SerperBudgetExhaustedError) as exc_info:
+                clean_budget_manager.reserve_request(1)
+            assert "task budget exhausted" in str(exc_info.value).lower()
+
+

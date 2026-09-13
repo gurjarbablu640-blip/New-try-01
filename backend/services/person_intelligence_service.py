@@ -77,6 +77,8 @@ NON_HUMAN_ENTITIES = {
     "propulsion systems", "powertrain systems", "quality systems", "chassis systems",
     "committee composition", "committee composition. designation", "composition. designation",
     "committee composition designation", "purchase head", "quality head",
+    "midc", "gidc", "riico", "sipcot", "siidc", "kiadb", "hsiidc", "upsidc", "biada",
+    "midc sinnar", "midc chakan", "midc satpur", "midc waluj",
 }
 
 GENERIC_ROLE_PHRASES = {
@@ -216,6 +218,15 @@ def is_human_person_candidate(name_str: str, company_name: str = "") -> Tuple[bo
     facility_terms = {"plant", "complex", "facility", "works", "factory", "refinery", "smelter", "foundry", "mill", "unit", "campus", "estate"}
     if any(t in facility_terms for t in tokens_lower):
         return False, f"Contains facility/plant term: {clean}"
+
+    estate_terms = {
+        "midc", "gidc", "riico", "sipcot", "siidc", "kiadb", "hsiidc", "upsidc", "biada",
+        "dicc", "sez", "sinnar", "satpur", "chakan", "bhosari", "talegaon", "oragadam",
+        "sriperumbudur", "waluj", "shendra", "butibori", "pithampur", "peenya",
+    }
+    if any(t in estate_terms for t in tokens_lower):
+        return False, f"Candidate name '{clean}' contains industrial estate / development corporation term"
+
 
     # Reject location/city combinations with all-caps business acronyms (e.g. 'TPI CRSS Nashik')
     if any(t in INDIAN_CITIES_TO_STATE for t in tokens_lower):
@@ -470,7 +481,13 @@ def classify_current_employment(snippet: str, title: str, company_name: str) -> 
     headline_match = re.search(r"(?:@|\bat\s+)\s*([A-Za-z0-9\s&.-]{3,35})(?:\s*[-–—|•,]|\s*I\s*|\.\s|$)", clean_title)
     if headline_match:
         other_comp = headline_match.group(1).strip()
-        if other_comp.lower() not in {"linkedin", "home", "work", "india", "plant"} and len(other_comp) >= 3:
+        other_lower = other_comp.lower()
+        if (
+            other_lower not in {"linkedin", "home", "work", "india", "plant"}
+            and not any(w in other_lower for w in ["plant", "facility", "works", "factory", "site", "unit", "complex", "division", "location"])
+            and not other_lower.startswith(("our ", "the ", "its "))
+            and len(other_comp) >= 3
+        ):
             if not is_target_comp(other_comp):
                 return "CONTRADICTED"
 
@@ -478,7 +495,13 @@ def classify_current_employment(snippet: str, title: str, company_name: str) -> 
     snip_headline = re.search(r"^(?:[A-Za-z\s/&-]+)\s+(?:at|@)\s+([A-Za-z0-9\s&.-]+?)(?:\s*[-–—|•]|\.\s|$)", clean_snippet)
     if snip_headline:
         other_comp = snip_headline.group(1).strip()
-        if other_comp and not is_target_comp(other_comp):
+        other_lower = other_comp.lower()
+        if (
+            other_lower not in {"linkedin", "home", "work", "india", "plant"}
+            and not any(w in other_lower for w in ["plant", "facility", "works", "factory", "site", "unit", "complex", "division", "location"])
+            and not other_lower.startswith(("our ", "the ", "its "))
+            and not is_target_comp(other_comp)
+        ):
             return "CONTRADICTED"
 
     # 3. Explicit former / past employment patterns for target company
@@ -1113,6 +1136,89 @@ SOURCE_PRIORITY_ORDER = [
 ]
 
 
+def classify_person_source_recency(
+    source_date: str = "",
+    snippet: str = "",
+    reference_dt: Optional[datetime] = None,
+) -> Tuple[str, Optional[int]]:
+    """Classify recency of person evidence source into Salesoorja tiers:
+    CURRENT: <= 180 days
+    RECENT: 181–365 days
+    OLDER: > 365 days
+    UNDATED: No explicit date found
+    """
+    ref_dt = reference_dt or NOW_DT
+    ref_year = ref_dt.year  # 2026
+
+    clean_date = (source_date or "").strip()
+    if clean_date:
+        m_rel = re.search(r"(\d+)\s+(day|week|month|year)s?\s+ago", clean_date.lower())
+        if m_rel:
+            qty = int(m_rel.group(1))
+            unit = m_rel.group(2)
+            days = qty if unit == "day" else (qty * 7 if unit == "week" else (qty * 30 if unit == "month" else qty * 365))
+            if days <= 180:
+                return "CURRENT", days
+            elif days <= 365:
+                return "RECENT", days
+            else:
+                return "OLDER", days
+
+        m_iso = re.search(r"\b(20\d{2})[-/](0[1-9]|1[0-2])[-/](0[1-9]|[12]\d|3[01])\b", clean_date)
+        if m_iso:
+            try:
+                d = datetime(int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3)), tzinfo=timezone.utc)
+                diff_days = max(0, (ref_dt - d).days)
+                if diff_days <= 180:
+                    return "CURRENT", diff_days
+                elif diff_days <= 365:
+                    return "RECENT", diff_days
+                else:
+                    return "OLDER", diff_days
+            except Exception:
+                pass
+
+        m_my = re.search(r"\b([A-Za-z]{3,9})\s+(20\d{2})\b", clean_date)
+        if m_my:
+            try:
+                dt_parsed = datetime.strptime(f"{m_my.group(1)[:3]} {m_my.group(2)}", "%b %Y").replace(tzinfo=timezone.utc)
+                diff_days = max(0, (ref_dt - dt_parsed).days)
+                if diff_days <= 180:
+                    return "CURRENT", diff_days
+                elif diff_days <= 365:
+                    return "RECENT", diff_days
+                else:
+                    return "OLDER", diff_days
+            except Exception:
+                pass
+
+        m_yr = re.search(r"\b(20\d{2})\b", clean_date)
+        if m_yr:
+            yr = int(m_yr.group(1))
+            if yr >= ref_year:
+                return "CURRENT", 90
+            elif yr == ref_year - 1:
+                return "RECENT", 270
+            else:
+                return "OLDER", (ref_year - yr) * 365
+
+    comb_lower = (snippet or "").lower()
+    if re.search(r"\b(?:present|currently|serving\s+as)\b", comb_lower) and any(y in comb_lower for y in ["2025", "2026", "fy 26"]):
+        return "CURRENT", 60
+
+    m_snip_yr = re.findall(r"\b(20\d{2})\b", comb_lower)
+    if m_snip_yr:
+        max_yr = max(int(y) for y in m_snip_yr)
+        if max_yr >= ref_year:
+            return "CURRENT", 90
+        elif max_yr == ref_year - 1:
+            return "RECENT", 270
+        else:
+            return "OLDER", (ref_year - max_yr) * 365
+
+    return "UNDATED", None
+
+
 @dataclass
 class PersonEvidencePacket:
     """Structured multi-source evidence packet grounding candidate qualification."""
@@ -1138,7 +1244,9 @@ class PersonEvidencePacket:
     confidence: str = "LOW"
     score: float = 0.0
     contact_route: str = "UNASSIGNED"
+    cross_source_corroborated: bool = False
     source_types: List[str] = field(default_factory=list)
+    source_recencies: List[str] = field(default_factory=list)
 
     def add_source(
         self,
@@ -1147,17 +1255,25 @@ class PersonEvidencePacket:
         snippet: str,
         source_type: str = "",
         company_domain: str = "",
+        source_date: str = "",
     ) -> None:
         """Classifies and attaches a search result to the evidence packet."""
         stype = source_type or classify_person_source(url, title, company_domain=company_domain)
         if stype not in self.source_types:
             self.source_types.append(stype)
 
+        recency, age_days = classify_person_source_recency(source_date, f"{title}. {snippet}")
+        if recency not in self.source_recencies:
+            self.source_recencies.append(recency)
+
         src_record = {
             "url": url,
             "title": title,
             "snippet": snippet[:400],
             "source_type": stype,
+            "recency": recency,
+            "age_days": age_days,
+            "source_date": source_date,
         }
 
         text = f"{title}. {snippet}".strip().lower()
@@ -1195,22 +1311,34 @@ class PersonEvidencePacket:
     def derive(self) -> None:
         """Deterministically derive multi-source verified attributes."""
         # 1. Current Employment
-        has_verified = False
+        has_fresh_verified = False
+        has_older_verified = False
         has_probable = False
         has_contradicted = False
+
         for s in self.employment_sources:
+            stype = s.get("source_type", "")
+            recency = s.get("recency", "UNDATED")
             st = classify_current_employment(s.get("title", ""), s.get("snippet", ""), self.target_company)
             if st == "CONTRADICTED":
                 has_contradicted = True
             elif st == "VERIFIED":
-                has_verified = True
+                # An older company post or public document (>365 days) alone cannot establish current employment
+                if stype in ("COMPANY_PUBLIC_POST", "ANNUAL_REPORT", "PUBLIC_DOCUMENT") and recency == "OLDER":
+                    has_older_verified = True
+                else:
+                    has_fresh_verified = True
             elif st == "PROBABLE":
                 has_probable = True
 
-        if has_contradicted and not has_verified:
+        if has_contradicted and not has_fresh_verified:
             self.current_employment = "CONTRADICTED"
-        elif has_verified:
+        elif has_fresh_verified:
             self.current_employment = "VERIFIED"
+        elif has_older_verified and has_probable:
+            self.current_employment = "PROBABLE"
+        elif has_older_verified:
+            self.current_employment = "PROBABLE" if any(s.get("recency") == "RECENT" for s in self.employment_sources) else "UNKNOWN"
         elif has_probable:
             self.current_employment = "PROBABLE"
         else:
@@ -1277,6 +1405,20 @@ class PersonEvidencePacket:
         else:
             self.contact_route = "HOLD"
 
+        # 6. Cross-Source Corroboration (Tasks 2 & 3)
+        # Fuses historical plant/post evidence with fresh verified employment
+        has_plant_evidence = self.facility_relationship in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER")
+        has_post_or_doc_facility = any(
+            s.get("source_type") in ("COMPANY_PUBLIC_POST", "ANNUAL_REPORT", "PUBLIC_DOCUMENT")
+            for s in self.facility_sources
+        )
+        if (
+            self.current_employment == "VERIFIED"
+            and has_plant_evidence
+            and (has_post_or_doc_facility or len(self.employment_sources) > 1 or len(self.source_types) > 1)
+        ):
+            self.cross_source_corroborated = True
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "candidate_name": self.candidate_name,
@@ -1293,7 +1435,9 @@ class PersonEvidencePacket:
             "confidence": self.confidence,
             "score": self.score,
             "contact_route": self.contact_route,
+            "cross_source_corroborated": self.cross_source_corroborated,
             "source_types": self.source_types,
+            "source_recencies": self.source_recencies,
             "employment_sources_count": len(self.employment_sources),
             "facility_sources_count": len(self.facility_sources),
             "function_sources_count": len(self.function_sources),
@@ -1331,6 +1475,7 @@ def create_person_evidence_packet(
             snippet=str(initial_source.get("snippet") or initial_source.get("evidence_snippet") or ""),
             source_type=str(initial_source.get("source_type") or ""),
             company_domain=company_domain,
+            source_date=str(initial_source.get("source_date") or initial_source.get("date") or initial_source.get("published_date") or ""),
         )
     packet.derive()
     return packet
@@ -1386,6 +1531,7 @@ def verify_candidate_stage_b(
             "title": str(candidate.get("title") or ""),
             "snippet": str(candidate.get("evidence_snippet") or ""),
             "source_type": str(candidate.get("source_type") or ""),
+            "source_date": str(candidate.get("source_date") or ""),
         },
         company_domain=company_domain,
         facility_aliases=aliases,
@@ -1425,9 +1571,23 @@ def verify_candidate_stage_b(
                 s = str(r.get("snippet") or "")
                 comb_lower = f"{t} {s}".lower()
                 if not cand_tokens or any(tok in comb_lower for tok in cand_tokens):
-                    packet.add_source(url=u, title=t, snippet=s, company_domain=company_domain)
+                    packet.add_source(
+                        url=u,
+                        title=t,
+                        snippet=s,
+                        company_domain=company_domain,
+                        source_date=str(r.get("date") or r.get("source_date") or ""),
+                    )
         except Exception as e:
             logger.warning("Stage B verification query '%s' failed for %s: %s", q, cand_name, e)
+
+        packet.derive()
+        if (
+            packet.confidence == "HIGH"
+            and packet.current_employment == "VERIFIED"
+            and packet.facility_relationship in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER")
+        ):
+            break
 
     packet.derive()
 
@@ -1438,6 +1598,7 @@ def verify_candidate_stage_b(
     cand_copy["person_score"] = packet.score
     cand_copy["person_confidence"] = packet.confidence
     cand_copy["contact_route"] = packet.contact_route
+    cand_copy["cross_source_corroborated"] = packet.cross_source_corroborated
     cand_copy["evidence_packet"] = packet.to_dict()
 
     top_snippets = []
@@ -1475,6 +1636,7 @@ def _candidate_from_fields(
     source_url = str(item.get("url") or "")
     source_type = classify_person_source(source_url, title_raw, company_domain)
     target_state = str(item.get("state") or "")
+    source_date = str(item.get("source_date") or item.get("published_date") or item.get("date") or "")
 
     packet = create_person_evidence_packet(
         candidate_name=name,
@@ -1488,6 +1650,7 @@ def _candidate_from_fields(
             "title": title_raw,
             "snippet": snippet_raw,
             "source_type": source_type,
+            "source_date": source_date,
         },
         company_domain=company_domain,
     )
@@ -2141,6 +2304,9 @@ def discover_and_rank_decision_makers(
     search_workers: int = 5,
     additional_queries: Optional[List[str]] = None,
     fetch_public_sources: bool = False,
+    max_company_queries: Optional[int] = None,
+    max_stage_b_searches: int = 3,
+    max_stage_b_candidates: int = 2,
 ) -> Dict[str, Any]:
     """Discover a broad candidate set while keeping verification deterministic."""
     if search_router is None:
@@ -2289,6 +2455,10 @@ def discover_and_rank_decision_makers(
     except Exception:
         initial_budget = 4
         max_company_budget = 10
+
+    if max_company_queries is not None:
+        initial_budget = min(initial_budget, max_company_queries)
+        max_company_budget = max_company_queries
 
     # 1. Initial Tier: 3-5 intelligent queries
     initial_tier_queries = deterministic_queries[:initial_budget]
@@ -2458,7 +2628,7 @@ def discover_and_rank_decision_makers(
         c for c in all_candidates
         if float(c.get("person_score", 0.0) or 0.0) >= 45.0
         and str(c.get("authority_class") or "") != "JUNIOR_IC"
-    ][:3]
+    ][:max_stage_b_candidates]
 
     verified_map: Dict[str, Dict[str, Any]] = {}
     for serious_c in serious_candidates:
@@ -2470,7 +2640,7 @@ def discover_and_rank_decision_makers(
             facility_name=facility_name,
             city=city,
             search_router=search_router,
-            max_searches=5,
+            max_searches=max_stage_b_searches,
             company_domain=company_domain,
             telemetry=telemetry,
             facility_aliases=facility_aliases,

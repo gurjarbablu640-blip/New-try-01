@@ -191,3 +191,59 @@ class TestForensicAuthoritativeControls:
         assert band == "HOLD"
         assert status == "HOLD_FACILITY_MISMATCH"
         assert score < 85.0
+
+    def test_control_6_cumi_mitali_positive_control(self):
+        """Carborundum Universal / Mitali Dutta qualifies as READY_FOR_CONTACT_ENRICHMENT when supported."""
+        from services.person_intelligence_service import PersonEvidencePacket
+
+        packet = PersonEvidencePacket(
+            candidate_name="Mitali Dutta",
+            current_title="Head of Quality Assurance",
+            target_company="Carborundum Universal Limited",
+            target_facility="Hosur Plant",
+            target_city="Hosur",
+            target_state="tamil nadu",
+        )
+        packet.add_source(
+            url="https://in.linkedin.com/in/mitali-dutta",
+            title="Mitali Dutta - Head of Quality Assurance - Carborundum Universal Limited | LinkedIn",
+            snippet="Head of Quality Assurance at Carborundum Universal Limited Hosur Plant, Tamil Nadu. Present · 4 yrs. Managing plant QA/QC and calibration systems.",
+            source_type="LINKEDIN_SEARCH_SNIPPET",
+            source_date="2026-07-01",
+        )
+        packet.derive()
+
+        assert packet.current_employment == "VERIFIED"
+        assert packet.facility_relationship in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER")
+        assert packet.confidence == "HIGH"
+        assert packet.contact_route == "PLANT_SPECIFIC_CONTACT"
+
+        trigger = {
+            "is_valid": True,
+            "trigger_type": "CAPACITY_EXPANSION",
+            "recency_tier": "CURRENT",
+            "source_tier": "TIER_A",
+            "facility_relationship": "DIRECT",
+            "discovered_facility": "Hosur Plant",
+            "discovered_city": "Hosur",
+            "discovered_state": "tamil nadu",
+        }
+        person = {
+            "name": packet.candidate_name,
+            "current_employment": packet.current_employment,
+            "facility_relationship": packet.facility_relationship,
+            "authority_class": "STRONG_PLANT_QUALITY_OWNER",
+            "person_confidence": packet.confidence,
+            "person_score": packet.score,
+        }
+        binding = {
+            "linkage": TRIGGER_FACILITY_DIRECT,
+            "target_facility": "Hosur Plant",
+            "target_city": "Hosur",
+        }
+        score, band, status, reasons = compute_lead_qualification_score(
+            trigger, person, binding, "Abrasives"
+        )
+        assert band == "P1"
+        assert status == "READY_FOR_CONTACT_ENRICHMENT"
+

@@ -15,6 +15,7 @@ import logging
 import os
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
@@ -65,6 +66,7 @@ class SerperDailyBudgetManager:
         self.budget_exhausted_events = 0
         self.benchmark_run_limit: Optional[int] = None
         self.benchmark_requests_used: int = 0
+        self.last_task_requests_used: int = 0
 
         # Initial load or creation under cross-process lock
         with self._thread_lock:
@@ -245,7 +247,37 @@ class SerperDailyBudgetManager:
                     "benchmark_requests_used": self.benchmark_requests_used,
                     "benchmark_remaining": rem,
                     "is_benchmark_active": self.benchmark_run_limit is not None,
+                    "task_budget_cap": self.benchmark_run_limit,
+                    "task_requests_used": self.benchmark_requests_used,
+                    "task_remaining": rem,
+                    "is_task_active": self.benchmark_run_limit is not None,
                 }
+
+    @contextmanager
+    def task_budget(self, cap: int):
+        """Context manager enforcing a task-level hard limit for a diagnostic/engineering run.
+
+        Requests 1..cap are allowed. Request cap+1 is strictly blocked.
+        Coexists with the production daily limit (1500/day).
+        Cache hits do NOT consume either live-request budget.
+        """
+        self.set_task_budget(cap)
+        try:
+            yield self
+        finally:
+            with self._thread_lock:
+                self.last_task_requests_used = self.benchmark_requests_used
+            self.set_task_budget(None)
+
+    def set_task_budget(self, cap: Optional[int]) -> None:
+        """Configures a temporary hard limit for a task or benchmark run."""
+        self.set_benchmark_run_budget(cap)
+
+    def get_task_budget_status(self) -> Dict[str, Any]:
+        """Returns the current state of the task run budget."""
+        status = self.get_benchmark_run_status()
+        status["last_task_requests_used"] = getattr(self, "last_task_requests_used", 0)
+        return status
 
     def can_request(self) -> bool:
         """Non-reserving check whether daily quota and benchmark budget have room.
@@ -281,7 +313,7 @@ class SerperDailyBudgetManager:
                     self.budget_exhausted_events += 1
                     self._save_unlocked()
                     raise SerperBudgetExhaustedError(
-                        f"Serper benchmark run budget exhausted: {self.benchmark_requests_used}/{self.benchmark_run_limit} used in this benchmark run. Request blocked."
+                        f"Serper benchmark run budget exhausted (task budget exhausted): {self.benchmark_requests_used}/{self.benchmark_run_limit} used in this run. Request blocked."
                     )
                 self.live_requests_today += count
                 if self.benchmark_run_limit is not None:

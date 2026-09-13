@@ -184,15 +184,24 @@ class SerperSearchProvider(ResearchProvider):
                     logger.debug("Failed to record cache hit: %s", e)
                 return cached
 
-        # Check daily budget limit BEFORE making live network request
+        # Check daily/task budget limit BEFORE making live network request
         if mgr and not mgr.can_request():
             mgr.record_budget_exhausted()
+            is_task_cap = (
+                getattr(mgr, "benchmark_run_limit", None) is not None
+                and getattr(mgr, "benchmark_requests_used", 0) >= mgr.benchmark_run_limit
+            )
+            err_msg = (
+                f"SERPER_TASK_BUDGET_EXHAUSTED: Task limit of {mgr.benchmark_run_limit} live requests reached"
+                if is_task_cap
+                else f"SERPER_DAILY_BUDGET_EXHAUSTED: Daily limit of {getattr(mgr, 'daily_limit', 1500)} live requests reached"
+            )
             return {
                 "provider": "serper",
                 "provider_status": PROVIDER_BUDGET_EXHAUSTED,
                 "results": [],
                 "query": query,
-                "error": "SERPER_DAILY_BUDGET_EXHAUSTED: Daily limit of 1500 live requests reached",
+                "error": err_msg,
                 "latency_ms": round((time.time() - start_time) * 1000, 2),
                 "cache_hit": False,
             }
@@ -202,13 +211,13 @@ class SerperSearchProvider(ResearchProvider):
             if mgr:
                 try:
                     mgr.reserve_request(1)
-                except SerperBudgetExhaustedError:
+                except SerperBudgetExhaustedError as be:
                     return {
                         "provider": "serper",
                         "provider_status": PROVIDER_BUDGET_EXHAUSTED,
                         "results": [],
                         "query": query,
-                        "error": "SERPER_DAILY_BUDGET_EXHAUSTED: Daily limit reached",
+                        "error": str(be),
                         "latency_ms": round((time.time() - start_time) * 1000, 2),
                         "cache_hit": False,
                     }
