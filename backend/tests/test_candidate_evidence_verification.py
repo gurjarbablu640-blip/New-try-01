@@ -14,6 +14,7 @@ from services.person_intelligence_service import (
     compute_deterministic_person_score,
     create_person_evidence_packet,
     verify_candidate_stage_b,
+    is_human_person_candidate,
     PersonEvidencePacket,
 )
 
@@ -319,4 +320,75 @@ class TestFacilityAliasGenerationAndFallback:
         # Candidate 2 (Sachin Kumar) should be chosen as primary because Candidate 1 was contradicted!
         assert "Sachin" in primary["name"]
         assert primary["facility_relationship"] in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER")
+
+
+class TestSourceCoverageExpansionAndGroupFallback:
+    def test_classify_company_post_and_pdf_documents(self):
+        """LinkedIn company posts and PDF reports are classified accurately."""
+        assert classify_person_source("https://www.linkedin.com/posts/acme-corp_quality-awards-activity-123") == "COMPANY_PUBLIC_POST"
+        assert classify_person_source("https://acme.com/reports/Annual-Report-2025.pdf") == "ANNUAL_REPORT"
+
+    def test_multi_source_evidence_fusion_and_provenance(self):
+        """Packet fuses LinkedIn tenure, company post award at plant, and document authority with full provenance."""
+        packet = PersonEvidencePacket(
+            candidate_name="Ramesh Joshi",
+            current_title="Plant Quality Head",
+            target_company="Acme Forgings Limited",
+            target_facility="Sanand Plant",
+            target_city="Sanand",
+            target_state="gujarat",
+        )
+        # Source 1: LinkedIn profile snippet proving current tenure
+        packet.add_source(
+            url="https://in.linkedin.com/in/ramesh-joshi",
+            title="Ramesh Joshi - Plant Quality Head - Acme Forgings | LinkedIn",
+            snippet="Plant Quality Head at Acme Forgings Limited. Present. Gujarat, India.",
+            source_type="LINKEDIN_SEARCH_SNIPPET",
+        )
+        # Source 2: Company public post tying person to Sanand plant award
+        packet.add_source(
+            url="https://www.linkedin.com/posts/acme-forgings_sanand-plant-tpm-award-activity-456",
+            title="Acme Forgings honors Sanand facility team",
+            snippet="Congratulations to Ramesh Joshi, Quality Lead at our Sanand plant, on achieving TPM Excellence.",
+            source_type="COMPANY_PUBLIC_POST",
+        )
+        packet.derive()
+
+        assert packet.current_employment == "VERIFIED"
+        assert packet.facility_relationship in ("FACILITY_FUNCTION_OWNER", "FACILITY_OWNER")
+        assert packet.contact_route == "PLANT_SPECIFIC_CONTACT"
+        assert len(packet.post_sources) == 1
+        assert len(packet.facility_sources) >= 1
+
+    def test_group_level_contact_fallback_classification(self):
+        """When plant-specific contact is absent, verified Group Quality Head is assigned GROUP_LEVEL_CONTACT."""
+        packet = PersonEvidencePacket(
+            candidate_name="P Shankar",
+            current_title="Corporate Quality Head",
+            target_company="Tube Investments of India Limited",
+            target_facility="In Nashik Plant",
+            target_city="Nashik",
+            target_state="maharashtra",
+        )
+        packet.add_source(
+            url="https://in.linkedin.com/in/p-shankar-479513238",
+            title="P Shankar - Head - Quality and NPD - Tube Investments of India Limited | LinkedIn",
+            snippet="Head - Quality and NPD at Tube Investments of India Limited. Jan 2018 - Present.",
+            source_type="LINKEDIN_SEARCH_SNIPPET",
+        )
+        packet.derive()
+
+        assert packet.current_employment == "VERIFIED"
+        assert packet.facility_relationship == "GROUP_FUNCTION_OWNER"
+        assert packet.contact_route == "GROUP_LEVEL_CONTACT"
+        # Must NOT be labeled plant-specific contact
+        assert packet.contact_route != "PLANT_SPECIFIC_CONTACT"
+        assert packet.facility_relationship != "FACILITY_OWNER"
+
+    def test_reject_facility_acronym_with_city(self):
+        """Rejects branch/facility acronyms with city names like 'TPI CRSS Nashik'."""
+        is_h, reason = is_human_person_candidate("TPI CRSS Nashik", "Tube Investments of India Limited")
+        assert not is_h
+        assert "acronym" in reason.lower() or "facility" in reason.lower()
+
 

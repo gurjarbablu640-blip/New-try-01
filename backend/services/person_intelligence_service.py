@@ -138,6 +138,11 @@ COMPANY_SUFFIX_TOKENS = {
     "forgings", "engineering", "india", "group", "co", "company", "holdings",
 }
 
+GENERIC_FACILITY_TOKENS = {
+    "plant", "facility", "works", "unit", "manufacturing", "complex",
+    "division", "factory", "site", "headquarters", "office", "operations",
+}
+
 
 # ── Phase 5: Human Validation ────────────────────────────────────────────────
 def is_human_person_candidate(name_str: str, company_name: str = "") -> Tuple[bool, str]:
@@ -212,6 +217,12 @@ def is_human_person_candidate(name_str: str, company_name: str = "") -> Tuple[bo
     if any(t in facility_terms for t in tokens_lower):
         return False, f"Contains facility/plant term: {clean}"
 
+    # Reject location/city combinations with all-caps business acronyms (e.g. 'TPI CRSS Nashik')
+    if any(t in INDIAN_CITIES_TO_STATE for t in tokens_lower):
+        raw_non_city = [w for w in tokens if w.lower() not in INDIAN_CITIES_TO_STATE and w.lower() not in honorifics]
+        if raw_non_city and all(w.isupper() or len(w) <= 3 for w in raw_non_city):
+            return False, f"Candidate name '{clean}' is a facility or branch acronym with city name"
+
     # 8. Company name match
     if company_name:
         comp_clean = re.sub(r"[^\w\s]", " ", company_name.lower())
@@ -280,9 +291,43 @@ def generate_person_search_queries(
             "source_target": source_target,
         })
 
-    # Phase 5 canonical broad search queries
+    fac_clean = ""
+    if facility_name:
+        fac_tokens = [w for w in re.findall(r"\b\w+\b", facility_name) if w.lower() not in GENERIC_FACILITY_TOKENS]
+        fac_clean = " ".join(fac_tokens).strip()
+
+    # Tier 1: Target Facility LinkedIn Profile & Role Searches (Priority 1)
+    if city:
+        add(f'site:linkedin.com/in "{clean_company}" "{city}" quality', "FACILITY_LINKEDIN", f"{city} quality", "LINKEDIN_PUBLIC")
+        add(f'"{clean_company}" "{city}" ("quality head" OR "quality manager" OR "plant quality")', "FACILITY_ROLE", f"{city} quality", "PUBLIC_WEB")
+    if fac_clean and fac_clean.lower() != (city or "").lower():
+        add(f'site:linkedin.com/in "{clean_company}" "{fac_clean}" quality', "FACILITY_LINKEDIN", f"{fac_clean} quality", "LINKEDIN_PUBLIC")
+        add(f'"{clean_company}" "{fac_clean}" ("quality head" OR "plant head")', "FACILITY_ROLE", f"{fac_clean} quality", "PUBLIC_WEB")
+
+    # Tier 2: Official Website & Document/PDF Searches (Priority 2)
+    if clean_domain and city:
+        add(f'site:{clean_domain} "{city}" quality', "OFFICIAL_FACILITY", f"{city} quality", "OFFICIAL_WEBSITE")
+    if clean_domain and fac_clean:
+        add(f'site:{clean_domain} filetype:pdf ("{fac_clean}" OR "{city}")', "OFFICIAL_DOCUMENT", f"{fac_clean} pdf", "DOCUMENT_OR_EVENT")
+    elif clean_domain:
+        add(f'site:{clean_domain} filetype:pdf ("plant" OR "quality")', "OFFICIAL_DOCUMENT", "quality pdf", "DOCUMENT_OR_EVENT")
+    if city or fac_clean:
+        loc_term = f'"{city}"' if city else f'"{fac_clean}"'
+        add(f'"{clean_company}" filetype:pdf {loc_term} quality', "DOCUMENT_PDF", "plant quality pdf", "DOCUMENT_OR_EVENT")
+
+    # Tier 3: Public Company Posts & Events (TPM / Awards / Inaugurations) (Priority 3)
+    if city or fac_clean:
+        loc_term = f'"{city}"' if city else f'"{fac_clean}"'
+        add(f'site:linkedin.com/posts "{clean_company}" {loc_term} quality', "COMPANY_POSTS", "post quality", "COMPANY_POST")
+        add(f'"{clean_company}" {loc_term} (TPM OR "quality award" OR "speaker quality")', "EVENT_AND_AWARDS", "events and awards", "DOCUMENT_OR_EVENT")
+
+    # Tier 4: Corporate & Group Quality Leaders (for Group-Level Fallback Route) (Priority 4)
+    add(f'"{clean_company}" ("group quality head" OR "corporate quality" OR "VP Quality" OR "Head Quality")', "GROUP_QUALITY", "group quality", "PUBLIC_WEB")
+    add(f'site:linkedin.com/in "{clean_company}" ("head of quality" OR "quality director")', "GROUP_QUALITY_LINKEDIN", "head of quality", "LINKEDIN_PUBLIC")
+
+    # Tier 5: Canonical Broad Plant & Quality Roles (Priority 5)
     for role in (
-        "quality head", "head quality", "plant quality", "quality manager",
+        "plant quality", "quality manager", "head quality", "quality head",
         "quality assurance", "metrology", "calibration", "measurement systems",
     ):
         add(f'"{clean_company}" "{role}"', "COMPANY_QUALITY", role, "PUBLIC_WEB")
@@ -305,7 +350,6 @@ def generate_person_search_queries(
             add(f'site:{clean_domain} {role}', "PEOPLE_SOURCES", role, "OFFICIAL_WEBSITE")
 
     if city:
-        add(f'\"{clean_company}\" \"{city}\" quality', "COMPANY_FACILITY", "quality", "PUBLIC_WEB")
         add(f'\"{clean_company}\" \"{city}\" \"plant head\"', "COMPANY_FACILITY", "plant head", "PUBLIC_WEB")
         add(f'\"{clean_company}\" \"{city}\" \"quality manager\"', "COMPANY_FACILITY", "quality manager", "PUBLIC_WEB")
     if facility_name:
@@ -359,7 +403,7 @@ def generate_person_search_queries(
         add(f'site:linkedin.com/in "{clean_company}" "{city}" "quality manager"', "PEOPLE_SOURCES", f"{city} quality manager", "LINKEDIN_PUBLIC")
 
     if facility_name:
-        fac_tokens = [w for w in re.split(r"[^\w\s]", facility_name) if w.strip() and w.lower() not in GENERIC_FACILITY_TOKENS]
+        fac_tokens = [w for w in re.findall(r"\b\w+\b", facility_name) if w.lower() not in GENERIC_FACILITY_TOKENS]
         fac_clean = " ".join(fac_tokens).strip()
         if fac_clean and fac_clean.lower() != (city or "").lower():
             add(f'site:linkedin.com/in "{clean_company}" "{fac_clean}"', "PEOPLE_SOURCES", fac_clean, "LINKEDIN_PUBLIC")
@@ -499,10 +543,6 @@ def classify_current_employment(snippet: str, title: str, company_name: str) -> 
 
 
 
-GENERIC_FACILITY_TOKENS = {
-    "plant", "facility", "works", "unit", "manufacturing", "complex",
-    "division", "factory", "site", "headquarters", "office", "operations",
-}
 
 INDIAN_CITIES_TO_STATE = {
     # Gujarat
@@ -692,7 +732,10 @@ def classify_facility_relationship(
     if not t_state and t_city in INDIAN_CITIES_TO_STATE:
         t_state = INDIAN_CITIES_TO_STATE[t_city]
 
-    is_group = any(w in candidate_title.lower() for w in ["group", "corporate", "chief", "vice president", "vp"])
+    is_group = any(w in candidate_title.lower() for w in ["group", "corporate", "global", "chief", "vice president", "vp"]) or any(
+        re.search(rf"\b{re.escape(term)}\b", candidate_title.lower())
+        for term in ["head of quality", "head quality", "director quality", "director - quality", "head - quality", "manufacturing quality head"]
+    )
     is_plant_head = any(w in candidate_title.lower() for w in ["plant head", "works manager", "factory manager", "unit head", "site head"])
     is_quality = any(w in candidate_title.lower() for w in ["quality", "qa", "qc", "metrology", "calibration"])
 
@@ -1040,9 +1083,11 @@ def classify_person_source(url: str, title: str = "", company_domain: str = "") 
         return "PROFESSIONAL_DIRECTORY"
     if "linkedin.com/in/" in (url or "").lower():
         return "LINKEDIN_SEARCH_SNIPPET"
-    if path.endswith(".pdf") or any(term in combined for term in ("annual-report", "annual_report", "annual report")):
+    if any(k in (url or "").lower() for k in ("linkedin.com/posts/", "linkedin.com/feed/", "linkedin.com/company/")):
+        return "COMPANY_PUBLIC_POST"
+    if path.endswith(".pdf") or any(term in combined for term in ("annual-report", "annual_report", "annual report", "presentation", "sustainability", "brsr")):
         return "ANNUAL_REPORT"
-    if is_official and any(term in combined for term in ("news", "media", "press", "event", "award", "webinar")):
+    if is_official and any(term in combined for term in ("news", "media", "press", "event", "award", "webinar", "post", "blog")):
         return "COMPANY_PUBLIC_POST"
     if is_official:
         return "OFFICIAL_COMPANY_PAGE"
@@ -1083,6 +1128,8 @@ class PersonEvidencePacket:
     facility_sources: List[Dict[str, Any]] = field(default_factory=list)
     function_sources: List[Dict[str, Any]] = field(default_factory=list)
     authority_sources: List[Dict[str, Any]] = field(default_factory=list)
+    post_sources: List[Dict[str, Any]] = field(default_factory=list)
+    document_sources: List[Dict[str, Any]] = field(default_factory=list)
 
     current_employment: str = "UNKNOWN"
     facility_relationship: str = "UNKNOWN"
@@ -1090,6 +1137,7 @@ class PersonEvidencePacket:
     authority: str = "UNKNOWN"
     confidence: str = "LOW"
     score: float = 0.0
+    contact_route: str = "UNASSIGNED"
     source_types: List[str] = field(default_factory=list)
 
     def add_source(
@@ -1137,6 +1185,12 @@ class PersonEvidencePacket:
         # 4. Authority evidence: mentions leadership titles
         if any(w in text for w in ["head", "manager", "vp", "vice president", "director", "general manager", "gm", "lead", "engineer", "specialist", "officer"]):
             self.authority_sources.append(src_record)
+
+        # 5. Company post and document evidence tracking (Phase 3 & 4)
+        if stype in ("COMPANY_PUBLIC_POST", "COMPANY_POST") or "linkedin.com/posts" in url.lower():
+            self.post_sources.append(src_record)
+        if stype in ("ANNUAL_REPORT", "PUBLIC_DOCUMENT") or url.lower().endswith(".pdf") or "annual report" in (title or "").lower():
+            self.document_sources.append(src_record)
 
     def derive(self) -> None:
         """Deterministically derive multi-source verified attributes."""
@@ -1215,6 +1269,14 @@ class PersonEvidencePacket:
         self.score = score
         self.confidence = conf
 
+        # 5. Contact Route Assignment (Phase 6)
+        if self.facility_relationship in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER"):
+            self.contact_route = "PLANT_SPECIFIC_CONTACT"
+        elif self.facility_relationship == "GROUP_FUNCTION_OWNER" or self.function_ownership == "GROUP_FUNCTION_OWNER":
+            self.contact_route = "GROUP_LEVEL_CONTACT"
+        else:
+            self.contact_route = "HOLD"
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "candidate_name": self.candidate_name,
@@ -1230,11 +1292,14 @@ class PersonEvidencePacket:
             "authority": self.authority,
             "confidence": self.confidence,
             "score": self.score,
+            "contact_route": self.contact_route,
             "source_types": self.source_types,
             "employment_sources_count": len(self.employment_sources),
             "facility_sources_count": len(self.facility_sources),
             "function_sources_count": len(self.function_sources),
             "authority_sources_count": len(self.authority_sources),
+            "post_sources_count": len(self.post_sources),
+            "document_sources_count": len(self.document_sources),
         }
 
 
@@ -1372,6 +1437,7 @@ def verify_candidate_stage_b(
     cand_copy["authority_class"] = packet.function_ownership
     cand_copy["person_score"] = packet.score
     cand_copy["person_confidence"] = packet.confidence
+    cand_copy["contact_route"] = packet.contact_route
     cand_copy["evidence_packet"] = packet.to_dict()
 
     top_snippets = []
@@ -1438,6 +1504,7 @@ def _candidate_from_fields(
         "authority_class": packet.function_ownership,
         "person_score": packet.score,
         "person_confidence": packet.confidence,
+        "contact_route": packet.contact_route,
         "source_url": source_url,
         "source_type": source_type,
         "evidence_snippet": snippet_raw[:500],
@@ -1507,6 +1574,10 @@ def extract_person_candidates_from_search_result(
         rf"(?i:appoints?|appointed|names?|named)\s+(?P<name>{PERSON_NAME_PATTERN})\s+(?i:as\s+(?:the\s+)?)?(?P<role>{role_pattern})",
         rf"(?P<role>{role_pattern})\s+(?i:at|for|with|in)\s+[^,\.\n]+[,\.\n]\s*(?P<name>{PERSON_NAME_PATTERN})",
         rf"(?P<name>{PERSON_NAME_PATTERN})\s+(?i:is listed as|listed as)\s+(?i:a\s+|an\s+|the\s+)?(?P<role>{role_pattern})",
+        rf"(?i:congratulat\w+|award\w+|recogniz\w+|felicitat\w+)\s+(?P<name>{PERSON_NAME_PATTERN})\s*[-–—|,:(]?\s*(?P<role>{role_pattern})",
+        rf"(?P<name>{PERSON_NAME_PATTERN})\s*[-–—|,:(]?\s*(?P<role>{role_pattern})\s+(?i:received|won|awarded|recognized|felicitated)",
+        rf"(?i:speaker|keynote|presented by|led by|under the leadership of)\s+(?P<name>{PERSON_NAME_PATTERN})\s*[-–—|,:(]?\s*(?P<role>{role_pattern})",
+        rf"(?P<name>{PERSON_NAME_PATTERN})\s*,\s*(?P<role>{role_pattern})\s+(?i:at|of|for)\s+(?i:our|the)?\s*[^,\.\n]+(?i:plant|facility|works|unit)",
     )
     for pattern in patterns:
         for match in re.finditer(pattern, combined):
@@ -2373,9 +2444,17 @@ def discover_and_rank_decision_makers(
 
     # STAGE B: Targeted Exact-Name Verification with Multi-Candidate Fallback (Phase 5)
     # Evaluate serious candidates sequentially (up to 3).
+    # Skip Stage B if a candidate is already conclusively verified with HIGH confidence for target facility.
     # Stop as soon as SUFFICIENT evidence is found for target facility.
     # If a candidate is CONTRADICTED, OTHER_FACILITY, or INSUFFICIENT, fallback to next credible candidate.
-    serious_candidates = [
+    already_conclusive = any(
+        c.get("person_confidence") == "HIGH"
+        and c.get("current_employment") == "VERIFIED"
+        and c.get("facility_relationship") in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER")
+        for c in all_candidates[:3]
+    )
+
+    serious_candidates = [] if already_conclusive else [
         c for c in all_candidates
         if float(c.get("person_score", 0.0) or 0.0) >= 45.0
         and str(c.get("authority_class") or "") != "JUNIOR_IC"
@@ -2472,10 +2551,13 @@ def discover_and_rank_decision_makers(
     telemetry["high_confidence_count"] = sum(
         candidate.get("person_confidence") == "HIGH" for candidate in all_candidates
     )
+    primary = returned_candidates[0] if returned_candidates else None
+    contact_route = primary.get("contact_route", "UNASSIGNED") if primary else "UNASSIGNED"
     return {
-        "primary_person": returned_candidates[0] if returned_candidates else None,
+        "primary_person": primary,
         "secondary_person": returned_candidates[1] if len(returned_candidates) > 1 else None,
         "candidates": returned_candidates,
+        "contact_route": contact_route,
         "candidates_before_llm": candidates_before_llm,
         "telemetry": telemetry,
     }
