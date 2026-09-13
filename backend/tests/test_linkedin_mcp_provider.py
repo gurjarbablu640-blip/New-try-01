@@ -27,6 +27,32 @@ from services.linkedin_mcp_provider import (
 )
 
 
+def _mock_response(payload=None, *, status_code=200, headers=None):
+    response = MagicMock()
+    response.status_code = status_code
+    response.headers = headers or {}
+    response.text = "" if payload is None else __import__("json").dumps(payload)
+    response.json.return_value = payload or {}
+    return response
+
+
+def _successful_handshake(final_response):
+    initialize_response = _mock_response(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "protocolVersion": "2025-03-26",
+                "serverInfo": {"name": "mcp-server-linkedin", "version": "4.24.0"},
+                "capabilities": {},
+            },
+        },
+        headers={"mcp-session-id": "test-session"},
+    )
+    initialized_response = _mock_response(status_code=202)
+    return [initialize_response, initialized_response, final_response]
+
+
 @pytest.fixture
 def provider():
     """Create test provider instance with explicit test endpoint."""
@@ -137,23 +163,78 @@ class TestLinkedInMCPStatusAndErrorHandling:
 
     def test_ready_status(self, provider):
         """When MCP server responds with tools list, report READY."""
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = '{"jsonrpc": "2.0", "id": 1, "result": {"tools": [{"name": "get_company_profile"}, {"name": "search_people"}]}}'
-        mock_resp.json.return_value = {
+        mock_resp = _mock_response({
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": 3,
             "result": {
                 "tools": [
                     {"name": "get_company_profile"},
                     {"name": "search_people"},
                 ]
             },
-        }
-        with patch("requests.post", return_value=mock_resp):
+        })
+        with patch("requests.post", side_effect=_successful_handshake(mock_resp)) as mock_post:
             status = provider.get_status()
             assert status["status"] == "READY"
             assert "search_people" in status["tools_available"]
+            assert mock_post.call_args_list[0].kwargs["json"]["method"] == "initialize"
+            assert mock_post.call_args_list[1].kwargs["json"]["method"] == "notifications/initialized"
+            assert mock_post.call_args_list[2].kwargs["json"]["method"] == "tools/list"
+            assert mock_post.call_args_list[2].kwargs["headers"]["Mcp-Session-Id"] == "test-session"
+
+    def test_initialization_timeout_is_not_server_unavailable(self, provider):
+        """A connected server that stalls during initialize gets a precise timeout status."""
+        with patch("requests.post", side_effect=requests.exceptions.Timeout("read timeout")):
+            status = provider.get_status()
+        assert status["status"] == "MCP_INITIALIZATION_TIMEOUT"
+        assert "initialize request timed out" in status["message"]
+
+    def test_host_rejection_has_precise_status(self, provider):
+        """HTTP 421 from strict Host protection is not a generic timeout or outage."""
+        rejected = _mock_response(status_code=421)
+        rejected.text = "Misdirected Request"
+        with patch("requests.post", return_value=rejected):
+            status = provider.get_status()
+        assert status["status"] == "MCP_HOST_REJECTED"
+
+    def test_configured_loopback_host_override_applies_to_full_lifecycle(self):
+        """Docker bridge requests preserve the sidecar's loopback Host identity."""
+        configured = LinkedInMCPProvider(
+            endpoint_url="http://host.docker.internal:8765/mcp",
+            host_header="127.0.0.1:8765",
+            enabled=True,
+            timeout_seconds=5,
+        )
+        tools_response = _mock_response({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "result": {"tools": [{"name": "get_company_profile"}]},
+        })
+        with patch("requests.post", side_effect=_successful_handshake(tools_response)) as mock_post:
+            status = configured.get_status()
+        assert status["status"] == "READY"
+        assert all(
+            call.kwargs["headers"]["Host"] == "127.0.0.1:8765"
+            for call in mock_post.call_args_list
+        )
+
+    def test_local_runtime_omits_host_override(self):
+        """Native localhost clients keep the normal HTTP Host behavior."""
+        local = LinkedInMCPProvider(
+            endpoint_url="http://127.0.0.1:8765/mcp",
+            host_header="",
+            enabled=True,
+            timeout_seconds=5,
+        )
+        tools_response = _mock_response({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "result": {"tools": [{"name": "get_company_profile"}]},
+        })
+        with patch("requests.post", side_effect=_successful_handshake(tools_response)) as mock_post:
+            status = local.get_status()
+        assert status["status"] == "READY"
+        assert all("Host" not in call.kwargs["headers"] for call in mock_post.call_args_list)
 
 
 class TestLinkedInMCPCompanyAndPeopleSearch:

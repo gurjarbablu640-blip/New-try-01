@@ -111,23 +111,43 @@ class LinkedInMCPUnavailableError(LinkedInMCPError):
     pass
 
 
+class LinkedInMCPInitializationTimeoutError(LinkedInMCPError):
+    """Raised when TCP connects but the MCP initialize lifecycle times out."""
+    pass
+
+
+class LinkedInMCPSessionError(LinkedInMCPError):
+    """Raised when MCP initialization does not establish a usable session."""
+    pass
+
+
+class LinkedInMCPHostRejectedError(LinkedInMCPError):
+    """Raised when strict MCP Host/Origin protection rejects the request."""
+    pass
+
+
 class LinkedInMCPProvider:
     """Read-only client and adapter for local LinkedIn MCP Streamable HTTP server."""
 
     def __init__(
         self,
         endpoint_url: Optional[str] = None,
+        host_header: Optional[str] = None,
         enabled: Optional[bool] = None,
         timeout_seconds: Optional[int] = None,
         max_candidates: Optional[int] = None,
     ) -> None:
         self._explicit_endpoint = endpoint_url
+        self._explicit_host_header = host_header
         self._explicit_enabled = enabled
         self._explicit_timeout = timeout_seconds
         self._explicit_max_candidates = max_candidates
         self._lock = threading.Lock()
+        self._initialization_lock = threading.Lock()
         self._company_cache: Dict[str, Dict[str, Any]] = {}
         self._request_counter = 0
+        self._session_id: Optional[str] = None
+        self._initialized = False
 
     @property
     def enabled(self) -> bool:
@@ -168,6 +188,23 @@ class LinkedInMCPProvider:
             return 180
 
     @property
+    def host_header(self) -> str:
+        if self._explicit_host_header is not None:
+            value = str(self._explicit_host_header).strip()
+        else:
+            try:
+                from config import settings
+                value = str(getattr(settings, "LINKEDIN_MCP_HOST_HEADER", "") or "").strip()
+            except Exception:
+                value = ""
+
+        if value and not re.fullmatch(r"(?:127\.0\.0\.1|localhost)(?::\d{1,5})?", value, re.IGNORECASE):
+            raise LinkedInMCPError(
+                "LINKEDIN_MCP_HOST_HEADER must remain loopback-only (127.0.0.1 or localhost)."
+            )
+        return value
+
+    @property
     def max_candidates(self) -> int:
         if self._explicit_max_candidates is not None:
             return int(self._explicit_max_candidates)
@@ -187,8 +224,8 @@ class LinkedInMCPProvider:
             return {"status": "DISABLED", "message": "LinkedIn MCP is disabled in configuration."}
 
         try:
-            # Send lightweight JSON-RPC ping / tools list
-            res = self._send_jsonrpc("tools/list", {})
+            with self._lock:
+                res = self._send_jsonrpc("tools/list", {})
             tools = [t.get("name") for t in res.get("tools", []) if isinstance(t, dict)]
             return {
                 "status": "READY",
@@ -204,6 +241,12 @@ class LinkedInMCPProvider:
             return {"status": "LOGIN_REQUIRED", "message": msg}
         except LinkedInMCPRateLimitError as e:
             return {"status": "RATE_LIMITED", "message": str(e)}
+        except LinkedInMCPInitializationTimeoutError as e:
+            return {"status": "MCP_INITIALIZATION_TIMEOUT", "message": str(e)}
+        except LinkedInMCPHostRejectedError as e:
+            return {"status": "MCP_HOST_REJECTED", "message": str(e)}
+        except LinkedInMCPSessionError as e:
+            return {"status": "MCP_SESSION_ERROR", "message": str(e)}
         except LinkedInMCPUnavailableError as e:
             return {"status": "SERVER_UNAVAILABLE", "message": str(e)}
         except Exception as e:
@@ -253,6 +296,7 @@ class LinkedInMCPProvider:
 
     def _send_jsonrpc(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Send JSON-RPC 2.0 request over Streamable HTTP transport."""
+        self._ensure_initialized()
         self._request_counter += 1
         req_id = self._request_counter
 
@@ -263,11 +307,7 @@ class LinkedInMCPProvider:
             "params": params,
         }
 
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-            "User-Agent": "SalesoorjaLinkedInAdapter/1.0",
-        }
+        headers = self._request_headers(include_session=True)
 
         try:
             resp = requests.post(
@@ -286,11 +326,127 @@ class LinkedInMCPProvider:
         except Exception as e:
             raise LinkedInMCPError(f"LinkedIn MCP transport error: {type(e).__name__} - {e}") from e
 
+        return self._parse_http_response(resp)
+
+    def _ensure_initialized(self) -> None:
+        """Complete the MCP Streamable HTTP initialization lifecycle once."""
+        if self._initialized:
+            return
+
+        with self._initialization_lock:
+            if self._initialized:
+                return
+
+            self._request_counter += 1
+            initialize_body = {
+                "jsonrpc": "2.0",
+                "id": self._request_counter,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "salesoorja-linkedin-adapter",
+                        "version": "1.0",
+                    },
+                },
+            }
+
+            try:
+                response = requests.post(
+                    self.endpoint_url,
+                    json=initialize_body,
+                    headers=self._request_headers(include_session=False),
+                    timeout=self.timeout_seconds,
+                )
+            except requests.exceptions.ConnectionError as e:
+                raise LinkedInMCPUnavailableError(
+                    f"Cannot connect to LinkedIn MCP server at {self.endpoint_url}."
+                ) from e
+            except requests.exceptions.Timeout as e:
+                raise LinkedInMCPInitializationTimeoutError(
+                    f"MCP initialize request timed out after {self.timeout_seconds}s."
+                ) from e
+            except Exception as e:
+                raise LinkedInMCPError(
+                    f"LinkedIn MCP initialize transport error: {type(e).__name__} - {e}"
+                ) from e
+
+            self._parse_http_response(response)
+            session_id = response.headers.get("mcp-session-id")
+            if not session_id:
+                raise LinkedInMCPSessionError(
+                    "MCP initialize response did not include the required Mcp-Session-Id header."
+                )
+
+            self._session_id = str(session_id)
+            self._request_counter += 1
+            initialized_body = {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {},
+            }
+
+            try:
+                initialized_response = requests.post(
+                    self.endpoint_url,
+                    json=initialized_body,
+                    headers=self._request_headers(include_session=True),
+                    timeout=self.timeout_seconds,
+                )
+            except requests.exceptions.Timeout as e:
+                self._session_id = None
+                raise LinkedInMCPInitializationTimeoutError(
+                    f"MCP initialized notification timed out after {self.timeout_seconds}s."
+                ) from e
+            except requests.exceptions.ConnectionError as e:
+                self._session_id = None
+                raise LinkedInMCPUnavailableError(
+                    f"Connection lost while establishing MCP session at {self.endpoint_url}."
+                ) from e
+            except Exception as e:
+                self._session_id = None
+                raise LinkedInMCPError(
+                    f"MCP session establishment error: {type(e).__name__} - {e}"
+                ) from e
+
+            if initialized_response.status_code not in {200, 202, 204}:
+                self._session_id = None
+                self._parse_http_response(initialized_response)
+                raise LinkedInMCPSessionError(
+                    f"MCP initialized notification returned HTTP {initialized_response.status_code}."
+                )
+
+            self._initialized = True
+
+    def _request_headers(self, *, include_session: bool) -> Dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "User-Agent": "SalesoorjaLinkedInAdapter/1.0",
+        }
+        if include_session:
+            if not self._session_id:
+                raise LinkedInMCPSessionError("MCP session ID is not available.")
+            headers["Mcp-Session-Id"] = self._session_id
+        if self.host_header:
+            headers["Host"] = self.host_header
+        return headers
+
+    def _parse_http_response(self, resp: requests.Response) -> Dict[str, Any]:
+        """Parse one MCP JSON or SSE response and classify protocol errors."""
+        raw_text = resp.text
+        if resp.status_code == 421 or (
+            resp.status_code in {400, 403}
+            and any(token in raw_text.lower() for token in ["misdirected", "invalid host", "host not allowed", "origin not allowed"])
+        ):
+            raise LinkedInMCPHostRejectedError(
+                f"LinkedIn MCP rejected the HTTP Host/Origin header with status {resp.status_code}."
+            )
         if resp.status_code == 429:
             raise LinkedInMCPRateLimitError("LinkedIn MCP returned HTTP 429 Too Many Requests. Pausing operations.")
 
         # Check for SSE stream responses
-        raw_text = resp.text
         if "data:" in raw_text:
             parsed_data = self._parse_sse_response(raw_text)
             if parsed_data:

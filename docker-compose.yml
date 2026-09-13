@@ -122,6 +122,9 @@ services:
       SEARXNG_BASE_URL: http://searxng:8080
       DEERFLOW_BASE_URL: http://deerflow:8001
       DEERFLOW_ENABLED: "true"
+      LINKEDIN_MCP_ENABLED: ${LINKEDIN_MCP_ENABLED:-false}
+      LINKEDIN_MCP_URL: ${LINKEDIN_MCP_DOCKER_URL:-http://host.docker.internal:8765/mcp}
+      LINKEDIN_MCP_HOST_HEADER: ${LINKEDIN_MCP_HOST_HEADER:-127.0.0.1:8765}
 
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: ${DEBUG}

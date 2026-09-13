@@ -134,6 +134,7 @@ class Settings(BaseSettings):
     # LinkedIn MCP Service Provider (Optional Read-Only Sidecar)
     LINKEDIN_MCP_ENABLED: bool = False
     LINKEDIN_MCP_URL: str = "http://127.0.0.1:8765/mcp"
+    LINKEDIN_MCP_HOST_HEADER: str = ""
     LINKEDIN_MCP_TIMEOUT_SECONDS: int = 180
     LINKEDIN_MCP_MAX_CANDIDATES: int = 3
 
