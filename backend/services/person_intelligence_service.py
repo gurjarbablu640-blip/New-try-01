@@ -569,7 +569,99 @@ METRO_CLUSTERS = {
     "kagal": {"kagal", "kolhapur", "maharashtra"},
     "peenya": {"peenya", "bengaluru", "bangalore", "karnataka"},
     "bengaluru": {"peenya", "devanahalli", "bidadi", "bengaluru", "bangalore", "karnataka"},
+    "hosur": {"hosur", "krishnagiri", "dharmapuri", "tamil nadu"},
+    "nashik": {"nashik", "sinnar", "satpur", "ambad", "maharashtra"},
+    "sinnar": {"nashik", "sinnar", "malegaon", "maharashtra"},
+    "hyderabad": {"hyderabad", "kongara kalan", "rangareddy", "shamshabad", "telangana"},
+    "kongara kalan": {"hyderabad", "kongara kalan", "rangareddy", "shamshabad", "telangana"},
 }
+
+
+def generate_facility_aliases(
+    facility_name: str,
+    city: str,
+    state: str = "",
+) -> List[str]:
+    """Generates precise facility aliases before person verification (Phase 2).
+
+    Includes:
+    - cleaned facility name (excluding generic prefixes like 'in', 'plant', 'facility')
+    - industrial estate / MIDC / GIDC / SIPCOT / KIADB / SEZ tokens
+    - district / metro cluster names
+    - nearest industrial town / cluster
+
+    Crucial rule: state-only match is NEVER an alias.
+    """
+    aliases: List[str] = []
+    t_city = (city or "").strip()
+    t_fac = (facility_name or "").strip()
+    t_state = (state or "").strip()
+    if not t_state and t_city.lower() in INDIAN_CITIES_TO_STATE:
+        t_state = INDIAN_CITIES_TO_STATE[t_city.lower()]
+
+    # 1. Cleaned facility name
+    # e.g. "In Nashik Plant" -> "Nashik"
+    # "Hosur Plant" -> "Hosur"
+    # "Kongara Kalan Facility" -> "Kongara Kalan"
+    clean_fac = re.sub(r"\b(in|the|plant|facility|works|unit|factory|ltd|limited|campus)\b", "", t_fac, flags=re.IGNORECASE).strip()
+    clean_fac = " ".join(clean_fac.split())
+    if clean_fac and len(clean_fac) >= 3 and clean_fac.lower() != t_state.lower():
+        aliases.append(clean_fac)
+
+    # 2. City
+    if t_city and t_city.lower() != t_state.lower() and t_city not in aliases:
+        aliases.append(t_city)
+
+    # 3. Known metro / industrial clusters
+    c_lower = t_city.lower()
+    if c_lower in METRO_CLUSTERS:
+        for cl_item in METRO_CLUSTERS[c_lower]:
+            cl_title = cl_item.title()
+            if cl_item != t_state.lower() and cl_title not in aliases and len(cl_item) >= 3:
+                aliases.append(cl_title)
+
+    # 4. Explicit industrial estate / zone patterns in facility name
+    zone_matches = re.findall(r"\b(sipcot|midc|gidc|sez|kiadb|tsiic|riico|biocon park|fab city|malegaon)\b", t_fac.lower())
+    for zm in zone_matches:
+        zm_str = zm.upper()
+        if zm_str not in aliases:
+            aliases.append(zm_str)
+        if t_city:
+            combo = f"{t_city} {zm_str}"
+            if combo not in aliases:
+                aliases.append(combo)
+
+    # 5. State-specific industrial estate designations
+    st_lower = t_state.lower()
+    if t_city:
+        if st_lower == "maharashtra":
+            midc_alias = f"{t_city} MIDC"
+            if midc_alias not in aliases:
+                aliases.append(midc_alias)
+        elif st_lower == "gujarat":
+            gidc_alias = f"{t_city} GIDC"
+            if gidc_alias not in aliases:
+                aliases.append(gidc_alias)
+        elif st_lower == "tamil nadu":
+            sipcot_alias = f"{t_city} SIPCOT"
+            if sipcot_alias not in aliases:
+                aliases.append(sipcot_alias)
+        elif st_lower == "karnataka":
+            kiadb_alias = f"{t_city} KIADB"
+            if kiadb_alias not in aliases:
+                aliases.append(kiadb_alias)
+        elif st_lower == "telangana":
+            sez_alias = f"{t_city} SEZ"
+            if sez_alias not in aliases:
+                aliases.append(sez_alias)
+
+    # Deduplicate preserving order (excluding state-only names)
+    dedup: List[str] = []
+    for a in aliases:
+        if a and a not in dedup and a.lower() != t_state.lower():
+            dedup.append(a)
+
+    return dedup
 
 
 def classify_facility_relationship(
@@ -578,6 +670,7 @@ def classify_facility_relationship(
     target_facility: str,
     target_city: str,
     target_state: str = "",
+    facility_aliases: Optional[List[str]] = None,
 ) -> str:
     """Classify relationship between candidate and the target manufacturing facility.
 
@@ -615,8 +708,20 @@ def classify_facility_relationship(
             target_cluster.add(w)
             target_cluster.add(INDIAN_CITIES_TO_STATE[w])
 
+    if facility_aliases:
+        for al in facility_aliases:
+            al_clean = al.strip().lower()
+            if al_clean and al_clean != t_state:
+                target_cluster.add(al_clean)
+                for part in al_clean.split():
+                    if len(part) >= 4 and part not in GENERIC_FACILITY_TOKENS and part != t_state:
+                        target_cluster.add(part)
+
     city_match = bool(t_city and (t_city in clean_text or any(c in clean_text for c in target_cluster if c != t_state)))
-    fac_match = bool(fac_tokens and any(w in clean_text for w in fac_tokens))
+    fac_match = bool(
+        (fac_tokens and any(w in clean_text for w in fac_tokens))
+        or (facility_aliases and any(a.lower() in clean_text for a in facility_aliases if a.lower() != t_state))
+    )
 
     # Detect explicit foreign/other city contradiction
     other_cities = [
@@ -972,6 +1077,7 @@ class PersonEvidencePacket:
     target_facility: str = ""
     target_city: str = ""
     target_state: str = ""
+    facility_aliases: List[str] = field(default_factory=list)
 
     employment_sources: List[Dict[str, Any]] = field(default_factory=list)
     facility_sources: List[Dict[str, Any]] = field(default_factory=list)
@@ -1014,10 +1120,12 @@ class PersonEvidencePacket:
         if (c_tokens and any(t in text for t in c_tokens)) or "experience" in text or "present" in text or "linkedin.com/in/" in url.lower():
             self.employment_sources.append(src_record)
 
-        # 2. Facility evidence: mentions target city, state, facility, or other Indian industrial cities
+        # 2. Facility evidence: mentions target city, state, facility, aliases, or other Indian industrial cities
         t_city = self.target_city.lower().strip() if self.target_city else ""
         t_fac = self.target_facility.lower().strip() if self.target_facility else ""
-        has_target = (t_city and t_city in text) or (t_fac and any(w in text for w in t_fac.split() if len(w) >= 4))
+        has_target = (t_city and t_city in text) or (t_fac and any(w in text for w in t_fac.split() if len(w) >= 4 and w not in GENERIC_FACILITY_TOKENS))
+        if not has_target and self.facility_aliases:
+            has_target = any(a.lower() in text for a in self.facility_aliases if a.lower() != (self.target_state or "").lower())
         has_other_city = any(re.search(rf"\b{c}\b", text) for c in INDIAN_CITIES_TO_STATE if c != t_city)
         if has_target or has_other_city or any(w in text for w in ["plant", "works", "facility", "unit", "factory", "site", "location:"]):
             self.facility_sources.append(src_record)
@@ -1062,6 +1170,7 @@ class PersonEvidencePacket:
             self.target_facility,
             self.target_city,
             target_state=self.target_state,
+            facility_aliases=self.facility_aliases,
         )
 
         # Task 4 Directory Rule: Directory sources alone must NOT create plant-specific ownership
@@ -1114,6 +1223,7 @@ class PersonEvidencePacket:
             "target_facility": self.target_facility,
             "target_city": self.target_city,
             "target_state": self.target_state,
+            "facility_aliases": self.facility_aliases,
             "current_employment": self.current_employment,
             "facility_relationship": self.facility_relationship,
             "function_ownership": self.function_ownership,
@@ -1137,6 +1247,7 @@ def create_person_evidence_packet(
     target_state: str = "",
     initial_source: Optional[Dict[str, Any]] = None,
     company_domain: str = "",
+    facility_aliases: Optional[List[str]] = None,
 ) -> PersonEvidencePacket:
     """Factory creating and initializing a PersonEvidencePacket."""
     packet = PersonEvidencePacket(
@@ -1146,6 +1257,7 @@ def create_person_evidence_packet(
         target_facility=target_facility,
         target_city=target_city,
         target_state=target_state,
+        facility_aliases=list(facility_aliases or []),
     )
     if initial_source:
         packet.add_source(
@@ -1165,16 +1277,19 @@ def verify_candidate_stage_b(
     facility_name: str = "",
     city: str = "",
     search_router: Any = None,
-    max_searches: int = 3,
+    max_searches: int = 5,
     company_domain: str = "",
     telemetry: Optional[Dict[str, Any]] = None,
+    facility_aliases: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Stage B: Targeted exact-name verification searches for an independently discovered candidate.
 
-    Runs up to max_searches (max 3) targeted queries:
+    Runs up to max_searches (bounded to 5) targeted queries:
     1. "{name}" "{company}"
     2. "{name}" "{company}" "{city}" (or quality if city empty)
     3. site:linkedin.com/in "{name}" "{company}"
+    4. "{name}" "{company}" "{alias}" (or "plant quality")
+    5. "{name}" "{company}" "quality manager"
     Collects multi-source evidence into a PersonEvidencePacket and updates candidate attributes.
     """
     if search_router is None:
@@ -1185,6 +1300,14 @@ def verify_candidate_stage_b(
     cand_title = str(candidate.get("title") or "").strip()
     if not cand_name:
         return candidate
+
+    aliases = list(facility_aliases or [])
+    if not aliases:
+        aliases = generate_facility_aliases(
+            facility_name=facility_name,
+            city=city,
+            state=str(candidate.get("state") or ""),
+        )
 
     packet = create_person_evidence_packet(
         candidate_name=cand_name,
@@ -1200,15 +1323,30 @@ def verify_candidate_stage_b(
             "source_type": str(candidate.get("source_type") or ""),
         },
         company_domain=company_domain,
+        facility_aliases=aliases,
     )
 
-    queries = [
+    query_candidates = [
         f'"{cand_name}" "{company_name}"',
         f'"{cand_name}" "{company_name}" "{city}"' if city else f'"{cand_name}" "{company_name}" plant quality',
         f'site:linkedin.com/in "{cand_name}" "{company_name}"',
     ]
+    for al in aliases:
+        if al and al.lower() not in (city.lower(), company_name.lower()):
+            query_candidates.append(f'"{cand_name}" "{company_name}" "{al}"')
+            break
+    if len(query_candidates) < max_searches:
+        query_candidates.append(f'"{cand_name}" "{company_name}" plant quality')
+    if len(query_candidates) < max_searches:
+        query_candidates.append(f'"{cand_name}" "{company_name}" quality manager')
 
-    for q in queries[:max_searches]:
+    # Deduplicate while preserving order, bounded to min(max_searches, 5)
+    dedup_queries: List[str] = []
+    for q in query_candidates:
+        if q not in dedup_queries and len(dedup_queries) < min(max_searches, 5):
+            dedup_queries.append(q)
+
+    for q in dedup_queries:
         try:
             search_res = search_router.search(q, num_results=5)
             if telemetry is not None:
@@ -1897,12 +2035,16 @@ def _discover_and_rank_decision_makers_legacy(
     }
 
 
-def _person_sort_key(candidate: Dict[str, Any]) -> Tuple[float, int, int, str]:
+def _person_sort_key(candidate: Dict[str, Any]) -> Tuple[int, float, int, int, str]:
+    fac_rel = str(candidate.get("facility_relationship") or "")
+    # Penalize contradicted candidates so they never rank above target-facility or uncontradicted candidates
+    contradicted_penalty = 1 if fac_rel in ("OTHER_FACILITY_OWNER", "FACILITY_CONTRADICTED") else 0
     authority_index = (
         AUTHORITY_HIERARCHY.index(candidate["authority_class"])
         if candidate.get("authority_class") in AUTHORITY_HIERARCHY else 99
     )
     return (
+        contradicted_penalty,
         -float(candidate.get("person_score") or 0),
         authority_index,
         int(candidate.get("deepseek_rank") or 9999),
@@ -2219,34 +2361,62 @@ def discover_and_rank_decision_makers(
                 fetch_record["error"] = type(error).__name__
             telemetry["public_source_fetches"].append(fetch_record)
 
+    # Phase 2: Generate facility aliases
+    facility_aliases = generate_facility_aliases(
+        facility_name=facility_name,
+        city=city,
+        state=INDIAN_CITIES_TO_STATE.get(city.lower(), ""),
+    )
+
     all_candidates.sort(key=_person_sort_key)
     all_candidates = all_candidates[:15]
 
-    # STAGE B: Targeted Exact-Name Verification
-    # For serious candidates discovered in Stage A, run up to 3 targeted verification searches
-    # to ground current employment, exact facility location, and authority.
-    verified_candidates = []
+    # STAGE B: Targeted Exact-Name Verification with Multi-Candidate Fallback (Phase 5)
+    # Evaluate serious candidates sequentially (up to 3).
+    # Stop as soon as SUFFICIENT evidence is found for target facility.
+    # If a candidate is CONTRADICTED, OTHER_FACILITY, or INSUFFICIENT, fallback to next credible candidate.
     serious_candidates = [
         c for c in all_candidates
-        if float(c.get("person_score", 0.0) or 0.0) >= 50.0
+        if float(c.get("person_score", 0.0) or 0.0) >= 45.0
         and str(c.get("authority_class") or "") != "JUNIOR_IC"
-    ][:2]
-    serious_keys = {_normalize_person_name(str(c.get("name") or "")) for c in serious_candidates}
+    ][:3]
 
+    verified_map: Dict[str, Dict[str, Any]] = {}
+    for serious_c in serious_candidates:
+        c_name = str(serious_c.get("name") or "")
+        norm_name = _normalize_person_name(c_name)
+        updated_cand = verify_candidate_stage_b(
+            candidate=serious_c,
+            company_name=company_name,
+            facility_name=facility_name,
+            city=city,
+            search_router=search_router,
+            max_searches=5,
+            company_domain=company_domain,
+            telemetry=telemetry,
+            facility_aliases=facility_aliases,
+        )
+        verified_map[norm_name] = updated_cand
+
+        emp = str(updated_cand.get("current_employment") or "").upper()
+        fac = str(updated_cand.get("facility_relationship") or "").upper()
+        conf = str(updated_cand.get("person_confidence") or "").upper()
+        score = float(updated_cand.get("person_score") or 0.0)
+
+        is_sufficient = (
+            conf == "HIGH"
+            or (emp == "VERIFIED" and fac in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER"))
+            or (emp == "VERIFIED" and fac == "GROUP_FUNCTION_OWNER" and score >= 75.0)
+        )
+        if is_sufficient:
+            # Sufficient target facility evidence established! Stop fallback.
+            break
+
+    verified_candidates = []
     for candidate in all_candidates:
         c_name_norm = _normalize_person_name(str(candidate.get("name") or ""))
-        if c_name_norm in serious_keys:
-            updated_cand = verify_candidate_stage_b(
-                candidate=candidate,
-                company_name=company_name,
-                facility_name=facility_name,
-                city=city,
-                search_router=search_router,
-                max_searches=3,
-                company_domain=company_domain,
-                telemetry=telemetry,
-            )
-            verified_candidates.append(updated_cand)
+        if c_name_norm in verified_map:
+            verified_candidates.append(verified_map[c_name_norm])
         else:
             verified_candidates.append(candidate)
 

@@ -235,3 +235,88 @@ class TestStageBTargetedVerification:
         )
 
         assert mock_router.search.call_count == 2
+
+
+class TestFacilityAliasGenerationAndFallback:
+    def test_generate_facility_aliases_precision_and_no_state_only(self):
+        """Facility aliases generate precise industrial estate and cluster names, excluding state-only."""
+        from services.person_intelligence_service import generate_facility_aliases
+
+        # Case 1: Hosur Plant
+        aliases_hosur = generate_facility_aliases("Hosur Plant", "Hosur", "tamil nadu")
+        assert "Hosur" in aliases_hosur
+        assert "Krishnagiri" in aliases_hosur or "Dharmapuri" in aliases_hosur
+        assert "tamil nadu" not in [a.lower() for a in aliases_hosur]
+        assert "Tamil Nadu" not in aliases_hosur
+
+        # Case 2: Kongara Kalan Facility Hyderabad
+        aliases_hyd = generate_facility_aliases("Kongara Kalan Facility", "Hyderabad", "telangana")
+        assert "Kongara Kalan" in aliases_hyd
+        assert "Hyderabad" in aliases_hyd
+        assert "Rangareddy" in aliases_hyd
+        assert "telangana" not in [a.lower() for a in aliases_hyd]
+
+        # Case 3: In Nashik Plant
+        aliases_nashik = generate_facility_aliases("In Nashik Plant", "Nashik", "maharashtra")
+        assert "Nashik" in aliases_nashik
+        assert "Nashik MIDC" in aliases_nashik
+        assert "maharashtra" not in [a.lower() for a in aliases_nashik]
+
+    def test_multi_candidate_fallback_skips_contradicted_candidate(self):
+        """When candidate 1 is contradicted, multi-candidate fallback selects candidate 2 with facility proof."""
+        from services.person_intelligence_service import discover_and_rank_decision_makers
+
+        mock_router = MagicMock()
+        mock_router.search.side_effect = [
+            # Initial search queries return 2 candidates
+            {
+                "results": [
+                    {
+                        "url": "https://in.linkedin.com/in/dhiraj-s",
+                        "title": "Dhiraj Shrivastav - Sr.Manager Quality - Tube Investments | LinkedIn",
+                        "snippet": "Sr.Manager Quality at TUBE Investment Of India LTD. Located in Ahmedabad.",
+                    },
+                    {
+                        "url": "https://in.linkedin.com/in/sachin-k",
+                        "title": "Sachin Kumar - Head Quality - Tube Investments | LinkedIn",
+                        "snippet": "Head Quality at Tube Investments of India Limited, Nashik Plant, Maharashtra.",
+                    },
+                ]
+            },
+            # Stage B Query 1 for candidate 1 (Dhiraj) -> returns Ahmedabad (contradicted)
+            {
+                "results": [
+                    {
+                        "url": "https://in.linkedin.com/in/dhiraj-s",
+                        "title": "Dhiraj Shrivastav - Tube Investments Ahmedabad",
+                        "snippet": "Dhiraj Shrivastav is Quality Head at Ahmedabad unit.",
+                    }
+                ]
+            },
+            # Stage B Query 1 for candidate 2 (Sachin) -> returns Nashik (verified)
+            {
+                "results": [
+                    {
+                        "url": "https://in.linkedin.com/in/sachin-k",
+                        "title": "Sachin Kumar - Tube Investments Nashik Plant",
+                        "snippet": "Sachin Kumar is Head Quality at Nashik Plant, MIDC Sinnar.",
+                    }
+                ]
+            },
+        ]
+
+        result = discover_and_rank_decision_makers(
+            company_name="Tube Investments of India Limited",
+            facility_name="In Nashik Plant",
+            city="Nashik",
+            search_router=mock_router,
+            max_candidates=5,
+            use_deepseek=False,
+        )
+
+        primary = result.get("primary_person")
+        assert primary is not None
+        # Candidate 2 (Sachin Kumar) should be chosen as primary because Candidate 1 was contradicted!
+        assert "Sachin" in primary["name"]
+        assert primary["facility_relationship"] in ("FACILITY_OWNER", "FACILITY_FUNCTION_OWNER")
+
