@@ -131,6 +131,12 @@ class Settings(BaseSettings):
     DEERFLOW_ENABLED: bool = True
     DEERFLOW_TIMEOUT_SECONDS: int = 60
 
+    # LinkedIn MCP Service Provider (Optional Read-Only Sidecar)
+    LINKEDIN_MCP_ENABLED: bool = False
+    LINKEDIN_MCP_URL: str = "http://127.0.0.1:8765/mcp"
+    LINKEDIN_MCP_TIMEOUT_SECONDS: int = 180
+    LINKEDIN_MCP_MAX_CANDIDATES: int = 3
+
     # App settings
     SECRET_KEY: str = "change-me-in-production"
     DEBUG: bool = True
