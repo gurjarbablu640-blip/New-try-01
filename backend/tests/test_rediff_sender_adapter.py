@@ -263,3 +263,39 @@ def test_production_handoff_writes_one_rediff_compatible_csv_without_sending(tmp
     assert len(rows) == 1
     assert rows[0]["EMAIL_ID"] == "asha.verma@precision-components.in"
     assert rows[0]["READY_FOR_EMAIL"] == "YES"
+
+
+def test_sender_disabled_in_test_mode_still_allows_dry_run(tmp_path):
+    config = RediffAdapterConfig(
+        enabled=False,
+        test_mode=True,
+        system_path=_rediff_system(tmp_path),
+        handoff_dir=tmp_path / "handoff",
+        cc_addresses=("Bablu@oorjatechnical.org", "piyushk@oorjatechnical.com"),
+        duplicate_window_days=14,
+    )
+    adapter = RediffSenderAdapter(config=config, now=lambda: NOW)
+    result = adapter.prepare_handoff(_qualified_record())
+
+    assert result["status"] == DRY_RUN_READY
+    assert result["transport_called"] is False
+    assert result["smtp_sent"] is False
+
+
+def test_sender_disabled_in_production_mode_is_safely_blocked(tmp_path):
+    config = RediffAdapterConfig(
+        enabled=False,
+        test_mode=False,
+        system_path=_rediff_system(tmp_path),
+        handoff_dir=tmp_path / "handoff",
+        cc_addresses=("Bablu@oorjatechnical.org", "piyushk@oorjatechnical.com"),
+        duplicate_window_days=14,
+    )
+    adapter = RediffSenderAdapter(config=config, now=lambda: NOW)
+    result = adapter.prepare_handoff(_qualified_record(provenance="REAL"))
+
+    assert result["status"] == FAILED
+    assert result["reason"] == "REDIFF_SENDER_DISABLED"
+    assert result["transport_called"] is False
+    assert result["smtp_sent"] is False
+

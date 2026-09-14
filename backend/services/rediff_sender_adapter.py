@@ -378,7 +378,7 @@ class RediffSenderAdapter:
         attachments: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         """Apply Salesoorja gates and return a dry-run or queued file handoff."""
-        if not self.config.enabled:
+        if not self.config.enabled and not self.config.test_mode:
             return self._result(FAILED, "REDIFF_SENDER_DISABLED")
         if not self._system_available():
             return self._result(FAILED, "REDIFF_SYSTEM_UNAVAILABLE")
