@@ -1,6 +1,9 @@
+import inspect
 from pathlib import Path
 
 from config import Settings
+from services.brightdata_linkedin_provider import BrightDataLinkedInProvider
+from services.decision_maker_discovery import run_full_discovery_pipeline
 from services.llm_provider import get_provider
 from services.research_provider import ResearchProviderRouter
 
@@ -30,6 +33,29 @@ def test_removed_provider_configuration_is_absent():
         "APIFY_API_TOKEN",
     }
     assert removed_fields.isdisjoint(Settings.model_fields)
+
+
+def test_brightdata_person_provider_is_configured_and_env_only():
+    required_fields = {
+        "BRIGHTDATA_API_TOKEN",
+        "BRIGHTDATA_LINKEDIN_PEOPLE_SEARCH_DATASET_ID",
+        "BRIGHTDATA_LINKEDIN_PROFILE_DATASET_ID",
+    }
+    assert required_fields.issubset(Settings.model_fields)
+    assert (BACKEND_ROOT / "services" / "brightdata_linkedin_provider.py").exists()
+    gitignore_path = REPO_ROOT / ".gitignore"
+    if gitignore_path.exists():
+        assert ".env" in gitignore_path.read_text(encoding="utf-8").splitlines()
+    assert "_api_token" not in repr(BrightDataLinkedInProvider())
+
+
+def test_production_person_discovery_cannot_reach_serper_or_deleted_providers():
+    source = inspect.getsource(run_full_discovery_pipeline)
+    assert "discover_people_with_brightdata" in source
+    assert "execute_web_person_search(" not in source
+    assert "research_router" not in source
+    for removed in ("linkedin_mcp", "searxng", "playwright", "apify"):
+        assert removed not in source.casefold()
 
 
 def test_removed_runtime_modules_are_absent():

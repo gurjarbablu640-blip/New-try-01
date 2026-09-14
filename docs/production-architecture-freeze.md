@@ -4,8 +4,8 @@
 
 Salesoorja's supported production path is:
 
-1. Serper discovers public evidence under a hard daily budget.
-2. Bright Data is the reserved next integration point for narrow public-page retrieval; no Bright Data adapter exists in this checkpoint.
+1. Serper discovers company, trigger, and facility evidence under a hard daily budget.
+2. Bright Data Dataset Search discovers LinkedIn people and the LinkedIn Profile scraper supplies additional evidence for only the strongest candidates.
 3. DeepSeek, using the Hive transport, performs bounded reasoning with Gemini as fallback.
 4. Deterministic company, facility, person, authority, contact-confidence, and outreach gates make every qualification decision.
 5. Apollo runs only after a person passes the existing enrichment eligibility gates.
@@ -19,7 +19,8 @@ LLM output is advisory and cannot override deterministic gate failures. Search o
 | --- | --- | --- |
 | FastAPI routes and services | Keep | `backend/main.py` registers the live API surface. |
 | Celery worker and beat | Keep | Scheduled discovery, inbox checks, and reporting use Redis and Celery. |
-| Serper provider, cache, and budget | Keep | `research_provider.py` is the sole live search router. |
+| Serper provider, cache, and budget | Keep | `research_provider.py` handles company, trigger, and facility research only. |
+| Bright Data LinkedIn provider | Keep | `brightdata_linkedin_provider.py` is the sole production person-discovery and LinkedIn-profile evidence source. |
 | Company, facility, person, and opportunity gates | Keep | These deterministic services enforce evidence and truth requirements. |
 | Apollo enrichment | Keep | Contact enrichment remains post-identification and gate-controlled. |
 | Rediff SMTP/IMAP and reply tracking | Keep | Controlled email delivery and response classification are production functions. |
@@ -39,4 +40,4 @@ The Compose runtime contains only PostgreSQL, Redis, backend, Celery worker, Cel
 
 ## Change Rule
 
-Future production-provider changes must update this document, provider inventory tests, configuration, Compose, and targeted truth-gate tests together. Bright Data integration must preserve the same evidence provenance, budgets, deterministic gates, and read-only discovery boundaries.
+Future production-provider changes must update this document, provider inventory tests, configuration, Compose, and targeted truth-gate tests together. Bright Data person intelligence must preserve evidence provenance, cache and request telemetry, deterministic gates, and read-only discovery boundaries.

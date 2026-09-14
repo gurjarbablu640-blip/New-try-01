@@ -353,14 +353,19 @@ def execute(run_id):
                     )
                     if result.get('error'):
                         raise ValueError(result['error'])
+                    candidates = result.get('candidates', [])
                     rows = db.query(DecisionMakerCandidate).filter(DecisionMakerCandidate.id.in_(result.get('candidate_ids',[]))).all()
                     from services.contact_confidence import enrich_candidate_phone
                     from services.apollo_adapter import enrich_specific_person
                     for c in rows:
                         enrich_candidate_phone(
                             c, company, result.get('public_evidence', []),
-                            apollo_allowed=run['use_apollo'],
-                            apollo_lookup_fn=enrich_specific_person if run['use_apollo'] else None,
+                            apollo_allowed=(run['use_apollo'] and c.verification_status == 'CONTACT_ENRICHMENT_READY'),
+                            apollo_lookup_fn=(
+                                enrich_specific_person
+                                if run['use_apollo'] and c.verification_status == 'CONTACT_ENRICHMENT_READY'
+                                else None
+                            ),
                         )
                     db.commit()
                     candidates = candidates[:1]

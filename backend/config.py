@@ -82,6 +82,16 @@ class Settings(BaseSettings):
     SERPER_BUDGET_TIMEZONE: str = "Asia/Kolkata"
     SERPER_INITIAL_QUERIES_PER_COMPANY: int = 4
     SERPER_MAX_QUERIES_PER_COMPANY: int = 10
+
+    # Bright Data LinkedIn person intelligence
+    BRIGHTDATA_API_TOKEN: str = ""
+    BRIGHTDATA_LINKEDIN_PEOPLE_SEARCH_DATASET_ID: str = ""
+    BRIGHTDATA_LINKEDIN_PROFILE_DATASET_ID: str = ""
+    BRIGHTDATA_API_BASE_URL: str = "https://api.brightdata.com"
+    BRIGHTDATA_TIMEOUT_SECONDS: int = 30
+    BRIGHTDATA_POLL_TIMEOUT_SECONDS: int = 75
+    BRIGHTDATA_CACHE_TTL_SECONDS: int = 2592000
+
     # App settings
     SECRET_KEY: str = "change-me-in-production"
     DEBUG: bool = True

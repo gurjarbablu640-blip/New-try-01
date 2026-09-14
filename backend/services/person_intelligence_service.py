@@ -1585,6 +1585,289 @@ def create_person_evidence_packet(
     return packet
 
 
+def _brightdata_company_matches(candidate_company: str, target_company: str) -> bool:
+    ignored = {"limited", "ltd", "private", "pvt", "inc", "corporation", "corp"}
+    target_tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", (target_company or "").casefold())
+        if len(token) >= 3 and token not in ignored
+    ]
+    candidate_key = (candidate_company or "").casefold()
+    return bool(candidate_key and target_tokens and all(token in candidate_key for token in target_tokens[:2]))
+
+
+def _brightdata_source_text(record: Dict[str, Any]) -> Tuple[str, str]:
+    current_title = str(record.get("current_title") or record.get("headline") or "").strip()
+    current_company = str(record.get("current_company") or "").strip()
+    title = current_title
+    if current_company:
+        title = f"{current_title or 'Current role'} at {current_company}"
+    snippets: List[str] = []
+    if current_company:
+        snippets.append(
+            f"Currently working at {current_company} as {current_title or 'current employee'}."
+        )
+    for experience in record.get("experience") or []:
+        if not isinstance(experience, dict):
+            continue
+        company = str(experience.get("company") or "").strip()
+        role = str(experience.get("title") or "").strip()
+        start_date = str(experience.get("start_date") or "").strip()
+        end_date = str(experience.get("end_date") or "").strip()
+        if experience.get("is_current"):
+            end_date = "Present"
+        date_range = " - ".join(part for part in (start_date, end_date) if part)
+        parts = [part for part in (company, role, date_range) if part]
+        if parts:
+            snippets.append("Experience: " + " | ".join(parts) + ".")
+        experience_location = str(experience.get("location") or "").strip()
+        if experience_location:
+            snippets.append(f"Experience location: {experience_location}.")
+    return title, " ".join(snippets)[:1200]
+
+
+def qualify_brightdata_person_records(
+    records: List[Dict[str, Any]],
+    *,
+    company_name: str,
+    facility_name: str = "",
+    city: str = "",
+    state: str = "",
+    company_domain: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Apply existing deterministic person gates to normalized Bright Data evidence."""
+    usable = [record for record in records if isinstance(record, dict)]
+    if not usable:
+        return None
+    strongest = usable[-1]
+    candidate_name = str(strongest.get("name") or usable[0].get("name") or "").strip()
+    is_human, _ = is_human_person_candidate(candidate_name, company_name=company_name)
+    if not is_human:
+        return None
+    current_title = next(
+        (
+            str(record.get("current_title") or record.get("headline") or "").strip()
+            for record in reversed(usable)
+            if record.get("current_title") or record.get("headline")
+        ),
+        "",
+    )
+    aliases = generate_facility_aliases(
+        facility_name=facility_name,
+        city=city,
+        state=state,
+    )
+    packet = PersonEvidencePacket(
+        candidate_name=candidate_name,
+        current_title=current_title,
+        target_company=company_name,
+        target_facility=facility_name,
+        target_city=city,
+        target_state=state,
+        facility_aliases=aliases,
+    )
+    source_snippets: List[str] = []
+    for record in usable:
+        source_title, source_snippet = _brightdata_source_text(record)
+        source_snippets.append(source_snippet)
+        packet.add_source(
+            url=str(record.get("linkedin_url") or ""),
+            title=source_title,
+            snippet=source_snippet,
+            source_type=(
+                "LINKEDIN_PROFILE"
+                if record.get("evidence_kind") == "PROFILE_LOOKUP"
+                else "LINKEDIN_SEARCH_SNIPPET"
+            ),
+            company_domain=company_domain,
+            source_date=str(record.get("retrieved_at") or ""),
+        )
+    packet.derive()
+    current_company = next(
+        (
+            str(record.get("current_company") or "").strip()
+            for record in reversed(usable)
+            if record.get("current_company")
+        ),
+        "",
+    )
+    profile_url = next(
+        (
+            str(record.get("linkedin_url") or "").strip()
+            for record in reversed(usable)
+            if record.get("linkedin_url")
+        ),
+        "",
+    )
+    location = next(
+        (
+            str(record.get("location") or "").strip()
+            for record in reversed(usable)
+            if record.get("location")
+        ),
+        "",
+    )
+    field_provenance: Dict[str, Any] = {}
+    for record in usable:
+        for field_name, provenance in (record.get("field_provenance") or {}).items():
+            if provenance:
+                field_provenance[field_name] = provenance
+    if packet.current_employment == "CONTRADICTED" or packet.facility_relationship in {
+        "OTHER_FACILITY_OWNER",
+        "FACILITY_CONTRADICTED",
+    }:
+        verification_status = "PERSON_REJECTED"
+    elif packet.current_employment == "VERIFIED" and packet.score >= 70:
+        verification_status = "PERSON_PUBLICLY_VERIFIED"
+    else:
+        verification_status = "PERSON_CANDIDATE"
+    return {
+        "name": candidate_name,
+        "title": current_title,
+        "company": current_company,
+        "linkedin_url": profile_url,
+        "linkedin_id": str(strongest.get("linkedin_id") or ""),
+        "location": location,
+        "experience": strongest.get("experience") or [],
+        "current_employment": packet.current_employment,
+        "current_employment_verified": packet.current_employment == "VERIFIED",
+        "facility_relationship": packet.facility_relationship,
+        "facility_verified": packet.facility_relationship in {
+            "FACILITY_OWNER",
+            "FACILITY_FUNCTION_OWNER",
+        },
+        "function_ownership": packet.function_ownership,
+        "authority_class": packet.function_ownership,
+        "authority": packet.authority,
+        "duties_verified": packet.function_ownership not in {
+            "UNKNOWN",
+            "COMPANY_ONLY",
+            "GENERAL_QUALITY",
+            "JUNIOR_IC",
+        },
+        "person_score": packet.score,
+        "person_confidence": packet.confidence,
+        "contact_route": packet.contact_route,
+        "verification_status": verification_status,
+        "evidence_snippet": " ".join(source_snippets)[:1200],
+        "evidence_packet": packet.to_dict(),
+        "field_provenance": field_provenance,
+        "source": "BRIGHTDATA_LINKEDIN",
+        "retrieved_at": str(strongest.get("retrieved_at") or ""),
+        "ready_for_contact_enrichment": False,
+    }
+
+
+def discover_people_with_brightdata(
+    *,
+    company_name: str,
+    facility_name: str = "",
+    city: str = "",
+    state: str = "",
+    company_domain: str = "",
+    role_families: Optional[List[str]] = None,
+    max_candidates: int = 5,
+    max_profile_fetches: int = 2,
+    provider: Any = None,
+) -> Dict[str, Any]:
+    """Discover candidates through Bright Data and then apply deterministic gates."""
+    if provider is None:
+        from services.brightdata_linkedin_provider import brightdata_linkedin_provider
+        provider = brightdata_linkedin_provider
+    from services.brightdata_linkedin_provider import PRIORITY_ROLE_FAMILIES
+
+    roles = list(role_families or PRIORITY_ROLE_FAMILIES)
+    search_result = provider.search_people(
+        company=company_name,
+        facility=facility_name,
+        city=city,
+        state=state,
+        role_families=roles,
+        max_candidates=min(max(int(max_candidates), 1), 5),
+    )
+    search_records = search_result.get("records") or []
+    if not search_records:
+        return {
+            "status": "CONFIG_REQUIRED" if search_result.get("status") == "CONFIG_REQUIRED" else "HOLD",
+            "provider": "BRIGHTDATA_LINKEDIN",
+            "search_status": search_result.get("status", "ERROR"),
+            "profile_status": "NOT_CALLED",
+            "candidates": [],
+            "telemetry": provider.telemetry(),
+        }
+
+    candidate_records: List[List[Dict[str, Any]]] = [[record] for record in search_records]
+    candidates = [
+        qualify_brightdata_person_records(
+            records,
+            company_name=company_name,
+            facility_name=facility_name,
+            city=city,
+            state=state,
+            company_domain=company_domain,
+        )
+        for records in candidate_records
+    ]
+    candidates = [candidate for candidate in candidates if candidate]
+    candidates.sort(key=_person_sort_key)
+
+    profile_statuses: List[str] = []
+    profile_budget = min(max(int(max_profile_fetches), 0), 2)
+    profiled = 0
+    for candidate in candidates:
+        needs_profile = (
+            candidate.get("current_employment") != "VERIFIED"
+            or candidate.get("facility_relationship")
+            not in {"FACILITY_OWNER", "FACILITY_FUNCTION_OWNER", "GROUP_FUNCTION_OWNER"}
+            or float(candidate.get("person_score") or 0) < 85
+        )
+        if not needs_profile or profiled >= profile_budget or not candidate.get("linkedin_url"):
+            continue
+        profile_result = provider.get_person_profile(str(candidate["linkedin_url"]))
+        profile_statuses.append(str(profile_result.get("status") or "ERROR"))
+        profiled += 1
+        profile_record = profile_result.get("record")
+        if not profile_record:
+            continue
+        matching_index = next(
+            (
+                index
+                for index, records in enumerate(candidate_records)
+                if records[0].get("linkedin_url") == candidate.get("linkedin_url")
+            ),
+            None,
+        )
+        if matching_index is None:
+            continue
+        candidate_records[matching_index].append(profile_record)
+
+    candidates = [
+        qualify_brightdata_person_records(
+            records,
+            company_name=company_name,
+            facility_name=facility_name,
+            city=city,
+            state=state,
+            company_domain=company_domain,
+        )
+        for records in candidate_records
+    ]
+    candidates = [candidate for candidate in candidates if candidate]
+    candidates.sort(key=_person_sort_key)
+    return {
+        "status": "READY" if candidates else "HOLD",
+        "provider": "BRIGHTDATA_LINKEDIN",
+        "search_status": search_result.get("status", "ERROR"),
+        "profile_status": (
+            "NOT_CALLED"
+            if not profile_statuses
+            else ("WORKING" if any(status == "WORKING" for status in profile_statuses) else profile_statuses[-1])
+        ),
+        "candidates": candidates[: min(max(int(max_candidates), 1), 5)],
+        "telemetry": provider.telemetry(),
+    }
+
+
 def verify_candidate_stage_b(
     candidate: Dict[str, Any],
     company_name: str,

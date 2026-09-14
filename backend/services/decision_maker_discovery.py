@@ -3,7 +3,7 @@
 Implements the complete 8-step pipeline:
 1. Persona inference from signal/industry
 2. Search query generation
-3. Web/public research execution
+3. Bright Data LinkedIn person discovery
 4. Person candidate extraction
 5. Person verification & scoring
 6. Apollo enrichment (specific person)
@@ -26,6 +26,8 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from models.company import Company
+from models.facility import Facility
+from models.intent_signal import CompanyIntentSignal
 from models.person import Person
 from models.decision_maker_candidate import (
     DecisionMakerCandidate,
@@ -977,10 +979,13 @@ def enrich_candidate_via_apollo(
     """
     from services.apollo_adapter import enrich_specific_person
 
-    if candidate_record.verification_status in ("PERSON_REJECTED", "PERSONA_INFERRED"):
+    if candidate_record.verification_status != "CONTACT_ENRICHMENT_READY":
         return {
             "status": "SKIPPED",
-            "reason": f"Candidate status is {candidate_record.verification_status}, not eligible for Apollo",
+            "reason": (
+                f"Candidate status is {candidate_record.verification_status}; "
+                "CONTACT_ENRICHMENT_READY is required before Apollo"
+            ),
         }
 
     if candidate_record.verification_confidence < APOLLO_ELIGIBLE_THRESHOLD:
@@ -1237,12 +1242,10 @@ def run_full_discovery_pipeline(
     Steps:
     1. Company lookup
     2. Persona inference
-    3. Search query generation
-    4. Web/public research
-    5. Person candidate extraction
-    6. Verification & scoring
-    7. Apollo enrichment (top candidates only)
-    8. Research brief assembly
+    3. Bright Data LinkedIn people discovery
+    4. Deterministic verification and scoring
+    5. Apollo enrichment after strict eligibility gates
+    6. Research brief assembly
 
     Reports each stage separately with REAL/MOCK/BLOCKED status.
     """
@@ -1261,6 +1264,15 @@ def run_full_discovery_pipeline(
         "state": company.state,
         "industry": company.industry,
     }
+    facility_record = (
+        db.query(Facility)
+        .filter(Facility.company_id == company_id)
+        .order_by(Facility.id.asc())
+        .first()
+    )
+    target_facility = facility_record.name if facility_record else ""
+    target_city = (facility_record.city if facility_record else None) or company.city or ""
+    target_state = (facility_record.state if facility_record else None) or company.state or ""
 
     # ── 2. Persona Inference ──────────────────────────────────────────
     effective_signal = signal_type or "general_signal"
@@ -1293,50 +1305,58 @@ def run_full_discovery_pipeline(
     db.commit()
 
     # ── 3. Search Query Generation ────────────────────────────────────
-    queries = generate_search_queries(
-        company_name=company.name,
-        personas=personas,
-        city=company.city,
-    )
+    from services.brightdata_linkedin_provider import PRIORITY_ROLE_FAMILIES
+    from services.person_intelligence_service import discover_people_with_brightdata
+
     stages["search_queries"] = {
         "status": "REAL",
-        "query_count": len(queries),
-        "queries": [q["query"] for q in queries[:5]],  # Sample
+        "query_count": 1,
+        "strategy": "BRIGHTDATA_DATASET_SEARCH_COMBINED_FILTER",
+        "role_families": PRIORITY_ROLE_FAMILIES,
     }
 
     # Official pages are first: stop search if they already identify a relevant person.
-    official_candidates = extract_person_candidates(additional_evidence or [], company.name)
-    official_adequate = any(
-        verify_person_candidate(candidate, company)["composite_score"] >= APOLLO_ELIGIBLE_THRESHOLD
-        for candidate in official_candidates
+    discovery = discover_people_with_brightdata(
+        company_name=company.name,
+        facility_name=target_facility,
+        city=target_city,
+        state=target_state,
+        company_domain=company.domain or "",
+        role_families=PRIORITY_ROLE_FAMILIES,
+        max_candidates=5,
+        max_profile_fetches=2,
     )
-    if official_adequate:
-        queries = []
+    raw_candidates = discovery.get("candidates") or []
 
     # ── 4. Web/Public Research ────────────────────────────────────────
-    search_results = execute_web_person_search(
-        company_id=company_id,
-        company_name=company.name,
-        queries=queries,
-        db=db,
-        max_queries=max_queries,
-        free_only=free_only,
-    )
+    public_person_evidence = [
+        {
+            "title": f"{candidate.get('name', '')} - {candidate.get('title', '')}",
+            "snippet": candidate.get("evidence_snippet", ""),
+            "url": candidate.get("linkedin_url", ""),
+            "source": "BRIGHTDATA_LINKEDIN",
+        }
+        for candidate in raw_candidates
+    ]
+    search_results = {
+        "search_provider": "brightdata_linkedin",
+        "overall_status": discovery.get("status", "ERROR"),
+        "provider_statuses": {"brightdata_linkedin": discovery.get("search_status", "ERROR")},
+        "queries_executed": [{"strategy": "combined_dataset_filter"}],
+        "total_results": len(raw_candidates),
+        "results": public_person_evidence + list(additional_evidence or []),
+    }
     stages["person_search"] = {
-        "status": search_results["overall_status"],
-        "provider": "official_website" if official_adequate else search_results["search_provider"],
-        "provider_statuses": search_results["provider_statuses"],
+        "status": discovery.get("status", "ERROR"),
+        "provider": "brightdata_linkedin",
+        "people_search": discovery.get("search_status", "ERROR"),
+        "profile_lookup": discovery.get("profile_status", "NOT_CALLED"),
         "total_results": search_results["total_results"],
-        "queries_executed": len(search_results["queries_executed"]),
+        "queries_executed": 1 if discovery.get("search_status") != "CONFIG_REQUIRED" else 0,
+        "telemetry": discovery.get("telemetry", {}),
     }
 
-    search_results["results"].extend(additional_evidence or [])
-
     # ── 5. Person Candidate Extraction ────────────────────────────────
-    raw_candidates = extract_person_candidates(
-        search_results=search_results["results"],
-        company_name=company.name,
-    )
     stages["candidates"] = {
         "status": "REAL" if raw_candidates else "NO_CANDIDATES_FOUND",
         "count": len(raw_candidates),
@@ -1345,12 +1365,39 @@ def run_full_discovery_pipeline(
     # ── 6. Verification & Scoring ─────────────────────────────────────
     verified_candidates = []
     rejected_candidates = []
+    candidate_evidence: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
     for raw_c in raw_candidates:
-        verification = verify_person_candidate(raw_c, company)
-
-        # Determine the persona for this candidate
-        matching_persona = raw_c.get("persona", "Quality / Metrology")
+        person_score = float(raw_c.get("person_score") or 0.0)
+        normalized_score = person_score / 100.0
+        verification_status = str(raw_c.get("verification_status") or "PERSON_CANDIDATE")
+        current_employment = str(raw_c.get("current_employment") or "UNKNOWN")
+        facility_relationship = str(raw_c.get("facility_relationship") or "UNKNOWN")
+        function_ownership = str(raw_c.get("function_ownership") or "UNKNOWN")
+        if current_employment == "CONTRADICTED":
+            rejection_reason = "outdated_employment"
+            rejection_details = "Structured LinkedIn experience identifies a different current employer"
+        elif facility_relationship in {"OTHER_FACILITY_OWNER", "FACILITY_CONTRADICTED"}:
+            rejection_reason = "wrong_facility"
+            rejection_details = "Structured LinkedIn experience contradicts the target facility"
+        else:
+            rejection_reason = None
+            rejection_details = None
+        title_key = str(raw_c.get("title") or "").casefold()
+        matching_persona = (
+            "Quality / Metrology"
+            if any(term in title_key for term in ("quality", "qa", "qc", "metrology", "calibration"))
+            else "Maintenance / Plant"
+        )
+        role_score = 1.0 if function_ownership not in {"UNKNOWN", "COMPANY_ONLY", "JUNIOR_IC"} else 0.0
+        facility_score = {
+            "FACILITY_OWNER": 1.0,
+            "FACILITY_FUNCTION_OWNER": 1.0,
+            "GROUP_FUNCTION_OWNER": 0.75,
+            "FUNCTIONALLY_RELEVANT": 0.5,
+            "COMPANY_ONLY": 0.2,
+        }.get(facility_relationship, 0.0)
+        employment_score = {"VERIFIED": 1.0, "PROBABLE": 0.6, "UNKNOWN": 0.2}.get(current_employment, 0.0)
 
         # Create or update DecisionMakerCandidate record
         dmc = DecisionMakerCandidate(
@@ -1358,51 +1405,68 @@ def run_full_discovery_pipeline(
             target_persona=matching_persona,
             target_titles=PERSONA_TITLE_MAP.get(matching_persona, {}).get("titles", []),
             stakeholder_role=PERSONA_TITLE_MAP.get(matching_persona, {}).get("stakeholder_role", "Evaluator"),
-            candidate_name=raw_c["candidate_name"],
-            candidate_title=raw_c.get("candidate_title"),
-            candidate_company_match=raw_c.get("candidate_company_match", False),
-            candidate_facility=raw_c.get("candidate_facility", ""),
-            candidate_location=raw_c.get("candidate_location", ""),
+            candidate_name=raw_c["name"],
+            candidate_title=raw_c.get("title"),
+            candidate_company_match=current_employment in {"VERIFIED", "PROBABLE"},
+            candidate_facility=(
+                target_facility
+                if facility_relationship in {"FACILITY_OWNER", "FACILITY_FUNCTION_OWNER"}
+                else ""
+            ),
+            candidate_location=raw_c.get("location", ""),
             evidence_sources=[{
-                "source": raw_c.get("evidence_source", "web_search"),
-                "url": raw_c.get("evidence_url", ""),
+                "source": "BRIGHTDATA_LINKEDIN",
+                "url": raw_c.get("linkedin_url", ""),
                 "snippet": raw_c.get("evidence_snippet", ""),
-                "retrieved_at": datetime.utcnow().isoformat(),
-                "confidence": raw_c.get("raw_confidence", 0.5),
-                "evidence_type": raw_c.get("evidence_type", "WEB_EVIDENCE"),
+                "retrieved_at": raw_c.get("retrieved_at") or datetime.utcnow().isoformat(),
+                "confidence": raw_c.get("person_confidence", "LOW"),
+                "evidence_type": "LINKEDIN_STRUCTURED_EVIDENCE",
+                "field_provenance": raw_c.get("field_provenance", {}),
+                "evidence_packet": raw_c.get("evidence_packet", {}),
             }],
-            search_queries_used=[raw_c.get("persona", "")],
-            verification_status=verification["verification_status"],
-            verification_confidence=verification["composite_score"],
-            verification_notes=f"Composite score: {verification['composite_score']:.3f}",
-            rejection_reason=verification.get("rejection_reason"),
-            rejection_details=verification.get("rejection_details"),
-            score_company_match=verification["scores"]["company_match"],
-            score_role_relevance=verification["scores"]["role_relevance"],
-            score_facility_match=verification["scores"]["facility_match"],
-            score_recency=verification["scores"]["recency"],
-            score_evidence_quality=verification["scores"]["evidence_quality"],
-            score_composite=verification["composite_score"],
-            pending_research_tasks=verification.get("pending_research_tasks", []),
+            public_profile_url=raw_c.get("linkedin_url"),
+            public_profile_evidence=raw_c.get("evidence_snippet", ""),
+            search_queries_used=["BRIGHTDATA_DATASET_SEARCH"],
+            verification_status=verification_status,
+            verification_confidence=normalized_score,
+            verification_notes=f"Deterministic person score: {person_score:.1f}/100",
+            rejection_reason=rejection_reason,
+            rejection_details=rejection_details,
+            score_company_match=employment_score,
+            score_role_relevance=role_score,
+            score_facility_match=facility_score,
+            score_recency=employment_score,
+            score_evidence_quality=(
+                1.0
+                if "LINKEDIN_PROFILE" in (raw_c.get("evidence_packet", {}).get("source_types") or [])
+                else 0.8
+            ),
+            score_composite=normalized_score,
+            pending_research_tasks=[] if verification_status == "PERSON_PUBLICLY_VERIFIED" else [{
+                "task": "Obtain current employment or target-facility evidence",
+                "reason": f"Current employment {current_employment}; facility relationship {facility_relationship}",
+                "priority": "HIGH",
+                "status": "PENDING",
+            }],
         )
 
-        if verification["verification_status"] == "PERSON_PUBLICLY_VERIFIED":
+        if verification_status == "PERSON_PUBLICLY_VERIFIED":
             dmc.verified_at = datetime.utcnow()
             if not verified_candidates:
                 dmc.contact_priority = "PRIMARY"
                 dmc.priority_reason = (
-                    f"Selected as PRIMARY decision-maker: Highest verification match score ({verification['composite_score']:.2f}) "
+                    f"Selected as PRIMARY decision-maker: Highest deterministic person score ({person_score:.1f}) "
                     f"for target {matching_persona} function at {company.name}."
                 )
             elif len(verified_candidates) <= 2:
                 dmc.contact_priority = "SECONDARY"
                 dmc.priority_reason = (
-                    f"Secondary stakeholder ({matching_persona}) with strong verification score ({verification['composite_score']:.2f})."
+                    f"Secondary stakeholder ({matching_persona}) with deterministic person score ({person_score:.1f})."
                 )
             else:
                 dmc.contact_priority = "OTHER"
                 dmc.priority_reason = f"Additional stakeholder ({matching_persona}) identified at {company.name}."
-        elif verification["verification_status"] == "PERSON_CANDIDATE":
+        elif verification_status == "PERSON_CANDIDATE":
             dmc.contact_priority = "OTHER"
             dmc.priority_reason = "Unverified candidate hypothesis — requires additional evidence before engagement."
 
@@ -1416,6 +1480,7 @@ def run_full_discovery_pipeline(
         else:
             db.add(dmc)
         db.flush()
+        candidate_evidence[(dmc.candidate_name.casefold(), (dmc.candidate_title or "").casefold())] = raw_c
 
         if dmc.verification_status == "PERSON_REJECTED":
             rejected_candidates.append(dmc)
@@ -1435,25 +1500,10 @@ def run_full_discovery_pipeline(
         ],
     }
 
-    stages["verification"] = {
-        "status": "REAL",
-        "verified": [
-            {
-                "name": c.candidate_name,
-                "title": c.candidate_title,
-                "status": c.verification_status,
-                "score": round(c.score_composite or 0, 3),
-                "apollo_eligible": (c.score_composite or 0) >= APOLLO_ELIGIBLE_THRESHOLD,
-            }
-            for c in verified_candidates
-        ],
-    }
-
     stages["person_match_score"] = {
         "status": "REAL",
-        "weights": SCORE_WEIGHTS,
-        "threshold_apollo": APOLLO_ELIGIBLE_THRESHOLD,
-        "threshold_candidate": CANDIDATE_THRESHOLD,
+        "method": "EXISTING_DETERMINISTIC_PERSON_GATES",
+        "threshold_apollo": APOLLO_ELIGIBLE_THRESHOLD * 100,
     }
 
     # ── 7. Apollo Enrichment ──────────────────────────────────────────
@@ -1469,12 +1519,97 @@ def run_full_discovery_pipeline(
         enrich_free_candidate(candidate, company, search_results['results'], known_contacts)
     db.commit()
 
-    apollo_eligible = [
-        c for c in verified_candidates
-        if (c.score_composite or 0) >= APOLLO_ELIGIBLE_THRESHOLD
-        and c.verification_status != "PERSON_REJECTED"
-        and not c.apollo_email
-    ][:max_apollo_enrichments]
+    active_signal = (
+        db.query(CompanyIntentSignal)
+        .filter(
+            CompanyIntentSignal.company_id == company_id,
+            CompanyIntentSignal.is_active == 1,
+        )
+        .order_by(CompanyIntentSignal.detected_at.desc())
+        .first()
+    )
+    trigger_text = " ".join(
+        part
+        for part in (
+            getattr(active_signal, "source_snippet", "") if active_signal else "",
+            getattr(active_signal, "opportunity_note", "") if active_signal else "",
+        )
+        if part
+    ).casefold()
+    direct_facility_terms = []
+    for facility_value in (
+        target_facility,
+        facility_record.plant_code if facility_record else "",
+        facility_record.industrial_estate if facility_record else "",
+    ):
+        if not facility_value:
+            continue
+        direct_facility_terms.extend(
+            token
+            for token in re.findall(r"[a-z0-9]+", facility_value.casefold())
+            if len(token) >= 3 and token not in {"plant", "unit", "facility", "factory"}
+        )
+    if any(term in trigger_text for term in direct_facility_terms):
+        trigger_facility_confidence = "DIRECT"
+    elif target_city and target_city.casefold() in trigger_text:
+        trigger_facility_confidence = "STRONG"
+    else:
+        trigger_facility_confidence = "UNVERIFIED"
+    facility_info = {
+        "facility_verified": bool(
+            facility_record
+            and (facility_record.name or facility_record.plant_code or facility_record.address)
+        ),
+        "linkage_confidence": trigger_facility_confidence,
+    }
+    trigger_info = {
+        "valid_trigger": bool(
+            active_signal
+            and active_signal.source_url
+            and active_signal.source_snippet
+            and (not active_signal.expires_at or active_signal.expires_at >= datetime.utcnow())
+        )
+    }
+    apollo_gate_results: Dict[int, Tuple[bool, str]] = {}
+    apollo_eligible = []
+    for candidate in verified_candidates:
+        raw = candidate_evidence.get(
+            (candidate.candidate_name.casefold(), (candidate.candidate_title or "").casefold()),
+            {},
+        )
+        eligible, reason = is_apollo_eligible_lead(
+            {
+                "composite_score": float(raw.get("person_score") or 0) / 100.0,
+                "current_employment": raw.get("current_employment"),
+                "facility_relationship": raw.get("facility_relationship"),
+                "authority_class": raw.get("authority_class"),
+            },
+            facility_info,
+            trigger_info,
+            {"evidence_level": "NOT_FOUND"},
+        )
+        apollo_gate_results[candidate.id] = (eligible, reason)
+        raw["ready_for_contact_enrichment"] = eligible
+        if eligible and not candidate.apollo_email:
+            candidate.verification_status = "CONTACT_ENRICHMENT_READY"
+            apollo_eligible.append(candidate)
+    db.commit()
+    apollo_eligible = apollo_eligible[:max_apollo_enrichments]
+
+    stages["verification"] = {
+        "status": "REAL",
+        "verified": [
+            {
+                "name": candidate.candidate_name,
+                "title": candidate.candidate_title,
+                "status": candidate.verification_status,
+                "score": round((candidate.score_composite or 0) * 100, 1),
+                "apollo_eligible": apollo_gate_results.get(candidate.id, (False, ""))[0],
+                "apollo_gate_reason": apollo_gate_results.get(candidate.id, (False, "Not evaluated"))[1],
+            }
+            for candidate in verified_candidates
+        ],
+    }
 
     apollo_results = []
     for candidate in apollo_eligible:
@@ -1489,7 +1624,7 @@ def run_full_discovery_pipeline(
         })
 
     stages["apollo"] = {
-        "status": "REAL" if apollo_results else ("BLOCKED" if not apollo_eligible else "NO_ELIGIBLE_CANDIDATES"),
+        "status": "REAL" if apollo_results else "BLOCKED",
         "eligible_count": len(apollo_eligible),
         "enriched_count": sum(1 for r in apollo_results if r["status"] == "ENRICHED"),
         "results": apollo_results,
@@ -1548,10 +1683,21 @@ def run_full_discovery_pipeline(
         "stages": stages,
         "research_brief": brief,
         "public_evidence": search_results["results"],
+        "candidates": [
+            {
+                **candidate_evidence.get(
+                    (candidate.candidate_name.casefold(), (candidate.candidate_title or "").casefold()),
+                    {},
+                ),
+                "id": candidate.id,
+                "verification_status": candidate.verification_status,
+            }
+            for candidate in verified_candidates
+        ],
         "candidate_ids": [c.id for c in verified_candidates + rejected_candidates],
         "summary": {
             "personas_inferred": len(personas),
-            "queries_generated": len(queries),
+            "queries_generated": 1,
             "search_results": search_results["total_results"],
             "candidates_found": len(raw_candidates),
             "candidates_verified": len(verified_candidates),

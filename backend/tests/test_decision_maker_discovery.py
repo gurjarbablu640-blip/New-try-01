@@ -636,7 +636,7 @@ class TestAdversarialCasesAThroughL(unittest.TestCase):
         candidate = MagicMock()
         candidate.candidate_name = "Amit Kulkarni"
         candidate.candidate_title = "Quality Manager"
-        candidate.verification_status = "PERSON_PUBLICLY_VERIFIED"
+        candidate.verification_status = "CONTACT_ENRICHMENT_READY"
         candidate.verification_confidence = 0.85
         candidate.apollo_enrichment_status = "NOT_ATTEMPTED"
         candidate.apollo_email = None
@@ -663,7 +663,7 @@ class TestAdversarialCasesAThroughL(unittest.TestCase):
         candidate = MagicMock()
         candidate.candidate_name = "Amit Kulkarni"
         candidate.candidate_title = "Quality Manager"
-        candidate.verification_status = "PERSON_PUBLICLY_VERIFIED"
+        candidate.verification_status = "CONTACT_ENRICHMENT_READY"
         candidate.verification_confidence = 0.85
         candidate.apollo_enrichment_status = "NOT_ATTEMPTED"
         candidate.apollo_email = None
