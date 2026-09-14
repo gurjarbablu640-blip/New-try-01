@@ -302,6 +302,7 @@ def discover_new_calibration_opportunities(
     geography: str = "PAN INDIA",
     industry_filter: Optional[str] = None,
     limit: int = 10,
+    use_cache: bool = True,
 ) -> Dict[str, Any]:
     """Autonomous calibration demand discovery engine across Pan-India industrial corridors.
     
@@ -426,7 +427,12 @@ def discover_new_calibration_opportunities(
     live_search_candidates = []
     try:
         geo_query = f"{geography} " if geography and geography != "PAN INDIA" and geography != "All" else "India "
-        search_res = router.search(f"{geo_query}manufacturing plant expansion inaugurates commissioned 2026", num_results=5, db=db)
+        search_res = router.search(
+            f"{geo_query}manufacturing plant expansion inaugurates commissioned 2026",
+            num_results=5,
+            db=db,
+            use_cache=use_cache,
+        )
         if search_res.get("results"):
             for item in search_res["results"]:
                 title = item.get("title", "")
@@ -669,4 +675,3 @@ def expand_trigger_queries_with_gemini(
     except Exception as e:
         logger.debug(f"Gemini query expansion skipped: {e}")
         return []
-

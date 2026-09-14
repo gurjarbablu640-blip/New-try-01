@@ -72,7 +72,6 @@ def _settings(**overrides):
         "SALESOORJA_END_TIME": "18:00",
         "SALESOORJA_CYCLE_INTERVAL_SECONDS": 1,
         "SALESOORJA_INBOX_INTERVAL_SECONDS": 1,
-        "SALESOORJA_TEST_MAX_CYCLES": 1,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -158,7 +157,7 @@ def test_graceful_stop_finishes_safe_unit_and_persists_checkpoint(tmp_path):
             finish_work.wait(timeout=5)
             return super()._process_synthetic_account()
 
-    base = _operator(tmp_path)
+    base = _operator(tmp_path, SALESOORJA_MODE="SMOKE")
     op = ControlledOperator(
         settings_obj=base.settings,
         state_path=base.state_path,
@@ -509,7 +508,7 @@ def test_final_report_xlsx_created_and_email_status_safe(tmp_path):
 
 def test_non_blocking_error_handling_continues_operator(tmp_path):
     """An individual account error does not crash the operator; it is held and the run continues."""
-    op = _operator(tmp_path)
+    op = _operator(tmp_path, SALESOORJA_MODE="SMOKE")
 
     with patch.object(op, "_process_synthetic_account", side_effect=ValueError("Test candidate failure")):
         op._run_safely()
@@ -526,7 +525,7 @@ def test_non_blocking_error_handling_continues_operator(tmp_path):
 
 def test_queued_to_starting_to_running_lifecycle(tmp_path):
     """Execution follows QUEUED -> STARTING -> RUNNING strictly."""
-    op = _operator(tmp_path)
+    op = _operator(tmp_path, SALESOORJA_MODE="SMOKE")
     events = []
 
     # Intercept state saves to trace transitions
@@ -583,6 +582,15 @@ def test_stale_heartbeat_reconciles_to_error(tmp_path):
     assert status["stop_reason"] == "HEARTBEAT_TIMEOUT"
 
 
+def test_cycle_wait_keeps_worker_heartbeat_alive(tmp_path):
+    op = _operator(tmp_path)
+
+    with patch.object(op, "_heartbeat") as heartbeat:
+        assert op._interruptible_wait(1) is False
+
+    heartbeat.assert_called()
+
+
 def test_no_live_worker_immediate_cleanup_on_stop(tmp_path):
     """If stop_run() is called and no live worker/task exists, state is immediately cleaned to STOPPED."""
     op = _operator(tmp_path)
@@ -595,4 +603,3 @@ def test_no_live_worker_immediate_cleanup_on_stop(tmp_path):
     assert res["stopped"] is True
     assert res["status"]["status"] == "STOPPED"
     assert res["status"]["stop_reason"] in {"NO_LIVE_WORKER", "QUEUE_TIMEOUT"}
-

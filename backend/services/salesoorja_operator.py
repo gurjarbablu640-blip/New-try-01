@@ -203,7 +203,7 @@ class SalesoorjaOperator:
 
         return {
             "version": 2,
-            "run_id": previous.get("run_id") if (same_day and previous.get("run_id")) else f"operator-{uuid.uuid4().hex[:12]}",
+            "run_id": f"operator-{uuid.uuid4().hex[:12]}",
             "business_date": business_date,
             "mode": self._mode(),
             "status": "STOPPED",
@@ -220,14 +220,14 @@ class SalesoorjaOperator:
             "last_action": "Ready",
             "last_error": None,
             "stop_reason": None,
-            "report_path": previous.get("report_path") if same_day else None,
-            "final_report_email": previous.get("final_report_email") if same_day else None,
+            "report_path": None,
+            "final_report_email": None,
             "counters": {key: 0 for key in COUNTER_KEYS},  # CURRENT RUN COUNTERS ALWAYS RESET
             "historical_counters": historical_counters,
             "provider_usage": {key: 0 for key in PROVIDER_KEYS},  # CURRENT RUN PROVIDER USAGE RESET
             "historical_provider_usage": historical_provider_usage,
-            "processed_accounts": list(previous.get("processed_accounts") or []) if same_day else [],
-            "records": deepcopy(previous.get("records")) if same_day else {sheet: [] for sheet in REPORT_SHEETS},
+            "processed_accounts": [],
+            "records": {sheet: [] for sheet in REPORT_SHEETS},
             "transport_receipts": deepcopy(previous.get("transport_receipts")) if same_day else [],
         }
 
@@ -588,11 +588,11 @@ class SalesoorjaOperator:
                 self._force_stopped(reason="CLEARED_STALE_RUN")
 
             mode = self._mode()
-            if mode not in {"TEST", "PRODUCTION"}:
+            if mode not in {"SMOKE", "TEST", "PRODUCTION"}:
                 return {
                     "started": False,
                     "reason": "INVALID_MODE",
-                    "errors": ["SALESOORJA_MODE must be TEST or PRODUCTION"],
+                    "errors": ["SALESOORJA_MODE must be SMOKE, TEST, or PRODUCTION"],
                 }
 
             if mode == "PRODUCTION":
@@ -941,7 +941,9 @@ class SalesoorjaOperator:
 
     def _run_safely(self) -> None:
         try:
-            if self._mode() == "TEST":
+            if self._mode() == "SMOKE":
+                self._run_smoke_mode()
+            elif self._mode() == "TEST":
                 self._run_test_mode()
             else:
                 self._run_production_loop()
@@ -952,22 +954,36 @@ class SalesoorjaOperator:
             self._update(last_error=f"{type(exc).__name__}: {exc}")
             self.finalize_run(reason="FATAL_ERROR", status="ERROR")
 
+    def _run_smoke_mode(self) -> None:
+        self._heartbeat("Running bounded smoke diagnostic")
+        if self._db_factory is not None and not self._is_stop_requested():
+            self._run_discovery_cycle(smoke_mode=True)
+        elif not self._is_stop_requested():
+            self._process_synthetic_account()
+        reason = "MANUAL_STOP" if self._is_stop_requested() else "SMOKE_COMPLETE"
+        self.finalize_run(reason=reason)
+
     def _run_test_mode(self) -> None:
-        max_cycles = max(1, int(getattr(self.settings, "SALESOORJA_TEST_MAX_CYCLES", 1)))
-        for cycle in range(max_cycles):
-            if self._is_stop_requested():
-                break
-            self._heartbeat(f"Running autonomous test cycle {cycle + 1}")
-            self._poll_inbox()
-            processed = False
-            if self._db_factory is not None and not self._is_stop_requested():
-                try:
-                    processed = self._run_discovery_cycle(test_mode=True)
-                except Exception as exc:
-                    logger.warning("Discovery cycle in test mode fell back to synthetic: %s", exc)
-                    processed = False
-            if not processed and not self._is_stop_requested() and self._db_factory is None:
-                self._process_synthetic_account()
+        cycle = 0
+        last_inbox_poll = 0.0
+        while not self._is_stop_requested():
+            cycle += 1
+            self._heartbeat(f"Running autonomous TEST cycle {cycle}")
+            now_monotonic = time.monotonic()
+            if now_monotonic - last_inbox_poll >= int(getattr(self.settings, "SALESOORJA_INBOX_INTERVAL_SECONDS", 1800)):
+                self._poll_inbox()
+                last_inbox_poll = now_monotonic
+            try:
+                processed = self._run_discovery_cycle()
+            except Exception as exc:
+                logger.warning("TEST discovery cycle failed without synthetic fallback: %s", exc)
+                self._increment("failed")
+                self._append_record(
+                    "ERRORS",
+                    {"stage": "test_discovery", "error": type(exc).__name__, "detail": str(exc)},
+                )
+                self._update(last_error=f"{type(exc).__name__}: {exc}")
+                processed = False
             if self._db_factory and not self._is_stop_requested():
                 db = self._db_factory()
                 try:
@@ -976,20 +992,11 @@ class SalesoorjaOperator:
                     logger.warning("Test mode follow-up processing error: %s", exc)
                 finally:
                     db.close()
-
-            # Keep cycle alive for interactive UI smoke test / stop verification
-            wait_seconds = int(getattr(self.settings, "SALESOORJA_CYCLE_INTERVAL_SECONDS", 120))
-            for _ in range(wait_seconds):
-                if self._is_stop_requested():
-                    break
-                self._heartbeat()
-                time.sleep(1)
-
-            if self._is_stop_requested():
+            if not processed and not self._is_stop_requested():
+                self._update(current_company=None, last_action="No new qualifying accounts; waiting for next TEST cycle")
+            if self._interruptible_wait(int(getattr(self.settings, "SALESOORJA_CYCLE_INTERVAL_SECONDS", 300))):
                 break
-
-        reason = "MANUAL_STOP" if self._is_stop_requested() else "TEST_COMPLETE"
-        self.finalize_run(reason=reason)
+        self.finalize_run(reason="MANUAL_STOP")
 
     def _synthetic_record(self) -> dict[str, Any]:
         return {
@@ -1133,9 +1140,13 @@ class SalesoorjaOperator:
 
     def _interruptible_wait(self, seconds: int) -> bool:
         deadline = time.monotonic() + max(1, seconds)
+        next_heartbeat = time.monotonic()
         while time.monotonic() < deadline:
             if self._is_stop_requested():
                 return True
+            if time.monotonic() >= next_heartbeat:
+                self._heartbeat()
+                next_heartbeat = time.monotonic() + 10.0
             time.sleep(min(1.0, deadline - time.monotonic()))
         return self._is_stop_requested()
 
@@ -1173,7 +1184,15 @@ class SalesoorjaOperator:
             self._person_pipeline_fn = run_full_discovery_pipeline
         return self._discovery_fn, self._person_pipeline_fn
 
-    def _run_discovery_cycle(self, *, test_mode: bool = False) -> bool:
+    def _serper_live_request_count(self) -> Optional[int]:
+        try:
+            from services.serper_budget_manager import serper_budget_manager
+
+            return int(serper_budget_manager.get_telemetry().get("live_requests_today", 0))
+        except Exception:
+            return None
+
+    def _run_discovery_cycle(self, *, smoke_mode: bool = False) -> bool:
         if self._db_factory is None:
             raise RuntimeError("Synchronous database session is unavailable")
         discovery_fn, _ = self._resolve_runtime_functions()
@@ -1181,16 +1200,26 @@ class SalesoorjaOperator:
         processed = False
         try:
             self._update(last_action="Discovering fresh opportunities via Serper")
-            self._provider_call("Serper")
             self._heartbeat("Serper live discovery search initiated")
-            discovery = discovery_fn(db=db, geography="PAN INDIA", limit=10)
+            serper_before = self._serper_live_request_count()
+            try:
+                discovery = discovery_fn(
+                    db=db,
+                    geography="PAN INDIA",
+                    limit=10,
+                    use_cache=self._mode() == "PRODUCTION",
+                )
+            finally:
+                serper_after = self._serper_live_request_count()
+                if serper_before is not None and serper_after is not None and serper_after > serper_before:
+                    self._provider_call("Serper", serper_after - serper_before)
             self._heartbeat("Serper live discovery search completed")
             candidates = [
                 item
                 for item in discovery.get("candidates", [])
                 if item.get("data_provenance") == "LIVE_SEARCH_DISCOVERED"
             ]
-            if test_mode:
+            if smoke_mode:
                 discovered_count = len(candidates)
                 if candidates:
                     top_company = candidates[0].get("company_name")
@@ -1198,7 +1227,7 @@ class SalesoorjaOperator:
                     qualified_count = len(qualified)
                     self._update(
                         current_company=top_company,
-                        last_action=f"Serper TEST discovery completed ({discovered_count} leads): {top_company}",
+                        last_action=f"Serper SMOKE discovery completed ({discovered_count} leads): {top_company}",
                     )
                     self._increment("companies_researched", discovered_count)
                     if qualified_count > 0:
@@ -1207,13 +1236,13 @@ class SalesoorjaOperator:
                 else:
                     self._update(
                         current_company=None,
-                        last_action="Serper TEST discovery completed (0 leads found)",
+                        last_action="Serper SMOKE discovery completed (0 leads found)",
                     )
                     processed = False
                 return processed
 
             for account in candidates:
-                if self._stop_reason():
+                if self._is_stop_requested() or (self._mode() == "PRODUCTION" and self._stop_reason()):
                     break
                 account_key = str(account.get("company_id") or account.get("company_name") or "").strip().casefold()
                 if not account_key or account_key in self._state["processed_accounts"]:
@@ -1240,7 +1269,10 @@ class SalesoorjaOperator:
                 signal_type=account.get("signal_type"),
                 max_apollo_enrichments=3,
                 max_queries=6,
-                before_apollo=lambda: not self._after_end() and self._outbound_total() < int(getattr(self.settings, "DAILY_SEND_MAX", 250)),
+                before_apollo=lambda: self._mode() != "PRODUCTION" or (
+                    not self._after_end()
+                    and self._outbound_total() < int(getattr(self.settings, "DAILY_SEND_MAX", 250))
+                ),
             )
             summary = result.get("summary", {})
             self._increment("people_researched", int(summary.get("candidates_found") or 0))
@@ -1636,7 +1668,7 @@ class SalesoorjaOperator:
             "quality_score": personalized.get("quality_score"),
             "message_id": message_id,
             "cadence_state": cadence_state_dict,
-            "test_mode": self._mode() == "TEST",
+            "test_mode": self._mode() != "PRODUCTION",
         }
 
         if not rec:
@@ -1776,7 +1808,7 @@ class SalesoorjaOperator:
             orig_subject = meta.get("subject") or "Calibration Planning"
             subject = f"Re: {orig_subject}" if not orig_subject.lower().startswith("re:") else orig_subject
 
-            if self._mode() == "TEST":
+            if self._mode() != "PRODUCTION":
                 logger.info("TEST mode: follow-up %s for %s simulated with zero prospect dispatch", touch_key, company_name)
                 rec.current_step = next_step
                 rec.last_sent_at = now
@@ -1805,7 +1837,7 @@ class SalesoorjaOperator:
         subject = f"Salesoorja Daily Report - {self._state['business_date']} - {counters['enquiries']} Enquiries / {counters['emails_sent']} Sent"
 
         if not self._rediff.system_available():
-            if self._mode() == "TEST":
+            if self._mode() != "PRODUCTION":
                 return self._build_final_email_dry_run(report_path)
             logger.info("Rediff transport unavailable; final report email marked NOT_READY")
             return {"status": "NOT_READY", "reason": "REDIFF_SYSTEM_UNAVAILABLE"}

@@ -80,7 +80,8 @@ class Settings(BaseSettings):
     REDIFF_TRANSPORT_TIMEOUT_SECONDS: int = 120
     SINGLE_LIVE_CUSTOMER_TEST_ENABLED: bool = False
 
-    # One-click autonomous operator
+    # One-click autonomous operator: SMOKE is bounded, TEST is continuous/no-send,
+    # and PRODUCTION is continuous with explicit real-outreach guards.
     SALESOORJA_MODE: str = "TEST"
     REAL_OUTREACH_ENABLED: bool = False
     DAILY_SEND_TARGET: int = 150
@@ -90,7 +91,6 @@ class Settings(BaseSettings):
     SALESOORJA_END_TIME: str = "18:00"
     SALESOORJA_CYCLE_INTERVAL_SECONDS: int = 300
     SALESOORJA_INBOX_INTERVAL_SECONDS: int = 1800
-    SALESOORJA_TEST_MAX_CYCLES: int = 1
 
     # Inbound IMAP Settings
     IMAP_HOST: str = ""

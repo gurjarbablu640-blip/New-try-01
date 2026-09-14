@@ -38,13 +38,12 @@ def _settings(**overrides):
         "SALESOORJA_END_TIME": "18:00",
         "SALESOORJA_CYCLE_INTERVAL_SECONDS": 1,
         "SALESOORJA_INBOX_INTERVAL_SECONDS": 1,
-        "SALESOORJA_TEST_MAX_CYCLES": 1,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
 
 
-def _operator(tmp_path: Path, transport_bridge=None, **settings_overrides) -> SalesoorjaOperator:
+def _operator(tmp_path: Path, db_factory=None, transport_bridge=None, **settings_overrides) -> SalesoorjaOperator:
     rediff = RediffSenderAdapter(
         config=RediffAdapterConfig(
             enabled=False,
@@ -61,7 +60,7 @@ def _operator(tmp_path: Path, transport_bridge=None, **settings_overrides) -> Sa
         state_path=tmp_path / "runtime" / "operator_state.json",
         report_dir=tmp_path / "reports",
         now=lambda: NOW,
-        db_factory=None,
+        db_factory=db_factory,
         rediff_adapter=rediff,
         transport_bridge=transport_bridge,
     )
@@ -71,14 +70,14 @@ def test_complete_synthetic_run_generates_expected_report_without_smtp(tmp_path,
     smtp_calls = []
     monkeypatch.setattr("smtplib.SMTP", lambda *args, **kwargs: smtp_calls.append((args, kwargs)))
     monkeypatch.setattr("smtplib.SMTP_SSL", lambda *args, **kwargs: smtp_calls.append((args, kwargs)))
-    operator = _operator(tmp_path)
+    operator = _operator(tmp_path, SALESOORJA_MODE="SMOKE")
 
     result = operator.start_run(background=False)
     status = result["status"]
 
     assert result["started"] is True
     assert status["status"] == "STOPPED"
-    assert status["stop_reason"] == "TEST_COMPLETE"
+    assert status["stop_reason"] == "SMOKE_COMPLETE"
     assert status["counters"]["companies_researched"] == 1
     assert status["counters"]["qualified_opportunities"] == 1
     assert status["counters"]["people_verified"] == 1
@@ -97,20 +96,94 @@ def test_complete_synthetic_run_generates_expected_report_without_smtp(tmp_path,
     assert status["final_report_email"]["attachment"] == str(report)
 
 
-def test_restart_resumes_history_without_duplicate_handoff(tmp_path):
-    first = _operator(tmp_path)
+def test_restart_resets_run_scoped_state_and_preserves_history(tmp_path):
+    first = _operator(tmp_path, SALESOORJA_MODE="SMOKE")
     first.start_run(background=False)
     first_status = first.get_status()
 
-    resumed = _operator(tmp_path)
+    resumed = _operator(tmp_path, SALESOORJA_MODE="SMOKE")
     second_result = resumed.start_run(background=False)
     second_status = second_result["status"]
 
-    assert second_status["run_id"] == first_status["run_id"]
-    assert second_status["counters"]["companies_researched"] == 0
+    assert second_status["run_id"] != first_status["run_id"]
+    assert second_status["counters"]["companies_researched"] == 1
     assert second_status["historical_counters"]["companies_researched"] == 1
     assert second_status["processed_accounts"] == ["synthetic:operator-control"]
-    assert "duplicate safely skipped" in second_status["last_action"].lower() or second_status["last_action"].startswith("Run finalized")
+
+
+def test_start_state_resets_all_transient_run_fields(tmp_path):
+    operator = _operator(tmp_path)
+    operator._state.update(
+        current_company="Jabil",
+        last_action="Stale discovery",
+        report_path="stale.xlsx",
+        final_report_email={"status": "STALE"},
+        processed_accounts=["stale-company"],
+    )
+    operator._state["provider_usage"]["Serper"] = 9
+    operator._state["counters"]["companies_researched"] = 3
+    operator._state["records"]["HOLD"].append({"company": "Jabil"})
+
+    state = operator._new_state(preserve_history=True)
+
+    assert state["current_company"] is None
+    assert state["last_action"] == "Ready"
+    assert state["report_path"] is None
+    assert state["final_report_email"] is None
+    assert state["processed_accounts"] == []
+    assert state["provider_usage"]["Serper"] == 0
+    assert state["counters"]["companies_researched"] == 0
+    assert state["records"]["HOLD"] == []
+
+
+def test_test_mode_repeats_real_discovery_until_manual_stop(tmp_path):
+    operator = _operator(tmp_path, db_factory=lambda: SimpleNamespace(close=lambda: None))
+    cycles = []
+    operator._poll_inbox = lambda: None
+    operator._process_due_followups = lambda db: 0
+
+    def run_cycle():
+        cycles.append(len(cycles) + 1)
+        if len(cycles) == 2:
+            operator._set_stop_signal()
+        return True
+
+    operator._run_discovery_cycle = run_cycle
+    operator._state["status"] = "RUNNING"
+
+    operator._run_test_mode()
+
+    assert cycles == [1, 2]
+    assert operator.get_status()["stop_reason"] == "MANUAL_STOP"
+
+
+def test_test_discovery_bypasses_cache_and_processes_account(tmp_path):
+    database = SimpleNamespace(close=lambda: None)
+    calls = []
+    processed = []
+
+    def discover(**kwargs):
+        calls.append(kwargs)
+        return {
+            "candidates": [
+                {
+                    "company_id": 44,
+                    "company_name": "Real Precision Ltd",
+                    "data_provenance": "LIVE_SEARCH_DISCOVERED",
+                }
+            ]
+        }
+
+    operator = _operator(tmp_path, db_factory=lambda: database)
+    operator._discovery_fn = discover
+    request_counts = iter([10, 11])
+    operator._serper_live_request_count = lambda: next(request_counts)
+    operator._process_production_account = lambda db, account, account_key: processed.append((account, account_key))
+
+    assert operator._run_discovery_cycle() is True
+    assert calls[0]["use_cache"] is False
+    assert processed[0][0]["company_name"] == "Real Precision Ltd"
+    assert operator.get_status()["provider_usage"]["Serper"] == 1
 
 
 def test_manual_stop_finishes_current_safe_work_and_finalizes(tmp_path):
@@ -123,7 +196,7 @@ def test_manual_stop_finishes_current_safe_work_and_finalizes(tmp_path):
             release.wait(timeout=5)
             return super()._process_synthetic_account()
 
-    base = _operator(tmp_path)
+    base = _operator(tmp_path, SALESOORJA_MODE="SMOKE")
     operator = BlockingOperator(
         settings_obj=base.settings,
         state_path=base.state_path,
@@ -168,7 +241,7 @@ def test_invalid_mode_is_rejected_without_starting(tmp_path):
     assert result == {
         "started": False,
         "reason": "INVALID_MODE",
-        "errors": ["SALESOORJA_MODE must be TEST or PRODUCTION"],
+        "errors": ["SALESOORJA_MODE must be SMOKE, TEST, or PRODUCTION"],
     }
 
 
