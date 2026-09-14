@@ -69,6 +69,14 @@ class Settings(BaseSettings):
     OUTBOUND_TEST_MODE: bool = True
     OUTBOUND_TEST_MAILBOX: str = "test@oorja.local"
 
+    # Existing Rediff_Email_System handoff (Salesoorja never owns SMTP credentials)
+    REDIFF_SENDER_ENABLED: bool = False
+    REDIFF_TEST_MODE: bool = True
+    REDIFF_SYSTEM_PATH: str = ""
+    REDIFF_HANDOFF_DIR: str = "data/rediff_handoff"
+    REDIFF_CC_ADDRESSES: str = "Bablu@oorjatechnical.org,piyushk@oorjatechnical.com"
+    REDIFF_DUPLICATE_WINDOW_DAYS: int = 14
+
     # Inbound IMAP Settings
     IMAP_HOST: str = ""
     IMAP_PORT: int = 993

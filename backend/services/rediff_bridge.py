@@ -26,6 +26,18 @@ logger = logging.getLogger(__name__)
 STAGING_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "rediff_staging")
 
 
+def _configured_rediff_cc() -> List[str]:
+    seen = set()
+    addresses = []
+    for raw in settings.REDIFF_CC_ADDRESSES.replace(";", ",").split(","):
+        address = raw.strip()
+        normalized = address.lower()
+        if address and normalized not in seen:
+            seen.add(normalized)
+            addresses.append(address)
+    return addresses
+
+
 @dataclass
 class RediffHandoffRecord:
     """Auditable handoff record required for Rediff_Email_System consumption."""
@@ -613,7 +625,7 @@ Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)
             "test_mode": True,
             "no_send_enforced": True,
             "to": email,
-            "cc": ["Bablu@oorjatechnical.org", "piyushk@oorjatechnical.com"],
+            "cc": _configured_rediff_cc(),
             "subject": subject,
             "body_text": body_text,
             "body_html": body_html,
@@ -658,4 +670,3 @@ Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)
 
 # Global instance
 rediff_bridge = RediffBridge()
-
