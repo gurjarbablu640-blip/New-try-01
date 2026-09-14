@@ -1311,7 +1311,7 @@ def run_full_discovery_pipeline(
     stages["search_queries"] = {
         "status": "REAL",
         "query_count": 1,
-        "strategy": "BRIGHTDATA_DATASET_SEARCH_COMBINED_FILTER",
+        "strategy": "BRIGHTDATA_DATASET_SEARCH_COMPANY_FIRST",
         "role_families": PRIORITY_ROLE_FAMILIES,
     }
 
@@ -1342,7 +1342,7 @@ def run_full_discovery_pipeline(
         "search_provider": "brightdata_linkedin",
         "overall_status": discovery.get("status", "ERROR"),
         "provider_statuses": {"brightdata_linkedin": discovery.get("search_status", "ERROR")},
-        "queries_executed": [{"strategy": "combined_dataset_filter"}],
+        "queries_executed": [{"strategy": "company_first_dataset_filter"}],
         "total_results": len(raw_candidates),
         "results": public_person_evidence + list(additional_evidence or []),
     }

@@ -90,7 +90,7 @@ def test_missing_configuration_uses_no_network(tmp_path):
     assert result["telemetry"]["BRIGHTDATA_REQUESTS"] == 0
 
 
-def test_people_search_is_one_combined_request_and_normalizes(tmp_path):
+def test_people_search_is_one_company_first_request_and_normalizes(tmp_path):
     credential = f"credential-{tmp_path.name}"
     session = FakeSession([
         FakeResponse(200, {"hits": [
@@ -134,9 +134,12 @@ def test_people_search_is_one_combined_request_and_normalizes(tmp_path):
     assert len(session.calls) == 1
     assert session.calls[0]["url"].endswith("/datasets/search/people_dataset")
     request_filter = session.calls[0]["json"]["filter"]
-    assert request_filter["operator"] == "and"
-    assert request_filter["filters"][0]["name"] == "current_company.name"
-    assert request_filter["filters"][1]["name"] == "position"
+    assert request_filter == {
+        "name": "current_company_name",
+        "operator": "includes",
+        "value": "Ramkrishna Forgings Limited",
+    }
+    assert session.calls[0]["json"]["size"] == 10
     assert result["records"][0]["name"] == "Amit Kulkarni"
     assert result["records"][0]["linkedin_url"] == "https://www.linkedin.com/in/amit-kulkarni"
     assert result["records"][0]["source"] == "BRIGHTDATA_LINKEDIN"
@@ -182,8 +185,42 @@ def test_http_error_is_sanitized_and_token_never_leaks(tmp_path, caplog):
     result = provider.search_people(company="Ramkrishna Forgings Limited")
     serialized = json.dumps(result) + repr(provider) + caplog.text
 
-    assert result["status"] == "AUTHENTICATION_ERROR"
+    assert result["status"] == "AUTH_ERROR"
     assert credential not in serialized
+
+
+def test_people_search_reports_no_match_for_422(tmp_path):
+    provider = BrightDataLinkedInProvider(
+        settings_obj=provider_settings(f"credential-{tmp_path.name}"),
+        session=FakeSession([FakeResponse(422, {"error": "no matches"})]),
+        cache_path=tmp_path / "cache.json",
+    )
+
+    result = provider.search_people(company="Ramkrishna Forgings Limited")
+
+    assert result["status"] == "NO_MATCH"
+    assert result["error"] == {
+        "code": "NO_MATCH",
+        "stage": "people_search",
+        "http_status": 422,
+    }
+
+
+def test_people_search_reports_brightdata_server_error_for_5xx(tmp_path):
+    provider = BrightDataLinkedInProvider(
+        settings_obj=provider_settings(f"credential-{tmp_path.name}"),
+        session=FakeSession([FakeResponse(500, {"error": "internal"})]),
+        cache_path=tmp_path / "cache.json",
+    )
+
+    result = provider.search_people(company="Ramkrishna Forgings Limited")
+
+    assert result["status"] == "BRIGHTDATA_SERVER_ERROR"
+    assert result["error"] == {
+        "code": "BRIGHTDATA_SERVER_ERROR",
+        "stage": "people_search",
+        "http_status": 500,
+    }
 
 
 def test_profile_lookup_supports_async_snapshot(tmp_path):

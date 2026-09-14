@@ -172,6 +172,7 @@ def normalize_linkedin_record(
     )
     current_company = _company_name(
         record.get("current_company")
+        or record.get("current_company_name")
         or record.get("company")
         or record.get("company_name")
     )
@@ -206,7 +207,7 @@ def normalize_linkedin_record(
             "linkedin_id": "id",
             "headline": "subtitle|headline|position",
             "location": "location|city",
-            "current_company": "current_company|company",
+            "current_company": "current_company|current_company_name|company",
             "current_title": "position|current_title|experience.title",
             "experience": "experience",
         }.items()
@@ -395,19 +396,9 @@ class BrightDataLinkedInProvider:
                 "telemetry": self.telemetry(),
             }
         filter_object = {
-            "operator": "and",
-            "filters": [
-                {
-                    "name": "current_company.name",
-                    "operator": "includes",
-                    "value": company,
-                },
-                {
-                    "name": "position",
-                    "operator": "includes",
-                    "value": roles,
-                },
-            ],
+            "name": "current_company_name",
+            "operator": "includes",
+            "value": company,
         }
         try:
             payload = self._request_json(
@@ -551,7 +542,7 @@ class BrightDataLinkedInProvider:
                 raise BrightDataProviderError("RESPONSE_PARSE_ERROR", stage, 202)
             return self._wait_for_snapshot(snapshot_id)
         if response.status_code == 422:
-            return []
+            raise BrightDataProviderError("NO_MATCH", stage, 422)
         if response.status_code < 200 or response.status_code >= 300:
             raise BrightDataProviderError(
                 self._error_code(response.status_code),
@@ -607,10 +598,12 @@ class BrightDataLinkedInProvider:
 
     @staticmethod
     def _error_code(status_code: int) -> str:
+        if 500 <= status_code <= 599:
+            return "BRIGHTDATA_SERVER_ERROR"
         return {
-            400: "INVALID_REQUEST",
-            401: "AUTHENTICATION_ERROR",
-            402: "BILLING_REQUIRED",
+            400: "FILTER_ERROR",
+            401: "AUTH_ERROR",
+            402: "INSUFFICIENT_FUNDS",
             403: "ACCESS_DENIED",
             404: "DATASET_NOT_FOUND",
             409: "SNAPSHOT_NOT_READY",
