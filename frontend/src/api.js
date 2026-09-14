@@ -188,3 +188,10 @@ export const startContactResearchRun = (data) => api.post("/contact-research/run
 export const getOperatorStatus = () => api.get("/operator/status");
 export const startOperator = () => api.post("/operator/start");
 export const stopOperator = () => api.post("/operator/stop");
+export const getSingleLiveSendCandidates = () => api.get("/operator/single-live-send/candidates");
+export const previewSingleLiveSend = (candidateId) => api.post("/operator/single-live-send/preview", { candidate_id: candidateId });
+export const sendSingleLiveTest = (candidateId, previewToken) => api.post("/operator/single-live-send/send", {
+  candidate_id: candidateId,
+  confirmation: "SEND LIVE TEST",
+  preview_token: previewToken,
+});

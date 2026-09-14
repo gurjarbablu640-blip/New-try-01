@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     REDIFF_DUPLICATE_WINDOW_DAYS: int = 14
     REDIFF_TEST_TRANSPORT_ENABLED: bool = False
     REDIFF_TRANSPORT_TIMEOUT_SECONDS: int = 120
+    SINGLE_LIVE_CUSTOMER_TEST_ENABLED: bool = False
 
     # One-click autonomous operator
     SALESOORJA_MODE: str = "TEST"

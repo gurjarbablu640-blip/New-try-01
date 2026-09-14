@@ -268,6 +268,13 @@ class RediffSenderAdapter:
             return SUPPRESSED_DUPLICATE, f"Recipient is inside the {self.config.duplicate_window_days}-day duplicate-contact window"
         return None
 
+    def evaluate_suppression(self, record: Mapping[str, Any], outreach_state: Mapping[str, Any]) -> dict[str, Any]:
+        suppression = self._suppression_status(record, outreach_state)
+        if suppression:
+            status, reason = suppression
+            return {"allowed": False, "status": status, "reason": reason}
+        return {"allowed": True, "status": "CLEAR", "reason": "All duplicate, reply, opt-out, and bounce checks passed"}
+
     def _email_status(self, record: Mapping[str, Any]) -> Optional[tuple[str, str]]:
         email = str(_value(record, "EMAIL", "EMAIL_ID", "email")).strip()
         if not EMAIL_REGEX.fullmatch(email):

@@ -285,6 +285,38 @@ class SalesoorjaOperator:
         state["production_guard_errors"] = self._production_errors()
         return state
 
+    def get_transport_receipts(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return deepcopy(self._state.get("transport_receipts") or [])
+
+    def record_single_live_transport(self, receipt: Mapping[str, Any], *, quality_score: float) -> None:
+        if receipt.get("test_type") != "SINGLE_LIVE_CUSTOMER_TEST":
+            raise ValueError("INVALID_SINGLE_LIVE_RECEIPT")
+        with self._lock:
+            receipt_id = receipt.get("receipt_id")
+            if receipt_id and any(item.get("receipt_id") == receipt_id for item in self._state["transport_receipts"]):
+                return
+            self._state["transport_receipts"].append(dict(receipt))
+            if receipt.get("transport_status") == "SENT" and receipt.get("smtp_sent") is True:
+                self._state["counters"]["emails_sent"] += 1
+                self._state["counters"]["production_emails_sent"] += 1
+                self._state["counters"]["real_prospect_emails_sent"] += 1
+                self._state["records"]["SENT"].append({
+                    "company": receipt.get("company_reference"),
+                    "person": receipt.get("person_reference"),
+                    "recipient": receipt.get("recipient"),
+                    "cc": receipt.get("cc"),
+                    "quality_score": quality_score,
+                    "transport_status": "SENT",
+                    "test_type": "SINGLE_LIVE_CUSTOMER_TEST",
+                    "touch": "INITIAL",
+                })
+            elif receipt.get("transport_status") == "FAILED":
+                self._state["counters"]["failed"] += 1
+            self._state["last_checkpoint"] = _iso(self._now())
+            self._state["last_action"] = f"Single live customer test: {receipt.get('transport_status')}"
+            self._save_state()
+
     def execute_controlled_transport_test(self, *, authorization: str, dispatch: bool = True) -> dict[str, Any]:
         if self._mode() != "TEST":
             raise PermissionError("CONTROLLED_TRANSPORT_REQUIRES_TEST_MODE")
