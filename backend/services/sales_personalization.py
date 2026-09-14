@@ -44,6 +44,67 @@ OORJA_DIVISION = "Engineering & Metrology Services"
 OORJA_CERT_NO = OORJA_OFFICIAL_CERTIFICATE_NO  # CC-3963
 OORJA_STANDARD = OORJA_ACCREDITATION_STANDARD  # ISO/IEC 17025:2017
 
+# Standardized Sales Identity & Signature (Single Source of Truth)
+STANDARD_SENDER_NAME = "Bablu Gurjar"
+STANDARD_SENDER_PHONE = "9201949296"
+STANDARD_SENDER_EMAIL = "Bablu@oorjatechnical.org"
+STANDARD_SENDER_COMPANY = "Oorja Technical Services Pvt. Ltd."
+STANDARD_SENDER_TITLE = "Sales - Oorja Technical Services Pvt. Ltd."
+
+STANDARD_SIGNATURE_TEXT = (
+    "Best regards,\n\n"
+    "Bablu Gurjar\n"
+    "Contact No.: 9201949296\n"
+    "Email: Bablu@oorjatechnical.org\n"
+    "Sales - Oorja Technical Services Pvt. Ltd."
+)
+
+STANDARD_SIGNATURE_HTML = (
+    "<p>Best regards,<br><br>\n"
+    "Bablu Gurjar<br>\n"
+    "Contact No.: 9201949296<br>\n"
+    "Email: Bablu@oorjatechnical.org<br>\n"
+    "Sales - Oorja Technical Services Pvt. Ltd.</p>"
+)
+
+
+def ensure_single_signature(text: str) -> str:
+    """Guarantee that customer-facing outreach contains exactly one standardized Bablu Gurjar signature.
+
+    Strips old generic signatures and duplicate signature blocks to enforce single-source-of-truth identity.
+    """
+    if not text:
+        return STANDARD_SIGNATURE_TEXT
+
+    content = text.strip()
+
+    # Strip old generic signatures
+    old_signature_patterns = [
+        r"(?i)\n*Best regards,?\s*\n+Oorja Technical Services\s*\n+Engineering & Metrology Services\s*\n+Accreditation: ISO/IEC 17025:2017 \(NABL CC-3963\)",
+        r"(?i)\n*Best regards,?\s*\n+Oorja Technical Services\s*\n+Engineering & Metrology Services",
+        r"(?i)\n*Best regards,?\s*\n+Oorja Technical Services\s*\n+Accreditation: ISO/IEC 17025:2017 \(NABL CC-3963\)",
+        r"(?i)\n*Best regards,?\s*\n+Oorja Sales Team",
+    ]
+    for pat in old_signature_patterns:
+        content = re.sub(pat, "", content).strip()
+
+    # Check for existing standardized Bablu Gurjar signature blocks
+    bablu_pattern = (
+        r"(?i)\n*Best regards,?\s*\n+Bablu Gurjar\s*\n+Contact No\.:?\s*9201949296\s*\n+Email:\s*Bablu@oorjatechnical\.org\s*\n+Sales - Oorja Technical Services Pvt\. Ltd\."
+    )
+    matches = list(re.finditer(bablu_pattern, content))
+    if len(matches) == 1 and content.endswith(matches[0].group(0).strip()):
+        content_without = content[: matches[0].start()].strip()
+        return f"{content_without}\n\n{STANDARD_SIGNATURE_TEXT}"
+    elif len(matches) >= 1:
+        content = re.sub(bablu_pattern, "", content).strip()
+
+    # Strip loose trailing "Best regards," without name
+    content = re.sub(r"(?i)\n*Best regards,?\s*$", "", content).strip()
+
+    return f"{content}\n\n{STANDARD_SIGNATURE_TEXT}"
+
+
 # Prohibited Framework Labels that MUST NOT leak into recipient-facing email text
 PROHIBITED_FRAMEWORK_TERMS = [
     r"\bsituation\s*:",
@@ -319,8 +380,64 @@ class EmailQualityValidator:
                 violations.append(f"REPETITIVE_FOLLOWUP: Stage '{stage}' duplicates initial email copy")
                 score -= 15
 
+        # 9. Standardized Salesperson Signature Verification (Single Source of Truth)
+        required_identity_tokens = [
+            ("Bablu Gurjar", "SENDER_NAME"),
+            ("9201949296", "SENDER_PHONE"),
+            ("Bablu@oorjatechnical.org", "SENDER_EMAIL"),
+            ("Sales - Oorja Technical Services Pvt. Ltd.", "SENDER_AFFILIATION"),
+        ]
+
+        # Check Initial Email Signature
+        for token, token_label in required_identity_tokens:
+            if token not in body:
+                violations.append(f"MISSING_SIGNATURE_ELEMENT: Initial email missing {token_label} ('{token}')")
+                score -= 15
+
+        # Exactly one signature check (Initial Body)
+        if body.count("Bablu Gurjar") > 1 or body.count("9201949296") > 1 or body.count("Best regards") > 1:
+            violations.append("DUPLICATE_SIGNATURE: Initial email contains duplicate signature blocks")
+            score -= 25
+
+        # Check that generic signature alone is not present
+        if "Engineering & Metrology Services" in body and "Bablu Gurjar" not in body:
+            violations.append("GENERIC_SIGNATURE: Outdated generic signature found without salesperson identity")
+            score -= 20
+
+        # Check that accreditation is NOT inside signature block (Rule 4)
+        if "Best regards" in body:
+            sig_part = body.split("Best regards", 1)[1]
+            if any(term in sig_part for term in ["ISO/IEC 17025", "NABL CC-3963", "Accreditation:"]):
+                violations.append("ACCREDITATION_IN_SIGNATURE: Accreditation/certificate information must reside in body copy, not in signature")
+                score -= 15
+
+        # 10. Follow-up Signature Verification (Rule 2)
+        for stage in required_stages:
+            fu_text = followups.get(stage, "").strip()
+            if fu_text:
+                for token, token_label in required_identity_tokens:
+                    if token not in fu_text:
+                        violations.append(f"MISSING_FOLLOWUP_SIGNATURE: Stage '{stage}' missing {token_label} ('{token}')")
+                        score -= 10
+                if fu_text.count("Bablu Gurjar") > 1 or fu_text.count("Best regards") > 1:
+                    violations.append(f"DUPLICATE_FOLLOWUP_SIGNATURE: Stage '{stage}' contains duplicate signatures")
+                    score -= 15
+                if "Best regards" in fu_text:
+                    sig_part_fu = fu_text.split("Best regards", 1)[1]
+                    if any(term in sig_part_fu for term in ["ISO/IEC 17025", "NABL CC-3963", "Accreditation:"]):
+                        violations.append(f"ACCREDITATION_IN_FOLLOWUP_SIGNATURE: Stage '{stage}' contains accreditation in signature")
+                        score -= 10
+
         score = max(0, score)
-        valid = score >= 75 and not any("CLAIM_VIOLATION" in v or "FRAMEWORK_LEAKAGE" in v or "UNSUPPORTED_NUMERIC_ROI" in v for v in violations)
+        valid = score >= 75 and not any(
+            "CLAIM_VIOLATION" in v
+            or "FRAMEWORK_LEAKAGE" in v
+            or "UNSUPPORTED_NUMERIC_ROI" in v
+            or "DUPLICATE_SIGNATURE" in v
+            or "MISSING_SIGNATURE" in v
+            or "ACCREDITATION_IN_SIGNATURE" in v
+            for v in violations
+        )
 
         return QualityValidationReport(
             valid=valid,
@@ -414,10 +531,7 @@ class DeterministicPersonalizationGenerator:
             f"reducing equipment movement and administrative overhead.\n\n"
             f"Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?\n\n"
             f"If another colleague directly leads metrology or quality planning for {facility}, could you kindly point me to the right person?\n\n"
-            f"Best regards,\n\n"
-            f"Oorja Technical Services\n"
-            f"Engineering & Metrology Services\n"
-            f"Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)"
+            f"{STANDARD_SIGNATURE_TEXT}"
         )
 
         followups = {
@@ -425,23 +539,27 @@ class DeterministicPersonalizationGenerator:
                 f"Dear {first_name},\n\n"
                 f"Following up on my earlier note regarding {facility}. As new lines and equipment transition into regular production, "
                 f"teams often face an unexpected spike in calibration documentation and gage verification workloads.\n\n"
-                f"Are you the right person to discuss calibration planning for this site, or should I connect with someone else on your team?"
+                f"Are you the right person to discuss calibration planning for this site, or should I connect with someone else on your team?\n\n"
+                f"{STANDARD_SIGNATURE_TEXT}"
             ),
             "day_5": (
                 f"Dear {first_name},\n\n"
                 f"One challenge we frequently see in expanding facilities is the administrative friction of coordinating multiple specialized calibration vendors. "
                 f"Where technically feasible, consolidating dimensional, thermal, and pressure calibration into a single planned on-site slot significantly reduces logistics overhead and equipment transit risk.\n\n"
-                f"If you have an upcoming equipment list, I would be glad to review it and identify on-site feasibility."
+                f"If you have an upcoming equipment list, I would be glad to review it and identify on-site feasibility.\n\n"
+                f"{STANDARD_SIGNATURE_TEXT}"
             ),
             "day_11": (
                 f"Dear {first_name},\n\n"
                 f"If your calibration coverage for {facility} is already fully arranged, please feel free to disregard this note. "
-                f"If you still have open requirements for the upcoming cycle, I can quickly review your list and separate on-site feasible items from those better suited for in-lab testing."
+                f"If you still have open requirements for the upcoming cycle, I can quickly review your list and separate on-site feasible items from those better suited for in-lab testing.\n\n"
+                f"{STANDARD_SIGNATURE_TEXT}"
             ),
             "day_21": (
                 f"Dear {first_name},\n\n"
                 f"I will close the loop with this note so as not to crowd your inbox. If calibration or audit traceability support becomes an active priority for {company}'s {facility} in the future, we would be glad to assist.\n\n"
-                f"If a colleague in Quality or Operations owns this responsibility, a brief referral would be greatly appreciated."
+                f"If a colleague in Quality or Operations owns this responsibility, a brief referral would be greatly appreciated.\n\n"
+                f"{STANDARD_SIGNATURE_TEXT}"
             ),
         }
 
@@ -541,6 +659,17 @@ CRITICAL INSTRUCTIONS & PRINCIPLES:
    - Day 11 (40-70 words): Practical offer to review upcoming equipment list to classify on-site vs lab items.
    - Day 21 (30-60 words): Courteous final note, close loop, polite referral request.
 
+6. STANDARDIZED SENDER SIGNATURE (MANDATORY):
+   Every generated customer-facing email (initial body and all follow-ups) MUST end with this exact signature:
+   Best regards,
+
+   Bablu Gurjar
+   Contact No.: 9201949296
+   Email: Bablu@oorjatechnical.org
+   Sales - Oorja Technical Services Pvt. Ltd.
+
+   Do NOT include accreditation, standard names, or certificate numbers in the signature block (accreditation CC-3963 belongs naturally in the body copy only). Never use generic signatures.
+
 OUTPUT FORMAT:
 You MUST reply with ONLY a valid JSON object matching this schema:
 {
@@ -597,7 +726,7 @@ Industry: {context.industry}
 Calibration Opportunity: {context.calibration_opportunity}
 Contextual Notes: {context.reasoning}
 
-Generate the structured JSON outreach now adhering strictly to word count (80-150 words for initial body), zero invented claims, and no framework labels in email text."""
+Generate the structured JSON outreach now adhering strictly to word count (80-150 words for initial body), zero invented claims, standardized Bablu Gurjar signature, and no framework labels in email text."""
 
 
 # ============================================================
@@ -692,8 +821,17 @@ class SalesPersonalizationPipeline:
                 return None
 
             subject = data.get("subject", "")
-            body = data.get("body", "")
-            followups = data.get("followups", {})
+            raw_body = data.get("body", "")
+            raw_followups = data.get("followups", {})
+
+            # Guarantee single standardized signature before validation
+            body = ensure_single_signature(raw_body)
+            followups = {
+                k: ensure_single_signature(v) if isinstance(v, str) else v
+                for k, v in raw_followups.items()
+            }
+            data["body"] = body
+            data["followups"] = followups
 
             # Deterministic Content & Claim Validation
             val_report = self.validator.validate(
@@ -737,7 +875,7 @@ class SalesPersonalizationPipeline:
             {"role": "assistant", "content": failed_output},
             {
                 "role": "user",
-                "content": f"Your previous response had validation issues: {feedback}. Please fix these strictly, keep the initial email between 80 and 150 words, remove any framework terms, and output only valid JSON.",
+                "content": f"Your previous response had validation issues: {feedback}. Please fix these strictly, keep the initial email between 80 and 150 words, remove any framework terms, end all emails with Bablu Gurjar signature, and output only valid JSON.",
             },
         ]
         try:
@@ -752,10 +890,20 @@ class SalesPersonalizationPipeline:
             if not data or not isinstance(data, dict):
                 return None
 
+            raw_body = data.get("body", "")
+            raw_followups = data.get("followups", {})
+            body = ensure_single_signature(raw_body)
+            followups = {
+                k: ensure_single_signature(v) if isinstance(v, str) else v
+                for k, v in raw_followups.items()
+            }
+            data["body"] = body
+            data["followups"] = followups
+
             val_report = self.validator.validate(
                 subject=data.get("subject", ""),
-                body=data.get("body", ""),
-                followups=data.get("followups", {}),
+                body=body,
+                followups=followups,
                 context=context,
             )
             if val_report.valid:
@@ -798,6 +946,7 @@ class SalesPersonalizationPipeline:
         body = outreach_result.get("body", "")
         followups = outreach_result.get("followups", {})
 
+        enriched["body_text"] = body
         enriched["WHY_CALIBRATION_NOW"] = body
         enriched["REASON_FOR_OUTREACH"] = body
         enriched["NOTES"] = json.dumps(

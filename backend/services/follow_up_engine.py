@@ -550,9 +550,10 @@ Would our accreditation scope schedule for {facility} be helpful for your qualit
 
 Best regards,
 
-Oorja Technical Services
-Engineering & Metrology Services
-Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)
+Bablu Gurjar
+Contact No.: 9201949296
+Email: Bablu@oorjatechnical.org
+Sales - Oorja Technical Services Pvt. Ltd.
 """
             value_focus = "Brief reminder + facility calibration relevance"
 
@@ -576,9 +577,10 @@ If you have an upcoming recalibration window at {facility}, our technical team c
 
 Best regards,
 
-Oorja Technical Services
-Engineering & Metrology Services
-Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)
+Bablu Gurjar
+Contact No.: 9201949296
+Email: Bablu@oorjatechnical.org
+Sales - Oorja Technical Services Pvt. Ltd.
 """
             value_focus = "Approved CC-3963 scope parameters (CMM, micrometers, torque)"
 
@@ -595,9 +597,10 @@ Alternatively, if calibration and metrology governance at {facility} is handled 
 
 Best regards,
 
-Oorja Technical Services
-Engineering & Metrology Services
-Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)
+Bablu Gurjar
+Contact No.: 9201949296
+Email: Bablu@oorjatechnical.org
+Sales - Oorja Technical Services Pvt. Ltd.
 """
             value_focus = "Active requirement verification + referral query"
 
@@ -614,9 +617,10 @@ If another colleague at {company} oversees outside calibration contracts, a brie
 
 Best regards,
 
-Oorja Technical Services
-Engineering & Metrology Services
-Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)
+Bablu Gurjar
+Contact No.: 9201949296
+Email: Bablu@oorjatechnical.org
+Sales - Oorja Technical Services Pvt. Ltd.
 """
             value_focus = "Courteous closure loop + referral opportunity"
 

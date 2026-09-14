@@ -8,6 +8,7 @@ for controlled ingestion by the Rediff production sender.
 from __future__ import annotations
 
 import csv
+import html
 import io
 import json
 import logging
@@ -541,7 +542,56 @@ class RediffBridge:
 
         subject = f"NABL Calibration Traceability & Audit Readiness — {company} ({city})"
 
-        body_text = f"""Dear {first_name},
+        # Check if Salesoorja personalization already generated finished copy (Single Source of Truth)
+        existing_body = data.get("body_text") or data.get("body")
+        if not existing_body and isinstance(data.get("WHY_CALIBRATION_NOW"), str) and "Bablu Gurjar" in data.get("WHY_CALIBRATION_NOW"):
+            existing_body = data.get("WHY_CALIBRATION_NOW")
+
+        if existing_body:
+            body_text = str(existing_body).strip()
+            if data.get("subject"):
+                subject = str(data.get("subject"))
+            elif data.get("NOTES"):
+                try:
+                    notes_dict = json.loads(data["NOTES"]) if isinstance(data["NOTES"], str) else data["NOTES"]
+                    if isinstance(notes_dict, dict) and notes_dict.get("subject"):
+                        subject = str(notes_dict["subject"])
+                except Exception:
+                    pass
+
+            paras = [p.strip() for p in body_text.split("\n\n") if p.strip()]
+            html_parts = []
+            for p in paras:
+                if "Best regards" in p or "Bablu Gurjar" in p:
+                    sig_lines = [html.escape(line.strip()) for line in p.splitlines() if line.strip()]
+                    sig_html = "<br>".join(sig_lines)
+                    html_parts.append(f"<p>{sig_html}</p>")
+                else:
+                    escaped_p = html.escape(p).replace("\n", "<br>")
+                    html_parts.append(f"<p>{escaped_p}</p>")
+            formatted_paragraphs = "\n    ".join(html_parts)
+
+            body_html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #1e293b; }}
+    .container {{ max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 8px; }}
+    .footer {{ font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 14px; margin-top: 24px; }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    {formatted_paragraphs}
+    <div class="footer">
+      This outreach preview is generated under OUTBOUND_TEST_MODE. No live transmission has occurred.
+    </div>
+  </div>
+</body>
+</html>"""
+        else:
+            body_text = f"""Dear {first_name},
 
 {role_opening}
 
@@ -560,12 +610,13 @@ If you are not the direct functional owner for instrument calibration at {facili
 
 Best regards,
 
-Oorja Technical Services
-Engineering & Metrology Services
-Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)
+Bablu Gurjar
+Contact No.: 9201949296
+Email: Bablu@oorjatechnical.org
+Sales - Oorja Technical Services Pvt. Ltd.
 """
 
-        body_html = f"""<!DOCTYPE html>
+            body_html = f"""<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -601,13 +652,13 @@ Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)
     <div class="referral">
       <em>Note: If you are not the direct functional owner for instrument calibration at {facility}, could you kindly connect me with the appropriate lead in your Quality or Metrology team?</em>
     </div>
-    <p>Best regards,<br>
-    <strong>Oorja Technical Services</strong><br>
-    Engineering & Metrology Services<br>
-    Accreditation: ISO/IEC 17025:2017 (NABL CC-3963)</p>
+    <p>Best regards,<br><br>
+    Bablu Gurjar<br>
+    Contact No.: 9201949296<br>
+    Email: Bablu@oorjatechnical.org<br>
+    Sales - Oorja Technical Services Pvt. Ltd.</p>
     <div class="footer">
-      This outreach preview is generated under OUTBOUND_TEST_MODE. No live transmission has occurred.<br>
-      CC: Bablu@oorjatechnical.org, piyushk@oorjatechnical.com
+      This outreach preview is generated under OUTBOUND_TEST_MODE. No live transmission has occurred.
     </div>
   </div>
 </body>

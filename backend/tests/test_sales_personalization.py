@@ -24,8 +24,14 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from services.llm_provider import LLMResponse
+from services.rediff_bridge import rediff_bridge
 from services.rediff_sender_adapter import DRY_RUN_READY, RediffSenderAdapter
 from services.sales_personalization import (
+    STANDARD_SENDER_EMAIL,
+    STANDARD_SENDER_NAME,
+    STANDARD_SENDER_PHONE,
+    STANDARD_SENDER_TITLE,
+    STANDARD_SIGNATURE_TEXT,
     DeterministicPersonalizationGenerator,
     EmailQualityValidator,
     PersonalizationContext,
@@ -338,13 +344,13 @@ class TestSalesPersonalizationPipeline(unittest.TestCase):
                 "reducing equipment movement and administrative overhead.\n\n"
                 "Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?\n\n"
                 "If another colleague directly leads metrology or quality planning for Plant V, could you kindly point me to the right lead?\n\n"
-                "Best regards,\nOorja Technical Services\nAccreditation: ISO/IEC 17025:2017 (NABL CC-3963)"
+                f"{STANDARD_SIGNATURE_TEXT}"
             ),
             "followups": {
-                "day_3": "Dear Krishna, following up regarding Plant V calibration. Are you the right lead to connect with?",
-                "day_5": "Dear Krishna, one common challenge is vendor sprawl across multiple labs. Grouping on-site helps.",
-                "day_11": "Dear Krishna, if upcoming calibration is sorted, all good. Otherwise I can review the list.",
-                "day_21": "Dear Krishna, closing the loop on this thread. A referral to the right lead would be appreciated.",
+                "day_3": f"Dear Krishna, following up regarding Plant V calibration. Are you the right lead to connect with?\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_5": f"Dear Krishna, one common challenge is vendor sprawl across multiple labs. Grouping on-site helps.\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_11": f"Dear Krishna, if upcoming calibration is sorted, all good. Otherwise I can review the list.\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_21": f"Dear Krishna, closing the loop on this thread. A referral to the right lead would be appreciated.\n\n{STANDARD_SIGNATURE_TEXT}",
             },
             "sales_reasoning": {
                 "why_this_company": "Industrial forging leader",
@@ -400,13 +406,13 @@ class TestSalesPersonalizationPipeline(unittest.TestCase):
                 "reducing equipment movement and administrative overhead.\n\n"
                 "Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?\n\n"
                 "If another colleague directly leads metrology or quality planning for Plant V, could you kindly point me to the right lead?\n\n"
-                "Best regards,\nOorja Technical Services\nAccreditation: ISO/IEC 17025:2017 (NABL CC-3963)"
+                f"{STANDARD_SIGNATURE_TEXT}"
             ),
             "followups": {
-                "day_3": "Dear Krishna, following up on Plant V calibration planning. Are you the right lead?",
-                "day_5": "Dear Krishna, grouping multiple parameter calibrations into an on-site slot reduces transit overhead.",
-                "day_11": "Dear Krishna, happy to review open items on your equipment list if scheduling is underway.",
-                "day_21": "Dear Krishna, closing the loop. Please let me know if another colleague leads this activity.",
+                "day_3": f"Dear Krishna, following up on Plant V calibration planning. Are you the right lead?\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_5": f"Dear Krishna, grouping multiple parameter calibrations into an on-site slot reduces transit overhead.\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_11": f"Dear Krishna, happy to review open items on your equipment list if scheduling is underway.\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_21": f"Dear Krishna, closing the loop. Please let me know if another colleague leads this activity.\n\n{STANDARD_SIGNATURE_TEXT}",
             },
             "sales_reasoning": {
                 "why_this_company": "Forging plant",
@@ -469,6 +475,137 @@ class TestSalesPersonalizationPipeline(unittest.TestCase):
             mapped = handoff_result["mapped_record"]
             self.assertEqual(mapped["WHY_CALIBRATION_NOW"], result["body"])
             self.assertEqual(mapped["READY_FOR_EMAIL"], "YES")
+
+    def test_initial_email_standard_signature(self):
+        """Initial outreach email must end with full standardized Bablu Gurjar signature."""
+        result = self.pipeline.personalize_record(_base_record(), force_provider="DETERMINISTIC")
+        body = result["body"]
+
+        # Required fields present
+        self.assertIn("Bablu Gurjar", body)
+        self.assertIn("9201949296", body)
+        self.assertIn("Bablu@oorjatechnical.org", body)
+        self.assertIn("Sales - Oorja Technical Services Pvt. Ltd.", body)
+        self.assertIn("Best regards,", body)
+
+        # Exactly one signature
+        self.assertEqual(body.count("Bablu Gurjar"), 1)
+        self.assertEqual(body.count("9201949296"), 1)
+        self.assertEqual(body.count("Bablu@oorjatechnical.org"), 1)
+        self.assertEqual(body.count("Sales - Oorja Technical Services Pvt. Ltd."), 1)
+        self.assertEqual(body.count("Best regards"), 1)
+
+        # Accreditation not in signature block
+        sig_part = body.split("Best regards", 1)[1]
+        self.assertNotIn("ISO/IEC 17025", sig_part)
+        self.assertNotIn("CC-3963", sig_part)
+        self.assertNotIn("Accreditation:", sig_part)
+
+        # Body text itself still has accredited lab details naturally
+        self.assertIn("CC-3963", body)
+
+    def test_all_followups_contain_standard_signature(self):
+        """All four follow-up stages (Day 3, Day 5, Day 11, Day 21) must contain full signature."""
+        result = self.pipeline.personalize_record(_base_record(), force_provider="DETERMINISTIC")
+        followups = result["followups"]
+
+        for stage in ["day_3", "day_5", "day_11", "day_21"]:
+            fu = followups[stage]
+            self.assertIn("Bablu Gurjar", fu, f"Stage {stage} missing sender name")
+            self.assertIn("9201949296", fu, f"Stage {stage} missing contact number")
+            self.assertIn("Bablu@oorjatechnical.org", fu, f"Stage {stage} missing email")
+            self.assertIn("Sales - Oorja Technical Services Pvt. Ltd.", fu, f"Stage {stage} missing title")
+            self.assertEqual(fu.count("Bablu Gurjar"), 1, f"Stage {stage} has duplicate signature")
+            self.assertEqual(fu.count("Best regards"), 1, f"Stage {stage} has duplicate sign-off")
+
+            sig_part = fu.split("Best regards", 1)[1]
+            self.assertNotIn("ISO/IEC 17025", sig_part)
+            self.assertNotIn("CC-3963", sig_part)
+            self.assertNotIn("Accreditation:", sig_part)
+
+    def test_validator_rejects_missing_signature_elements(self):
+        """Quality validator fails copy missing any required signature identity element."""
+        context = build_personalization_context(_base_record())
+        valid_result = DeterministicPersonalizationGenerator.generate(context)
+
+        # Missing phone
+        bad_body = valid_result["body"].replace("9201949296", "")
+        report = self.validator.validate(
+            subject=valid_result["subject"],
+            body=bad_body,
+            followups=valid_result["followups"],
+            context=context,
+        )
+        self.assertFalse(report.valid)
+        self.assertTrue(any("MISSING_SIGNATURE_ELEMENT" in v for v in report.violations))
+
+        # Missing sender email
+        bad_body_email = valid_result["body"].replace("Bablu@oorjatechnical.org", "")
+        report_email = self.validator.validate(
+            subject=valid_result["subject"],
+            body=bad_body_email,
+            followups=valid_result["followups"],
+            context=context,
+        )
+        self.assertFalse(report_email.valid)
+        self.assertTrue(any("MISSING_SIGNATURE_ELEMENT" in v for v in report_email.violations))
+
+    def test_validator_rejects_duplicate_signatures(self):
+        """Quality validator strictly rejects duplicated signatures."""
+        context = build_personalization_context(_base_record())
+        valid_result = DeterministicPersonalizationGenerator.generate(context)
+
+        double_signed_body = valid_result["body"] + f"\n\n{STANDARD_SIGNATURE_TEXT}"
+        report = self.validator.validate(
+            subject=valid_result["subject"],
+            body=double_signed_body,
+            followups=valid_result["followups"],
+            context=context,
+        )
+        self.assertFalse(report.valid)
+        self.assertTrue(any("DUPLICATE_SIGNATURE" in v for v in report.violations))
+
+    def test_validator_rejects_accreditation_in_signature(self):
+        """Accreditation in the signature block is prohibited (must remain in body only)."""
+        context = build_personalization_context(_base_record())
+        valid_result = DeterministicPersonalizationGenerator.generate(context)
+
+        bad_sig_body = valid_result["body"] + "\nAccreditation: ISO/IEC 17025:2017 (NABL CC-3963)"
+        report = self.validator.validate(
+            subject=valid_result["subject"],
+            body=bad_sig_body,
+            followups=valid_result["followups"],
+            context=context,
+        )
+        self.assertFalse(report.valid)
+        self.assertTrue(any("ACCREDITATION_IN_SIGNATURE" in v for v in report.violations))
+
+    def test_rediff_mapping_preserves_single_signature_and_zero_smtp(self):
+        """Rediff mapping preserves personalized signature without duplication and sends zero SMTP."""
+        record = _base_record()
+        result = self.pipeline.personalize_record(record, force_provider="DETERMINISTIC")
+        enriched = self.pipeline.enrich_record_for_rediff(record, result)
+
+        preview = rediff_bridge.generate_outreach_preview(enriched)
+
+        # Body text has exactly ONE signature
+        self.assertEqual(preview["body_text"].count("Bablu Gurjar"), 1)
+        self.assertEqual(preview["body_text"].count("9201949296"), 1)
+        self.assertEqual(preview["body_text"].count("Bablu@oorjatechnical.org"), 1)
+        self.assertEqual(preview["body_text"].count("Sales - Oorja Technical Services Pvt. Ltd."), 1)
+
+        # HTML has exactly ONE signature
+        self.assertEqual(preview["body_html"].count("Bablu Gurjar"), 1)
+        self.assertEqual(preview["body_html"].count("9201949296"), 1)
+        self.assertEqual(preview["body_html"].count("Bablu@oorjatechnical.org"), 1)
+        self.assertEqual(preview["body_html"].count("Sales - Oorja Technical Services Pvt. Ltd."), 1)
+
+        # No images or banner elements
+        self.assertNotIn("<img", preview["body_html"].lower())
+
+        # Zero SMTP verified
+        self.assertTrue(preview["test_mode"])
+        self.assertTrue(preview["no_send_enforced"])
 
 
 if __name__ == "__main__":

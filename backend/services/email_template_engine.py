@@ -58,10 +58,11 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
       </p>
 
       <p style="margin-top: 32px; font-size: 14px; color: #64748b;">
-        Best regards,<br>
-        <strong>Oorja Technical Services</strong><br>
-        Engineering & Industrial Metrology Division<br>
-        Pune & Dahej Regional Facilities
+        Best regards,<br><br>
+        Bablu Gurjar<br>
+        Contact No.: 9201949296<br>
+        Email: Bablu@oorjatechnical.org<br>
+        Sales - Oorja Technical Services Pvt. Ltd.
       </p>
     </div>
     <div class="footer">
@@ -168,9 +169,11 @@ def render_html_email(
         f"Capabilities for {company_name}: {', '.join(parameters)}\n"
         f"{val_prop}\n\n"
         f"{supporting}\n\n"
-        f"Best regards,\n"
-        f"Oorja Technical Services\n"
-        f"ISO/IEC 17025:2017 NABL Accredited Laboratory"
+        f"Best regards,\n\n"
+        f"Bablu Gurjar\n"
+        f"Contact No.: 9201949296\n"
+        f"Email: Bablu@oorjatechnical.org\n"
+        f"Sales - Oorja Technical Services Pvt. Ltd."
     )
 
     return {
