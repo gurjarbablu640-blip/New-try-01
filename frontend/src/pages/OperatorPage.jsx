@@ -1,34 +1,24 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Play, Square, RefreshCw, ShieldCheck, Send, Eye } from "lucide-react";
 import {
-  getOperatorStatus,
-  getSingleLiveSendCandidates,
-  previewSingleLiveSend,
-  sendSingleLiveTest,
-  startOperator,
-  stopOperator,
-} from "../api";
-
-const metrics = [
-  ["companies_researched", "Companies Researched"],
-  ["qualified_opportunities", "Qualified Opportunities"],
-  ["people_verified", "People Verified"],
-  ["contacts_enriched", "Contacts Enriched"],
-  ["emails_sent", "Emails Sent"],
-  ["replies", "Replies"],
-  ["enquiries", "Enquiries"],
-];
+  Play,
+  Square,
+  RefreshCw,
+  ShieldCheck,
+  Building2,
+  CheckCircle2,
+  Send,
+  Inbox,
+  HelpCircle,
+  FileText,
+  AlertTriangle,
+  Activity,
+} from "lucide-react";
+import { getOperatorStatus, startOperator, stopOperator } from "../api";
 
 export default function OperatorPage() {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [liveCandidates, setLiveCandidates] = useState([]);
-  const [selectedCandidateId, setSelectedCandidateId] = useState("");
-  const [livePreview, setLivePreview] = useState(null);
-  const [liveBusy, setLiveBusy] = useState(false);
-  const [liveError, setLiveError] = useState("");
-  const [liveResult, setLiveResult] = useState(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -40,31 +30,20 @@ export default function OperatorPage() {
     }
   }, []);
 
-  const refreshLiveCandidates = useCallback(async () => {
-    try {
-      const response = await getSingleLiveSendCandidates();
-      const results = response.data?.results || [];
-      setLiveCandidates(results);
-      setSelectedCandidateId((current) => (
-        results.some((item) => String(item.candidate_id) === String(current)) ? current : ""
-      ));
-    } catch (requestError) {
-      setLiveError(requestError.response?.data?.detail || requestError.message);
-    }
-  }, []);
-
   useEffect(() => {
     refresh();
-    refreshLiveCandidates();
-    const timer = window.setInterval(refresh, 4000);
+    const timer = window.setInterval(refresh, 3000);
     return () => window.clearInterval(timer);
-  }, [refresh, refreshLiveCandidates]);
+  }, [refresh]);
 
-  const runAction = async (action) => {
+  const handleStart = async () => {
     setBusy(true);
     setError("");
     try {
-      await action();
+      const response = await startOperator();
+      if (response.data?.started === false && response.data?.reason === "ALREADY_RUNNING") {
+        // Idempotent start - already running
+      }
       await refresh();
     } catch (requestError) {
       const detail = requestError.response?.data?.detail;
@@ -74,207 +53,277 @@ export default function OperatorPage() {
     }
   };
 
-  const running = ["RUNNING", "WAITING", "STOPPING"].includes(status?.status);
-  const counters = status?.counters || {};
-
-  const reviewSingleLiveSend = async () => {
-    if (!selectedCandidateId) return;
-    setLiveBusy(true);
-    setLiveError("");
-    setLiveResult(null);
+  const handleStop = async () => {
+    setBusy(true);
+    setError("");
     try {
-      const response = await previewSingleLiveSend(Number(selectedCandidateId));
-      setLivePreview(response.data);
+      await stopOperator();
+      await refresh();
     } catch (requestError) {
-      setLivePreview(null);
-      setLiveError(requestError.response?.data?.detail || requestError.message);
+      const detail = requestError.response?.data?.detail;
+      setError(detail?.errors?.join(", ") || detail?.reason || requestError.message);
     } finally {
-      setLiveBusy(false);
+      setBusy(false);
     }
   };
 
-  const executeSingleLiveSend = async () => {
-    if (!livePreview?.preview_token || !livePreview?.real_send_available) return;
-    if (!window.confirm(livePreview.confirmation_text)) return;
-    setLiveBusy(true);
-    setLiveError("");
-    try {
-      const response = await sendSingleLiveTest(livePreview.candidate_id, livePreview.preview_token);
-      setLiveResult(response.data);
-      await Promise.all([refresh(), refreshLiveCandidates()]);
-    } catch (requestError) {
-      setLiveError(requestError.response?.data?.detail || requestError.message);
-    } finally {
-      setLiveBusy(false);
+  const opStatus = status?.status || "IDLE";
+  const isRunning = ["RUNNING", "WAITING", "STOPPING"].includes(opStatus);
+  const counters = status?.counters || {};
+  const finalReport = status?.final_report_email;
+  const reportPath = status?.report_path;
+
+  const kpiCards = [
+    {
+      key: "companies_researched",
+      label: "Companies Researched",
+      value: counters.companies_researched ?? 0,
+      icon: Building2,
+      color: "text-blue-400",
+      bg: "bg-blue-950/30 border-blue-800/40",
+    },
+    {
+      key: "qualified_opportunities",
+      label: "Qualified Opportunities",
+      value: counters.qualified_opportunities ?? 0,
+      icon: CheckCircle2,
+      color: "text-emerald-400",
+      bg: "bg-emerald-950/30 border-emerald-800/40",
+    },
+    {
+      key: "emails_sent",
+      label: "Emails Sent",
+      value: counters.emails_sent ?? 0,
+      icon: Send,
+      color: "text-cyan-400",
+      bg: "bg-cyan-950/30 border-cyan-800/40",
+    },
+    {
+      key: "replies",
+      label: "Replies",
+      value: counters.replies ?? 0,
+      icon: Inbox,
+      color: "text-purple-400",
+      bg: "bg-purple-950/30 border-purple-800/40",
+    },
+    {
+      key: "enquiries",
+      label: "Enquiries",
+      value: counters.enquiries ?? 0,
+      icon: HelpCircle,
+      color: "text-amber-400",
+      bg: "bg-amber-950/30 border-amber-800/40",
+    },
+  ];
+
+  const getStatusBadge = () => {
+    if (opStatus === "RUNNING") {
+      return (
+        <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-950/60 px-3.5 py-1 text-xs font-semibold text-emerald-300">
+          <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+          RUNNING
+        </span>
+      );
     }
+    if (opStatus === "WAITING") {
+      return (
+        <span className="inline-flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-950/60 px-3.5 py-1 text-xs font-semibold text-amber-300">
+          <span className="h-2 w-2 rounded-full bg-amber-400" />
+          WAITING (WORKING HOURS)
+        </span>
+      );
+    }
+    if (opStatus === "STOPPING") {
+      return (
+        <span className="inline-flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-950/60 px-3.5 py-1 text-xs font-semibold text-amber-300">
+          <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+          STOPPING SAFELY...
+        </span>
+      );
+    }
+    if (opStatus === "ERROR") {
+      return (
+        <span className="inline-flex items-center gap-2 rounded-full border border-rose-500/40 bg-rose-950/60 px-3.5 py-1 text-xs font-semibold text-rose-300">
+          <span className="h-2 w-2 rounded-full bg-rose-400" />
+          ERROR
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-2 rounded-full border border-zinc-700 bg-zinc-800/70 px-3.5 py-1 text-xs font-semibold text-zinc-300">
+        <span className="h-2 w-2 rounded-full bg-zinc-400" />
+        {opStatus || "STOPPED"}
+      </span>
+    );
   };
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6 text-zinc-100">
+      {/* Top Header & Autonomous Controls */}
       <div className="flex flex-col gap-4 border-b border-zinc-800 pb-5 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white">Salesoorja Operator</h1>
-          <p className="mt-1 text-sm text-zinc-400">One controlled loop using the existing intelligence, qualification, and outreach chain.</p>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold tracking-tight text-white">Salesoorja Autonomous Operator</h1>
+            {getStatusBadge()}
+          </div>
+          <p className="mt-1 text-sm text-zinc-400">
+            One-click autonomous outreach engine: discovery, qualification, personalization, Rediff transport, and follow-ups.
+          </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex items-center gap-3">
           <button
             type="button"
-            disabled={busy || running}
-            onClick={() => runAction(startOperator)}
-            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+            id="operator-start-btn"
+            disabled={busy || isRunning}
+            onClick={handleStart}
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 font-semibold text-white shadow-lg shadow-emerald-900/20 hover:bg-emerald-500 transition disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Play className="h-4 w-4" /> START
           </button>
           <button
             type="button"
-            disabled={busy || !running}
-            onClick={() => runAction(stopOperator)}
-            className="flex items-center gap-2 rounded-lg bg-rose-600 px-5 py-2.5 font-semibold text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
+            id="operator-stop-btn"
+            disabled={busy || !isRunning}
+            onClick={handleStop}
+            className="flex items-center gap-2 rounded-lg bg-rose-600 px-5 py-2.5 font-semibold text-white shadow-lg shadow-rose-900/20 hover:bg-rose-500 transition disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Square className="h-4 w-4" /> STOP
           </button>
-          <button type="button" onClick={refresh} className="rounded-lg border border-zinc-700 p-2.5 text-zinc-300 hover:bg-zinc-800" title="Refresh">
+          <button
+            type="button"
+            onClick={refresh}
+            className="rounded-lg border border-zinc-700 bg-zinc-800/80 p-2.5 text-zinc-300 hover:bg-zinc-700 hover:text-white transition"
+            title="Refresh status"
+          >
             <RefreshCw className="h-5 w-5" />
           </button>
         </div>
       </div>
 
-      {error && <div className="rounded-lg border border-rose-800 bg-rose-950/50 p-4 text-sm text-rose-200">{error}</div>}
-
-      <div className="grid gap-4 md:grid-cols-4">
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5 md:col-span-1">
-          <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Run Status</div>
-          <div className={`mt-2 text-2xl font-bold ${running ? "text-emerald-400" : status?.status === "ERROR" ? "text-rose-400" : "text-zinc-200"}`}>
-            {status?.status || "LOADING"}
-          </div>
-          <div className="mt-3 flex items-center gap-2 text-sm text-zinc-400">
-            <ShieldCheck className="h-4 w-4 text-cyan-400" /> Mode: {status?.mode || "-"}
-          </div>
+      {/* Synchronous Action Error (if any) */}
+      {error && (
+        <div className="rounded-lg border border-rose-800 bg-rose-950/60 p-4 text-sm text-rose-200">
+          <div className="font-semibold text-rose-300">Operator Error</div>
+          <div className="mt-1">{error}</div>
         </div>
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5 md:col-span-3">
-          <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Current</div>
-          <div className="mt-2 text-lg font-semibold text-white">{status?.current_company || "No company in progress"}</div>
-          <div className="mt-2 text-sm text-zinc-400">{status?.last_action || "Ready"}</div>
-          {status?.last_error && <div className="mt-2 text-sm text-rose-300">{status.last_error}</div>}
-        </div>
-      </div>
+      )}
 
-      <div>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-zinc-400">Today</h2>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {metrics.map(([key, label]) => (
-            <div key={key} className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-              <div className="text-2xl font-bold text-white">{counters[key] || 0}</div>
-              <div className="mt-1 text-xs text-zinc-500">{label}</div>
+      {/* Current Activity Section */}
+      <div className="grid gap-4 md:grid-cols-3">
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/90 p-5 shadow-sm md:col-span-2">
+          <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            <span className="flex items-center gap-1.5">
+              <Activity className="h-3.5 w-3.5 text-emerald-400" /> Current Activity
+            </span>
+            <span className="text-zinc-400">Mode: {status?.mode || "TEST"}</span>
+          </div>
+          <div className="mt-3">
+            <div className="text-xs text-zinc-500 uppercase">Target Account</div>
+            <div className="text-lg font-semibold text-white">
+              {status?.current_company || "Idle — awaiting cycle trigger"}
             </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="rounded-xl border border-amber-800/60 bg-zinc-900 p-5">
-        <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-          <div>
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-amber-300">Single Live Customer Test</h2>
-            <p className="mt-1 text-sm text-zinc-400">Select exactly one existing qualified contact, review the complete email, then confirm one initial send.</p>
           </div>
-          <div className="rounded-full border border-zinc-700 px-3 py-1 text-xs text-zinc-300">1 prospect · CC Bablu · BCC 0</div>
-        </div>
-
-        {liveError && <div className="mt-4 rounded-lg border border-rose-800 bg-rose-950/50 p-3 text-sm text-rose-200">{liveError}</div>}
-        {liveResult && <div className="mt-4 rounded-lg border border-emerald-800 bg-emerald-950/50 p-3 text-sm text-emerald-200">Sent once at {liveResult.sent_at}. Duplicate protection is now active.</div>}
-
-        <div className="mt-5 flex flex-col gap-3 md:flex-row">
-          <select
-            value={selectedCandidateId}
-            onChange={(event) => {
-              setSelectedCandidateId(event.target.value);
-              setLivePreview(null);
-              setLiveResult(null);
-            }}
-            className="min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100"
-          >
-            <option value="">Choose one qualified customer contact</option>
-            {liveCandidates.map((candidate) => (
-              <option key={candidate.candidate_id} value={candidate.candidate_id}>
-                {candidate.company} — {candidate.person} ({candidate.designation})
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            disabled={liveBusy || !selectedCandidateId || running}
-            onClick={reviewSingleLiveSend}
-            className="flex items-center justify-center gap-2 rounded-lg border border-cyan-700 px-4 py-2.5 text-sm font-semibold text-cyan-300 hover:bg-cyan-950/60 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <Eye className="h-4 w-4" /> Review 1 Customer
-          </button>
-        </div>
-
-        {liveCandidates.length === 0 && (
-          <p className="mt-3 text-sm text-zinc-500">No existing contact currently passes every employment, facility, authority, verified-contact, personalization, and suppression gate.</p>
-        )}
-
-        {livePreview && (
-          <div className="mt-5 space-y-4 border-t border-zinc-800 pt-5">
-            <dl className="grid gap-3 text-sm md:grid-cols-2">
-              {[
-                ["Company", livePreview.company], ["Facility", livePreview.facility],
-                ["Person", livePreview.person], ["Designation", livePreview.designation],
-                ["Email", livePreview.email], ["Trigger", livePreview.trigger],
-                ["Person score", livePreview.person_score], ["Personalization score", livePreview.personalization_score],
-                ["Current employment", livePreview.current_employment], ["Facility relationship", livePreview.facility_relationship],
-                ["Function", livePreview.function], ["Authority", livePreview.authority],
-                ["Claim validation", livePreview.claim_validation], ["Subject", livePreview.subject],
-              ].map(([label, value]) => (
-                <div key={label} className="rounded-lg bg-zinc-950 p-3">
-                  <dt className="text-xs uppercase tracking-wide text-zinc-500">{label}</dt>
-                  <dd className="mt-1 break-words text-zinc-200">{value ?? "-"}</dd>
-                </div>
-              ))}
-            </dl>
-            <div>
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Full Email Body</div>
-              <iframe
-                title="Single live customer email preview"
-                sandbox=""
-                srcDoc={livePreview.body_html}
-                className="h-96 w-full rounded-lg border border-zinc-700 bg-white"
-              />
+          <div className="mt-3">
+            <div className="text-xs text-zinc-500 uppercase">Current Action</div>
+            <div className="mt-0.5 text-sm text-zinc-300">
+              {status?.last_action || "Ready"}
             </div>
-            <div className="rounded-lg border border-amber-800 bg-amber-950/30 p-4 text-sm text-amber-100 whitespace-pre-line">
-              {livePreview.confirmation_text}
-            </div>
-            {!livePreview.real_send_available && (
-              <p className="text-sm text-zinc-400">Live dispatch remains locked. Enable only `SINGLE_LIVE_CUSTOMER_TEST_ENABLED=true` for the controlled send runtime.</p>
-            )}
-            <button
-              type="button"
-              disabled={liveBusy || running || !livePreview.real_send_available}
-              onClick={executeSingleLiveSend}
-              className="flex items-center gap-2 rounded-lg bg-rose-600 px-5 py-2.5 font-semibold text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Send className="h-4 w-4" /> SEND LIVE TEST
-            </button>
           </div>
-        )}
-      </div>
+        </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Run Window</h2>
-          <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
-            <dt className="text-zinc-500">Started</dt><dd className="text-right text-zinc-200">{status?.started_at || "-"}</dd>
-            <dt className="text-zinc-500">Ended</dt><dd className="text-right text-zinc-200">{status?.ended_at || "-"}</dd>
-            <dt className="text-zinc-500">Working hours</dt><dd className="text-right text-zinc-200">{status?.start_time} - {status?.end_time}</dd>
-            <dt className="text-zinc-500">Daily target / max</dt><dd className="text-right text-zinc-200">{status?.daily_send_target} / {status?.daily_send_max}</dd>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/90 p-5 shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Execution Cadence</div>
+          <dl className="mt-3 space-y-2 text-sm">
+            <div className="flex justify-between">
+              <dt className="text-zinc-500">Window</dt>
+              <dd className="font-mono text-zinc-300">{status?.start_time || "09:00"} - {status?.end_time || "18:00"}</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-zinc-500">Target / Max</dt>
+              <dd className="font-mono text-zinc-300">{status?.daily_send_target || 150} / {status?.daily_send_max || 250}</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-zinc-500">Started At</dt>
+              <dd className="text-zinc-300 text-xs">{status?.started_at ? new Date(status.started_at).toLocaleTimeString() : "-"}</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-zinc-500">Checkpoint</dt>
+              <dd className="text-zinc-400 text-xs">{status?.last_checkpoint ? new Date(status.last_checkpoint).toLocaleTimeString() : "-"}</dd>
+            </div>
           </dl>
         </div>
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Provider Usage</h2>
-          <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-            {Object.entries(status?.provider_usage || {}).map(([name, count]) => (
-              <React.Fragment key={name}><span className="text-zinc-500">{name}</span><span className="text-right text-zinc-200">{count}</span></React.Fragment>
-            ))}
+      </div>
+
+      {/* 5 KPI Metric Cards */}
+      <div>
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-400">Today's Operating Metrics</h2>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          {kpiCards.map((kpi) => {
+            const Icon = kpi.icon;
+            return (
+              <div key={kpi.key} className={`rounded-xl border p-4 shadow-sm ${kpi.bg}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-zinc-400">{kpi.label}</span>
+                  <Icon className={`h-4 w-4 ${kpi.color}`} />
+                </div>
+                <div className="mt-2 text-3xl font-bold tracking-tight text-white">{kpi.value}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Non-blocking Error Log */}
+      {status?.last_error && (
+        <div className="rounded-xl border border-amber-800/60 bg-amber-950/30 p-4 text-amber-200">
+          <div className="flex items-center gap-2 font-semibold text-amber-300 text-sm">
+            <AlertTriangle className="h-4 w-4 text-amber-400" />
+            Non-Blocking System Notice
+          </div>
+          <div className="mt-1 text-sm text-zinc-300 font-mono">
+            {status.last_error}
+          </div>
+          <div className="mt-1 text-xs text-zinc-500">
+            The operator automatically holds problematic accounts and continues executing without crashing.
+          </div>
+        </div>
+      )}
+
+      {/* Final Report Status Card */}
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/90 p-5 shadow-sm">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FileText className="h-5 w-5 text-emerald-400" />
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-200">Daily Final Report (XLSX)</h2>
+          </div>
+          <span className="rounded-full border border-zinc-700 bg-zinc-800 px-3 py-0.5 text-xs text-zinc-300">
+            {reportPath ? "GENERATED" : "PENDING END OF RUN"}
+          </span>
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div className="rounded-lg bg-zinc-950/60 p-3.5 border border-zinc-800">
+            <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Spreadsheet Artifact</div>
+            <div className="mt-1 font-mono text-xs text-zinc-300 break-all">
+              {reportPath || "Will generate automatically at end-time, send target, or STOP"}
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-zinc-950/60 p-3.5 border border-zinc-800">
+            <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Email Delivery Status</div>
+            <div className="mt-1 text-sm text-zinc-300">
+              Status: <span className="font-semibold text-white">{finalReport?.status || "AWAITING_COMPLETION"}</span>
+            </div>
+            {finalReport?.to && (
+              <div className="mt-1 text-xs text-zinc-400">
+                To: <span className="text-zinc-200">{finalReport.to}</span>
+              </div>
+            )}
+            {finalReport?.subject && (
+              <div className="mt-1 text-xs text-zinc-400 truncate">
+                Subject: <span className="text-zinc-200">{finalReport.subject}</span>
+              </div>
+            )}
           </div>
         </div>
       </div>

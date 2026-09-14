@@ -37,7 +37,7 @@ def operator_status():
 
 @router.post("/start")
 def operator_start():
-    result = start_run(background=True)
+    result = start_run(background=True, use_celery=True)
     if not result.get("started") and result.get("reason") not in {"ALREADY_RUNNING"}:
         raise HTTPException(status_code=409, detail=result)
     return result

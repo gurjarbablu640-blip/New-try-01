@@ -98,6 +98,12 @@ REDIFF_CSV_FIELDS = (
     "REFERENCES",
     "CC",
     "SALESOORJA_RECORD_ID",
+    "SUBJECT",
+    "FINAL_SUBJECT",
+    "BODY_HTML",
+    "FINAL_BODY_HTML",
+    "BODY_TEXT",
+    "FINAL_BODY_TEXT",
 )
 
 
@@ -231,7 +237,13 @@ class RediffSenderAdapter:
         logger.info("Rediff handoff result status=%s", status)
         return result
 
-    def _suppression_status(self, record: Mapping[str, Any], outreach_state: Mapping[str, Any]) -> Optional[tuple[str, str]]:
+    def _suppression_status(
+        self,
+        record: Mapping[str, Any],
+        outreach_state: Mapping[str, Any],
+        *,
+        is_followup: bool = False,
+    ) -> Optional[tuple[str, str]]:
         ready = str(_value(record, "READY_FOR_EMAIL", "ready_for_email", default="NO")).strip().upper()
         if ready != "YES":
             return SUPPRESSED_NOT_READY, "READY_FOR_EMAIL must be YES"
@@ -264,12 +276,24 @@ class RediffSenderAdapter:
             return SUPPRESSED_REPLY, "Meaningful prior reply requires outreach stop"
 
         last_sent_at = _parse_datetime(outreach_state.get("last_sent_at"))
-        if last_sent_at and self._now().astimezone(timezone.utc) - last_sent_at < timedelta(days=self.config.duplicate_window_days):
+        is_followup_check = bool(
+            is_followup
+            or _as_bool(outreach_state.get("is_followup"))
+            or _as_bool(record.get("is_followup"))
+            or str(_value(record, "followup_stage", "FOLLOWUP_STAGE", default="INITIAL")).upper() != "INITIAL"
+        )
+        if not is_followup_check and last_sent_at and self._now().astimezone(timezone.utc) - last_sent_at < timedelta(days=self.config.duplicate_window_days):
             return SUPPRESSED_DUPLICATE, f"Recipient is inside the {self.config.duplicate_window_days}-day duplicate-contact window"
         return None
 
-    def evaluate_suppression(self, record: Mapping[str, Any], outreach_state: Mapping[str, Any]) -> dict[str, Any]:
-        suppression = self._suppression_status(record, outreach_state)
+    def evaluate_suppression(
+        self,
+        record: Mapping[str, Any],
+        outreach_state: Mapping[str, Any],
+        *,
+        is_followup: bool = False,
+    ) -> dict[str, Any]:
+        suppression = self._suppression_status(record, outreach_state, is_followup=is_followup)
         if suppression:
             status, reason = suppression
             return {"allowed": False, "status": status, "reason": reason}
@@ -337,6 +361,9 @@ class RediffSenderAdapter:
         contact_verified = _as_bool(
             _value(record, "CONTACT_VERIFIED", "contact_verified", default=(contact_evidence or {}).get("mailbox_verified", False))
         )
+        subject = str(_value(record, "FINAL_SUBJECT", "SUBJECT", "subject", default=""))
+        body_html = str(_value(record, "FINAL_BODY_HTML", "BODY_HTML", "body_html", default=""))
+        body_text = str(_value(record, "FINAL_BODY_TEXT", "BODY_TEXT", "body_text", default=""))
         mapped = {
             "LEAD_ID": str(_value(record, "LEAD_ID", "record_id", default=f"salesoorja-{uuid.uuid4().hex[:12]}")),
             "COMPANY_NAME": company,
@@ -385,6 +412,12 @@ class RediffSenderAdapter:
             "REFERENCES": references,
             "CC": ", ".join(self.config.cc_addresses),
             "SALESOORJA_RECORD_ID": str(_value(record, "record_id", "SALESOORJA_RECORD_ID")),
+            "SUBJECT": subject,
+            "FINAL_SUBJECT": subject,
+            "BODY_HTML": body_html,
+            "FINAL_BODY_HTML": body_html,
+            "BODY_TEXT": body_text,
+            "FINAL_BODY_TEXT": body_text,
         }
         return {field: mapped[field] for field in REDIFF_CSV_FIELDS}
 

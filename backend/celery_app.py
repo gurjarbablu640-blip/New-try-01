@@ -92,6 +92,12 @@ try:
         report = autonomous_scheduler.execute_evening_cutoff_and_report()
         return report.to_dict()
 
+    @celery_app.task(name="salesoorja.operator_run")
+    def operator_run_task():
+        from services.salesoorja_operator import salesoorja_operator
+        salesoorja_operator._run_safely()
+        return salesoorja_operator.get_status()
+
     CELERY_AVAILABLE = True
 except Exception as exc:
     CELERY_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"

@@ -169,7 +169,8 @@ class RediffTransportBridge:
         html_path = execution_dir / "operator_transport_test.html"
         result_path = execution_dir / "transport_result.json"
         self._write_csv(csv_path, mapped_record)
-        html_path.write_text(self._test_html(), encoding="utf-8")
+        body_content = str(mapped_record.get("FINAL_BODY_HTML") or mapped_record.get("BODY_HTML") or "").strip()
+        html_path.write_text(body_content or self._test_html(), encoding="utf-8")
 
         worker = BACKEND_ROOT / "scripts" / "rediff_transport_worker.py"
         command = [

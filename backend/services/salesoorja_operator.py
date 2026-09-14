@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import smtplib
+import ssl
+import sys
 import threading
 import time
 import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 from zoneinfo import ZoneInfo
@@ -227,16 +234,29 @@ class SalesoorjaOperator:
         }
         return [name for name, passed in checks.items() if not passed]
 
-    def start_run(self, *, background: bool = True) -> dict[str, Any]:
+    def start_run(self, *, background: bool = True, use_celery: Optional[bool] = None) -> dict[str, Any]:
         with self._lock:
-            if self._thread and self._thread.is_alive():
+            active = self._state.get("status") in {"RUNNING", "WAITING", "STOPPING"}
+            if active or (self._thread and self._thread.is_alive()):
                 return {"started": False, "reason": "ALREADY_RUNNING", "status": self.get_status()}
+
             mode = self._mode()
             if mode not in {"TEST", "PRODUCTION"}:
-                return {"started": False, "reason": "INVALID_MODE", "errors": ["SALESOORJA_MODE must be TEST or PRODUCTION"]}
-            production_errors = self._production_errors()
-            if production_errors:
-                return {"started": False, "reason": "PRODUCTION_GUARD_FAILED", "errors": production_errors}
+                return {
+                    "started": False,
+                    "reason": "INVALID_MODE",
+                    "errors": ["SALESOORJA_MODE must be TEST or PRODUCTION"],
+                }
+
+            if mode == "PRODUCTION":
+                prod_errors = self._production_errors()
+                if prod_errors:
+                    return {
+                        "started": False,
+                        "reason": "PRODUCTION_GUARD_FAILED",
+                        "errors": prod_errors,
+                    }
+
             self._state = self._new_state(preserve_history=True)
             self._state.update(
                 status="RUNNING",
@@ -250,8 +270,20 @@ class SalesoorjaOperator:
             self._stop_event.clear()
             self._save_state()
             if background:
-                self._thread = threading.Thread(target=self._run_safely, name="salesoorja-operator", daemon=True)
-                self._thread.start()
+                celery_dispatched = False
+                allow_celery = use_celery if use_celery is not None else getattr(self.settings, "CELERY_ENABLED", False)
+                if allow_celery:
+                    try:
+                        from celery_app import CELERY_AVAILABLE, celery_app
+                        if CELERY_AVAILABLE:
+                            celery_app.send_task("salesoorja.operator_run")
+                            celery_dispatched = True
+                    except Exception as exc:
+                        logger.warning("Celery dispatch unavailable: %s; falling back to daemon thread", exc)
+
+                if not celery_dispatched:
+                    self._thread = threading.Thread(target=self._run_safely, name="salesoorja-operator", daemon=True)
+                    self._thread.start()
             else:
                 self._run_safely()
         return {"started": True, "status": self.get_status()}
@@ -432,8 +464,27 @@ class SalesoorjaOperator:
         for cycle in range(max_cycles):
             if self._stop_event.is_set():
                 break
-            self._update(last_action=f"Running synthetic dry-run cycle {cycle + 1}")
-            self._process_synthetic_account()
+            self._update(last_action=f"Running autonomous test cycle {cycle + 1}")
+            self._poll_inbox()
+            processed = False
+            if self._db_factory is not None:
+                try:
+                    processed = self._run_discovery_cycle()
+                except Exception as exc:
+                    logger.warning("Discovery cycle in test mode fell back to synthetic: %s", exc)
+                    processed = False
+            if not processed:
+                self._process_synthetic_account()
+            if self._db_factory:
+                db = self._db_factory()
+                try:
+                    self._process_due_followups(db)
+                except Exception as exc:
+                    logger.warning("Test mode follow-up processing error: %s", exc)
+                finally:
+                    db.close()
+            if self._stop_event.wait(1):
+                break
         reason = "MANUAL_STOP" if self._stop_event.is_set() else "TEST_COMPLETE"
         self.finalize_run(reason=reason)
 
@@ -513,6 +564,36 @@ class SalesoorjaOperator:
                 "reason": "TEST mode never sends prospect email",
             },
         )
+        if self._db_factory:
+            db = self._db_factory()
+            try:
+                self._persist_pipeline_account(
+                    db=db,
+                    account={
+                        "company_name": record["company"],
+                        "facility": record["facility"],
+                        "city": record["city"],
+                        "state": record["state"],
+                        "trigger": record["trigger"],
+                        "icp_score": record["icp_score"],
+                    },
+                    candidate=type("SyntheticCandidate", (), {
+                        "id": None,
+                        "candidate_name": record["person"],
+                        "candidate_title": record["designation"],
+                        "candidate_facility": record["facility"],
+                        "apollo_email": record["email"],
+                        "apollo_phone": record["phone"],
+                        "target_persona": record["persona"],
+                    })(),
+                    personalized=personalized,
+                    handoff=handoff,
+                    receipt=None,
+                )
+            except Exception as exc:
+                logger.warning("Synthetic account DB persistence error: %s", exc)
+            finally:
+                db.close()
         with self._lock:
             self._state["processed_accounts"].append(account_key)
             self._state["current_company"] = None
@@ -666,6 +747,7 @@ class SalesoorjaOperator:
                 "status": handoff.get("status"),
                 "reason": handoff.get("reason"),
             }
+            receipt = None
             if handoff.get("status") == SENT and handoff.get("smtp_sent"):
                 self._increment("emails_sent")
                 self._append_record("SENT", row)
@@ -674,6 +756,15 @@ class SalesoorjaOperator:
                 self._append_record("QUALIFIED_NOT_SENT", row)
             else:
                 self._append_record("QUALIFIED_NOT_SENT", row)
+
+            self._persist_pipeline_account(
+                db=db,
+                account=account,
+                candidate=candidate,
+                personalized=personalized,
+                handoff=handoff,
+                receipt=receipt,
+            )
         except Exception as exc:
             logger.exception("Production account failed: %s", company_name)
             self._increment("failed")
@@ -796,12 +887,16 @@ class SalesoorjaOperator:
         )
 
     def _poll_inbox(self) -> None:
-        if self._mode() != "PRODUCTION" or self._db_factory is None:
+        if self._db_factory is None:
             return
         if self._imap_poll_fn is None:
-            from services.imap_service import poll_imap_inbox
+            try:
+                from services.imap_service import poll_imap_inbox
 
-            self._imap_poll_fn = poll_imap_inbox
+                self._imap_poll_fn = poll_imap_inbox
+            except Exception as exc:
+                logger.debug("IMAP service unavailable: %s", exc)
+                return
         db = self._db_factory()
         try:
             result = self._imap_poll_fn(db=db, folder="INBOX", limit=50)
@@ -813,8 +908,441 @@ class SalesoorjaOperator:
                 if classification in {"ENQUIRY", "INTERESTED", "REFERRAL", "FUTURE_REQUIREMENT"}:
                     self._increment("enquiries")
                     self._append_record("ENQUIRIES", item)
+        except Exception as exc:
+            logger.warning("IMAP inbox poll caught non-fatal exception: %s", exc)
         finally:
             db.close()
+
+    def _persist_pipeline_account(
+        self,
+        db: Any,
+        account: Mapping[str, Any],
+        candidate: Any,
+        personalized: Mapping[str, Any],
+        handoff: Mapping[str, Any],
+        receipt: Optional[Mapping[str, Any]] = None,
+    ) -> dict[str, Any]:
+        from models.campaign import Campaign, CampaignEvent, CampaignRecipient, CampaignStep
+        from models.company import Company
+        from models.decision_maker_candidate import DecisionMakerCandidate
+        from models.facility import Facility
+        from models.intent_signal import CompanyIntentSignal
+        from models.person import Person
+        from services.follow_up_engine import calculate_cadence_schedule, FollowUpEngine
+
+        company_name = str(account.get("company_name") or "Unknown Company").strip()
+        company = db.query(Company).filter(Company.name == company_name).first()
+        if not company:
+            company = Company(
+                name=company_name,
+                domain=str(account.get("domain") or ""),
+                city=str(account.get("city") or ""),
+                state=str(account.get("state") or ""),
+                industry=str(account.get("industry") or "Manufacturing"),
+                qualification_status="QUALIFIED",
+                qualification_reason="Passed deterministic discovery and qualification gates",
+                source="autonomous_operator",
+            )
+            db.add(company)
+            db.flush()
+
+        facility_name = str(account.get("facility") or getattr(candidate, "candidate_facility", "") or "").strip()
+        if facility_name:
+            fac = db.query(Facility).filter(
+                Facility.company_id == company.id,
+                Facility.name == facility_name,
+            ).first()
+            if not fac:
+                fac = Facility(
+                    company_id=company.id,
+                    name=facility_name,
+                    city=str(account.get("city") or ""),
+                    state=str(account.get("state") or ""),
+                )
+                db.add(fac)
+                db.flush()
+
+        signal_title = str(account.get("event_title") or account.get("trigger") or "Manufacturing expansion signal").strip()
+        signal_type = str(account.get("signal_type") or "EXPANSION").strip()
+        if signal_type:
+            sig = db.query(CompanyIntentSignal).filter(
+                CompanyIntentSignal.company_id == company.id,
+                CompanyIntentSignal.signal_type == signal_type,
+            ).first()
+            if not sig:
+                sig = CompanyIntentSignal(
+                    company_id=company.id,
+                    signal_type=signal_type,
+                    opportunity_note=signal_title,
+                    weight_applied=float(account.get("icp_score") or 90.0),
+                )
+                db.add(sig)
+                db.flush()
+
+        cand_name = str(getattr(candidate, "candidate_name", None) or account.get("person") or "").strip()
+        cand_email = str(getattr(candidate, "apollo_email", None) or account.get("email") or "").strip()
+        cand_phone = str(getattr(candidate, "apollo_phone", None) or account.get("phone") or "").strip()
+        cand_title = str(getattr(candidate, "candidate_title", None) or account.get("designation") or "").strip()
+
+        person = None
+        if cand_email:
+            person = db.query(Person).filter(
+                Person.company_id == company.id,
+                Person.email == cand_email,
+            ).first()
+            if not person:
+                person = Person(
+                    company_id=company.id,
+                    full_name=cand_name,
+                    designation=cand_title,
+                    email=cand_email,
+                    phone=cand_phone,
+                    is_decision_maker=1,
+                    discovery_status="APOLLO_ENRICHED",
+                )
+                db.add(person)
+                db.flush()
+
+        cand_record = None
+        cand_id = getattr(candidate, "id", None)
+        if cand_id and isinstance(candidate, DecisionMakerCandidate):
+            cand_record = candidate
+            candidate.verification_status = "VERIFIED"
+            db.add(candidate)
+            db.flush()
+        elif cand_name:
+            cand_record = db.query(DecisionMakerCandidate).filter(
+                DecisionMakerCandidate.company_id == company.id,
+                DecisionMakerCandidate.candidate_name == cand_name,
+            ).first()
+            if not cand_record:
+                cand_record = DecisionMakerCandidate(
+                    company_id=company.id,
+                    candidate_name=cand_name,
+                    candidate_title=cand_title,
+                    apollo_email=cand_email,
+                    apollo_phone=cand_phone,
+                    target_persona=str(getattr(candidate, "target_persona", None) or account.get("persona") or "Quality"),
+                    score_composite=float(account.get("icp_score") or 95.0),
+                    verification_status="VERIFIED",
+                )
+                db.add(cand_record)
+                db.flush()
+
+        campaign = db.query(Campaign).filter(Campaign.name == "Salesoorja Autonomous Outbound").first()
+        if not campaign:
+            campaign = Campaign(
+                name="Salesoorja Autonomous Outbound",
+                description="Autonomous 5-touch outreach sequence (Day 1, 3, 5, 11, 21)",
+                channel="email",
+                status="Active",
+                approved=True,
+            )
+            db.add(campaign)
+            db.flush()
+            for idx, delay in enumerate([0, 2, 4, 10, 20]):
+                step = CampaignStep(
+                    campaign_id=campaign.id,
+                    step_number=idx,
+                    delay_days=delay,
+                    channel="email",
+                    subject=f"Touch {idx + 1}",
+                    enabled=True,
+                )
+                db.add(step)
+            db.flush()
+
+        rec = db.query(CampaignRecipient).filter(
+            CampaignRecipient.campaign_id == campaign.id,
+            CampaignRecipient.company_id == company.id,
+        ).first()
+
+        is_real_confirmed_send = bool(
+            self._mode() == "PRODUCTION"
+            and handoff.get("status") == SENT
+            and handoff.get("smtp_sent") is True
+            and receipt
+            and receipt.get("smtp_sent") is True
+            and not receipt.get("test_mode")
+        )
+
+        now = self._now()
+        followup_engine = FollowUpEngine()
+        message_id = (receipt.get("message_id") if receipt else None) or ""
+
+        if is_real_confirmed_send:
+            cadence = followup_engine.initialize_cadence(
+                record_id=f"cadence-{company.id}-{person.id if person else 0}",
+                company=company_name,
+                facility=facility_name,
+                contact_name=cand_name,
+                email=cand_email,
+                initial_sent_at=now,
+                message_id=message_id,
+                original_subject=str(personalized.get("subject") or ""),
+            )
+            sched = calculate_cadence_schedule(now)
+            recipient_status = "ACTIVE"
+            email_status = "SENT"
+            last_sent_at = now
+            next_send_at = sched["followup_1_due"]
+            current_step = 0
+            cadence_state_dict = cadence.to_dict()
+        else:
+            recipient_status = "TEST_PREVIEW"
+            email_status = "NOT_SENT_TEST_MODE"
+            last_sent_at = None
+            next_send_at = None
+            current_step = 0
+            cadence_state_dict = None
+
+        meta = {
+            "subject": personalized.get("subject"),
+            "body_html": personalized.get("body_html"),
+            "body_text": personalized.get("body_text"),
+            "followups": personalized.get("followups"),
+            "quality_score": personalized.get("quality_score"),
+            "message_id": message_id,
+            "cadence_state": cadence_state_dict,
+            "test_mode": self._mode() == "TEST",
+        }
+
+        if not rec:
+            rec = CampaignRecipient(
+                campaign_id=campaign.id,
+                company_id=company.id,
+                person_id=person.id if person else None,
+                current_step=current_step,
+                status=recipient_status,
+                email_status=email_status,
+                last_sent_at=last_sent_at,
+                next_send_at=next_send_at,
+                metadata_json=meta,
+            )
+            db.add(rec)
+            db.flush()
+        else:
+            rec.status = recipient_status
+            rec.email_status = email_status
+            rec.current_step = current_step
+            rec.last_sent_at = last_sent_at
+            rec.next_send_at = next_send_at
+            rec.metadata_json = meta
+            db.add(rec)
+            db.flush()
+
+        event = CampaignEvent(
+            campaign_id=campaign.id,
+            recipient_id=rec.id,
+            event_type="INITIAL_SENT" if is_real_confirmed_send else "TEST_PREVIEW",
+            channel="email",
+            provider_message_id=message_id,
+            payload={"receipt": receipt, "test_mode": not is_real_confirmed_send},
+        )
+        db.add(event)
+        db.commit()
+
+        return {"company_id": company.id, "recipient_id": rec.id, "status": recipient_status}
+
+    def _process_due_followups(self, db: Any) -> int:
+        from models.campaign import CampaignEvent, CampaignRecipient
+        from models.company import Company
+        from services.follow_up_engine import calculate_cadence_schedule
+
+        now = self._now()
+        due_recipients = (
+            db.query(CampaignRecipient)
+            .filter(
+                CampaignRecipient.status == "ACTIVE",
+                CampaignRecipient.next_send_at.isnot(None),
+                CampaignRecipient.next_send_at <= now,
+            )
+            .all()
+        )
+        if not due_recipients:
+            return 0
+
+        processed = 0
+        step_due_keys = {
+            1: "followup_2_due",
+            2: "followup_3_due",
+            3: "final_followup_due",
+        }
+        for rec in due_recipients:
+            rec_meta = dict(rec.metadata_json or {})
+            if (
+                getattr(rec, "has_replied", False)
+                or rec_meta.get("has_replied")
+                or getattr(rec, "replied_at", None)
+                or getattr(rec, "status", None) == "REPLIED"
+            ):
+                rec.status = "REPLIED"
+                rec.pause_reason = "REPLIED"
+                rec.next_send_at = None
+                db.add(rec)
+                db.commit()
+                continue
+
+            if (
+                getattr(rec, "status", None) in {"BOUNCED", "OPTED_OUT"}
+                or getattr(rec, "bounced_at", None)
+                or rec_meta.get("bounced")
+                or rec_meta.get("opted_out")
+            ):
+                rec.status = "BOUNCED" if (getattr(rec, "bounced_at", None) or rec_meta.get("bounced")) else "OPTED_OUT"
+                rec.next_send_at = None
+                db.add(rec)
+                db.commit()
+                continue
+
+            rec_company_id = getattr(rec, "company_id", None)
+            company = db.query(Company).filter(Company.id == rec_company_id).first() if rec_company_id else None
+            company_name = company.name if company else (getattr(rec, "company_name", None) or f"Company {rec_company_id}")
+            outreach_state = self._outreach_state(db, rec_company_id) if rec_company_id else {}
+            suppression = self._rediff.evaluate_suppression(
+                {
+                    "READY_FOR_EMAIL": "YES",
+                    "EMAIL": outreach_state.get("email") or rec_meta.get("email") or getattr(rec, "email", ""),
+                    "is_followup": True,
+                },
+                {**outreach_state, "is_followup": True},
+                is_followup=True,
+            )
+            if not suppression.get("allowed"):
+                rec.status = "SUPPRESSED"
+                rec.next_send_at = None
+                db.add(rec)
+                event = CampaignEvent(
+                    campaign_id=rec.campaign_id,
+                    recipient_id=rec.id,
+                    event_type="SUPPRESSED",
+                    channel="email",
+                    payload={"reason": suppression.get("reason")},
+                )
+                db.add(event)
+                db.commit()
+                self._increment("held")
+                self._append_record("HOLD", {
+                    "company": company_name,
+                    "reason": f"Follow-up suppressed: {suppression.get('reason')}",
+                })
+                continue
+
+            next_step = int(rec.current_step or 0) + 1
+            step_keys = {1: "day_3", 2: "day_5", 3: "day_11", 4: "day_21"}
+            if next_step > 4 or next_step not in step_keys:
+                rec.status = "COMPLETED"
+                rec.next_send_at = None
+                db.add(rec)
+                db.commit()
+                continue
+
+            meta = dict(rec.metadata_json or {})
+            followups = meta.get("followups") or {}
+            touch_key = step_keys[next_step]
+            touch_body = followups.get(touch_key) or "Following up regarding our earlier correspondence on calibration support."
+            orig_subject = meta.get("subject") or "Calibration Planning"
+            subject = f"Re: {orig_subject}" if not orig_subject.lower().startswith("re:") else orig_subject
+
+            if self._mode() == "TEST":
+                logger.info("TEST mode: follow-up %s for %s simulated with zero prospect dispatch", touch_key, company_name)
+                rec.current_step = next_step
+                rec.last_sent_at = now
+                sched = calculate_cadence_schedule(now)
+                rec.next_send_at = sched.get(step_due_keys.get(next_step)) if next_step < 4 else None
+                if next_step >= 4:
+                    rec.status = "COMPLETED"
+                    rec.next_send_at = None
+                db.add(rec)
+                db.commit()
+                self._increment("followups_sent")
+                processed += 1
+                continue
+
+            if not getattr(self.settings, "REAL_OUTREACH_ENABLED", False):
+                logger.warning("Production follow-up skipped: REAL_OUTREACH_ENABLED is False")
+                continue
+
+        return processed
+
+    def _send_final_report_email(self, report_path: Path) -> dict[str, Any]:
+        """Send final report XLSX to internal email using existing Rediff transport."""
+        to_addr = "Bablu@oorjatechnical.org"
+        cc_addr = "piyushk@oorjatechnical.com"
+        counters = self._state["counters"]
+        subject = f"Salesoorja Daily Report - {self._state['business_date']} - {counters['enquiries']} Enquiries / {counters['emails_sent']} Sent"
+
+        if not self._rediff.system_available():
+            if self._mode() == "TEST":
+                return self._build_final_email_dry_run(report_path)
+            logger.info("Rediff transport unavailable; final report email marked NOT_READY")
+            return {"status": "NOT_READY", "reason": "REDIFF_SYSTEM_UNAVAILABLE"}
+
+        try:
+            sys_path = Path(self.settings.REDIFF_SYSTEM_PATH)
+            if str(sys_path) not in sys.path:
+                sys.path.insert(0, str(sys_path))
+            import config as rediff_cfg
+
+            smtp_server = getattr(rediff_cfg, "SMTP_SERVER", None)
+            smtp_port = getattr(rediff_cfg, "SMTP_PORT", 465)
+            email_addr = getattr(rediff_cfg, "EMAIL_ADDRESS", None)
+            email_pwd = getattr(rediff_cfg, "EMAIL_PASSWORD", None)
+
+            if not smtp_server or not email_addr or not email_pwd:
+                return {"status": "NOT_READY", "reason": "SMTP_CREDENTIALS_MISSING"}
+
+            msg = MIMEMultipart()
+            msg["From"] = email_addr
+            msg["To"] = to_addr
+            msg["CC"] = cc_addr
+            msg["Subject"] = subject
+
+            body = (
+                f"Salesoorja Operator Run Completed.\n\n"
+                f"Run ID: {self._state.get('run_id')}\n"
+                f"Mode: {self._state.get('mode')}\n"
+                f"Stop Reason: {self._state.get('stop_reason')}\n"
+                f"Companies Researched: {counters['companies_researched']}\n"
+                f"Qualified: {counters['qualified_opportunities']}\n"
+                f"Emails Sent: {counters['emails_sent']}\n"
+                f"Replies: {counters['replies']}\n"
+                f"Enquiries: {counters['enquiries']}\n"
+                f"Errors: {counters['failed']}\n\n"
+                f"Daily report attached: {report_path.name}"
+            )
+            msg.attach(MIMEText(body, "plain"))
+
+            if report_path.is_file():
+                part = MIMEApplication(report_path.read_bytes(), Name=report_path.name)
+                part["Content-Disposition"] = f'attachment; filename="{report_path.name}"'
+                msg.attach(part)
+
+            envelope = [to_addr, cc_addr]
+            server = smtplib.SMTP_SSL(
+                smtp_server,
+                smtp_port,
+                context=ssl.create_default_context(),
+                timeout=15,
+            )
+            try:
+                server.login(email_addr, email_pwd)
+                server.sendmail(email_addr, envelope, msg.as_string())
+            finally:
+                with contextlib.suppress(Exception):
+                    server.quit()
+
+            return {
+                "status": "SENT",
+                "to": to_addr,
+                "cc": [cc_addr],
+                "subject": subject,
+                "attachment": str(report_path),
+                "smtp_sent": True,
+            }
+        except Exception as exc:
+            logger.warning("Final report email could not be sent: %s", exc)
+            return {"status": "NOT_READY", "reason": f"{type(exc).__name__}: {exc}"}
 
     def finalize_run(self, *, reason: str = "MANUAL_STOP", status: str = "STOPPED") -> dict[str, Any]:
         with self._lock:
@@ -829,12 +1357,12 @@ class SalesoorjaOperator:
             )
             self._save_state()
         report_path = self._write_report()
-        final_email = self._build_final_email_dry_run(report_path)
+        final_email = self._send_final_report_email(report_path)
         self._update(
             status=status,
             report_path=str(report_path),
             final_report_email=final_email,
-            last_action="Run finalized; report email prepared in dry-run only",
+            last_action="Run finalized; daily report generated",
         )
         return {"finalized": True, "status": self.get_status()}
 
@@ -933,12 +1461,14 @@ class SalesoorjaOperator:
             "smtp_sent": False,
         }
 
+    _generate_final_report = _write_report
+
 
 salesoorja_operator = SalesoorjaOperator()
 
 
-def start_run(*, background: bool = True) -> dict[str, Any]:
-    return salesoorja_operator.start_run(background=background)
+def start_run(*, background: bool = True, use_celery: Optional[bool] = None) -> dict[str, Any]:
+    return salesoorja_operator.start_run(background=background, use_celery=use_celery)
 
 
 def stop_run(*, wait: bool = False) -> dict[str, Any]:
