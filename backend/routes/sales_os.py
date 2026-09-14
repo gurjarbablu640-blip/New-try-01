@@ -6,6 +6,7 @@ from typing import List, Optional
 import pandas as pd
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from database import SessionLocal
@@ -141,7 +142,17 @@ def sales_os_summary():
         open_opportunities = db.query(Opportunity).filter(Opportunity.stage.notin_(["Won", "Lost"])).count()
         active_tasks = db.query(SalesTask).filter(SalesTask.status == "Open").count()
         quotations = db.query(Quotation).filter(Quotation.status.notin_(["Won", "Lost"])).count()
+        leads_count = db.query(Company).count()
+        qualified_leads = db.query(Company).filter(Company.qualification_status == "QUALIFIED").count()
+        open_pipeline_value = float(
+            db.query(func.coalesce(func.sum(Opportunity.estimated_value), 0.0))
+            .filter(Opportunity.stage.notin_(["Won", "Lost"]))
+            .scalar() or 0.0
+        )
         return {
+            "leads_count": leads_count,
+            "qualified_leads": qualified_leads,
+            "open_pipeline_value": open_pipeline_value,
             "open_opportunities": open_opportunities,
             "active_tasks": active_tasks,
             "open_quotations": quotations,

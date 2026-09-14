@@ -232,6 +232,18 @@ class RediffSenderAdapter:
         if ready != "YES":
             return SUPPRESSED_NOT_READY, "READY_FOR_EMAIL must be YES"
 
+        pers_status = str(_value(record, "PERSONALIZATION_STATUS", "personalization_status", default="")).strip().upper()
+        if pers_status in {"PERSONALIZATION_REVIEW_REQUIRED", "DISQUALIFIED_WRONG_FACILITY", "FAILED"}:
+            return SUPPRESSED_NOT_READY, f"Personalization status '{pers_status}' requires human review before outreach"
+
+        raw_score = _value(record, "PERSONALIZATION_SCORE", "quality_score", default=None)
+        if raw_score is not None:
+            try:
+                if float(raw_score) < 85.0 and not self.config.test_mode:
+                    return SUPPRESSED_NOT_READY, f"Personalization quality score ({raw_score}) is below production threshold (85.0)"
+            except (ValueError, TypeError):
+                pass
+
         provenance = str(_value(record, "provenance", "PROVENANCE", default="REAL")).strip().upper()
         if not self.config.test_mode and provenance in TEST_PROVENANCE:
             return SUPPRESSED_TEST_DATA, "Synthetic, mock, demo, or test records cannot enter production handoff"

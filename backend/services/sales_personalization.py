@@ -476,6 +476,8 @@ class QualityValidationReport:
 class EmailQualityValidator:
     """Lightweight deterministic validator enforcing factual integrity and B2B sales quality."""
 
+    CONFIGURED_PERSONALIZATION_THRESHOLD = 85
+    MIN_QUALITY_SCORE_PRODUCTION = 85
     MIN_WORDS = 50
     MAX_WORDS = 190
     TARGET_MIN_WORDS = 75
@@ -704,7 +706,7 @@ class EmailQualityValidator:
                         score -= 10
 
         score = max(0, score)
-        valid = score >= 75 and not any(
+        valid = score >= self.MIN_QUALITY_SCORE_PRODUCTION and not any(
             "CLAIM_VIOLATION" in v
             or "FRAMEWORK_LEAKAGE" in v
             or "UNSUPPORTED_NUMERIC_ROI" in v

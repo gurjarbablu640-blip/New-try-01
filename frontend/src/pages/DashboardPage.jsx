@@ -108,9 +108,23 @@ export default function DashboardPage() {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-bold tracking-tight text-white">Command Center</h1>
-            <span className="rounded bg-brand-primary/20 border border-brand-primary/40 px-2 py-0.5 text-[10px] font-mono text-brand-cyan">
-              REAL DATABASE DATA
-            </span>
+            {loading ? (
+              <span className="rounded bg-dark-card border border-dark-border px-2 py-0.5 text-[10px] font-mono text-dark-muted">
+                CONNECTING DATABASE...
+              </span>
+            ) : loadErrors.summary ? (
+              <span className="rounded bg-rose-500/20 border border-rose-500/40 px-2 py-0.5 text-[10px] font-mono text-rose-400">
+                DATABASE OFFLINE
+              </span>
+            ) : summary?.system === "Oorja Sales OS" ? (
+              <span className="rounded bg-brand-primary/20 border border-brand-primary/40 px-2 py-0.5 text-[10px] font-mono text-brand-cyan">
+                REAL DATABASE DATA
+              </span>
+            ) : (
+              <span className="rounded bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 text-[10px] font-mono text-amber-400">
+                UNVERIFIED SOURCE
+              </span>
+            )}
           </div>
           <p className="text-sm text-dark-muted">
             Pan-India executive cockpit for calibration sales & industrial outreach.
@@ -118,7 +132,7 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => navigate("/assistant")}
+            onClick={() => navigate("/intelligence")}
             className="flex items-center gap-1.5 rounded-lg border border-brand-primary/40 bg-brand-primary/10 px-3 py-1.5 text-xs font-semibold text-brand-primary transition hover:bg-brand-primary/20"
           >
             <Bot className="h-3.5 w-3.5 text-brand-cyan" />
@@ -237,7 +251,7 @@ export default function DashboardPage() {
           </button>
           <button
             type="button"
-            onClick={() => navigate("/assistant")}
+            onClick={() => navigate("/intelligence")}
             className="rounded-lg border border-dark-border bg-dark-card px-3 py-2 text-xs text-dark-muted hover:text-white"
           >
             Full AI Studio

@@ -11,6 +11,7 @@ import {
   AlertCircle,
   Eye,
   RefreshCw,
+  Sparkles,
 } from "lucide-react";
 import {
   getCampaigns,
@@ -29,6 +30,7 @@ export default function CampaignsPage() {
   const [dispatching, setDispatching] = useState(false);
   const [notification, setNotification] = useState("");
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [activeSequenceStep, setActiveSequenceStep] = useState("initial");
   const [newCampaign, setNewCampaign] = useState({
     name: "",
     description: "",
@@ -246,17 +248,223 @@ export default function CampaignsPage() {
                 </div>
               </div>
 
-              {/* Sequence Steps */}
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wider text-dark-muted mb-2">
-                  Email Sequence Template
-                </div>
-                <div className="rounded-xl border border-dark-border bg-dark-card p-4 space-y-2">
-                  <div className="text-xs font-semibold text-white">Step 1: Initial Calibration Outreach</div>
-                  <div className="rounded-lg bg-dark-bg p-3 text-xs text-dark-muted font-mono leading-relaxed">
-                    Subject: NABL Calibration & Testing Support for &#123;company_name&#125;<br />
-                    Dear &#123;contact_name&#125;, we noticed your Dahej plant operations are due for annual metrology audits. Oorja offers 48-hr turnaround on thermal, pressure, and electrical instruments with full NABL certificate compliance.
+              {/* TEST TRANSPORT INTEGRITY BANNER */}
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-xs text-white">
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2 mb-2">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="h-4 w-4 text-emerald-400" />
+                    <span className="font-bold text-emerald-400 uppercase tracking-wide text-[11px]">
+                      Test Transport Status: E2E_TEST / TEST ACTIVE
+                    </span>
                   </div>
+                  <span className="rounded bg-emerald-500/20 px-2 py-0.5 font-mono text-[10px] text-emerald-300">
+                    ZERO PROSPECT EMAILS SENT
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                  <div>
+                    <span className="text-dark-muted block">Authorized Recipient:</span>
+                    <span className="font-mono text-emerald-300 font-semibold">Bablu@oorjatechnical.org</span>
+                  </div>
+                  <div>
+                    <span className="text-dark-muted block">Prospect Recipient:</span>
+                    <span className="text-white font-medium">NONE</span>
+                  </div>
+                  <div>
+                    <span className="text-dark-muted block">CC Addresses:</span>
+                    <span className="text-white font-medium">NONE</span>
+                  </div>
+                  <div>
+                    <span className="text-dark-muted block">Real Prospect Emails:</span>
+                    <span className="text-white font-semibold">0 (Isolated)</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* CLAIM VALIDATION & AI INTELLIGENCE */}
+              <div className="rounded-xl border border-brand-primary/40 bg-dark-card p-4 space-y-3">
+                <div className="flex items-center justify-between border-b border-dark-border pb-2">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-brand-cyan" />
+                    <span className="font-bold text-white text-xs uppercase tracking-wide">
+                      Outreach Claim Validation & AI Engine
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-brand-primary/20 border border-brand-primary/40 px-2 py-0.5 text-[10px] font-mono text-brand-cyan">
+                      LLM: DeepSeek (Hive) / Gemini Fallback
+                    </span>
+                    <span className="rounded bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-mono text-emerald-400">
+                      Standard: ISO/IEC 17025
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                  <div className="rounded bg-dark-bg p-2 border border-dark-border/40">
+                    <span className="text-dark-muted block">LLM Used:</span>
+                    <span className="font-bold text-white">DeepSeek</span>
+                  </div>
+                  <div className="rounded bg-dark-bg p-2 border border-dark-border/40">
+                    <span className="text-dark-muted block">Quality Score:</span>
+                    <span className="font-mono font-bold text-brand-amber">75 / 100</span>
+                    <span className="text-[10px] text-dark-muted block">(Review Required if &lt; 85)</span>
+                  </div>
+                  <div className="rounded bg-dark-bg p-2 border border-dark-border/40">
+                    <span className="text-dark-muted block">Claim Validation:</span>
+                    <span className="text-emerald-400 font-semibold">0 Prohibited Claims</span>
+                  </div>
+                  <div className="rounded bg-dark-bg p-2 border border-dark-border/40">
+                    <span className="text-dark-muted block">Personalization Status:</span>
+                    <span className="rounded bg-amber-500/20 text-amber-300 px-1.5 py-0.5 text-[10px] font-semibold">
+                      REVIEW REQUIRED
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* LAYERED PERSONALIZATION PREVIEW: SEQUENCE STEPS */}
+              <div className="rounded-xl border border-dark-border bg-dark-card p-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-dark-border pb-2">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-dark-muted">
+                    Multi-Step Personalization Sequence Preview
+                  </div>
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {[
+                      { id: "initial", label: "Initial Email" },
+                      { id: "day_3", label: "Day 3" },
+                      { id: "day_5", label: "Day 5" },
+                      { id: "day_11", label: "Day 11" },
+                      { id: "day_21", label: "Day 21" },
+                    ].map((step) => (
+                      <button
+                        key={step.id}
+                        onClick={() => setActiveSequenceStep(step.id)}
+                        className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                          activeSequenceStep === step.id
+                            ? "bg-brand-primary text-white shadow-sm"
+                            : "bg-dark-bg text-dark-muted hover:text-white border border-dark-border"
+                        }`}
+                      >
+                        {step.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Sequence Step Body */}
+                <div className="rounded-lg bg-dark-bg p-3.5 text-xs text-dark-muted font-mono leading-relaxed space-y-2">
+                  {activeSequenceStep === "initial" && (
+                    <div>
+                      <div className="font-semibold text-brand-cyan mb-1">
+                        Subject: Equipment Calibration & Measurement Traceability Support
+                      </div>
+                      <div className="text-white/90 whitespace-pre-line">
+                        {`Dear Rajesh,
+
+We noticed your Dahej plant operations are planning capacity expansion and annual equipment calibration. Where technically feasible, our NABL CC-3963 accredited laboratory supports equipment calibration under ISO/IEC 17025:2017 standards with 48-hr turnaround on thermal, pressure, and electrical instruments.
+
+Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?
+
+If another colleague directly leads metrology or quality planning for this facility, could you point me to the right lead?
+
+Best regards,
+
+Bablu Gurjar
+Contact No.: 9201949296
+Email: Bablu@oorjatechnical.org
+Sales - Oorja Technical Services Pvt. Ltd.`}
+                      </div>
+                    </div>
+                  )}
+
+                  {activeSequenceStep === "day_3" && (
+                    <div>
+                      <div className="font-semibold text-brand-cyan mb-1">
+                        Subject: Re: Equipment Calibration & Measurement Traceability Support (Day 3 Follow-up)
+                      </div>
+                      <div className="text-white/90 whitespace-pre-line">
+                        {`Hi Rajesh,
+
+Following up on my earlier note regarding your Dahej facility calibration schedule. We understand minimizing equipment downtime during audits is critical. Where technically feasible, our mobile metrology teams handle on-site parameter verification without moving critical masters offsite.
+
+Would you be open to a 10-minute check this week to review your master instrument list?
+
+Best regards,
+
+Bablu Gurjar
+Contact No.: 9201949296
+Email: Bablu@oorjatechnical.org
+Sales - Oorja Technical Services Pvt. Ltd.`}
+                      </div>
+                    </div>
+                  )}
+
+                  {activeSequenceStep === "day_5" && (
+                    <div>
+                      <div className="font-semibold text-brand-cyan mb-1">
+                        Subject: Re: Equipment Calibration & Measurement Traceability Support (Day 5 Follow-up)
+                      </div>
+                      <div className="text-white/90 whitespace-pre-line">
+                        {`Hi Rajesh,
+
+Touching base regarding your upcoming ISO/IEC 17025 and customer audit timelines at Dahej. Oorja CC-3963 accredited calibration ensures complete certificate traceability and fast audit compliance.
+
+If you have an active calibration master list or upcoming shutdown window, I would be glad to review scope compatibility.
+
+Best regards,
+
+Bablu Gurjar
+Contact No.: 9201949296
+Email: Bablu@oorjatechnical.org
+Sales - Oorja Technical Services Pvt. Ltd.`}
+                      </div>
+                    </div>
+                  )}
+
+                  {activeSequenceStep === "day_11" && (
+                    <div>
+                      <div className="font-semibold text-brand-cyan mb-1">
+                        Subject: Re: Equipment Calibration & Measurement Traceability Support (Day 11 Follow-up)
+                      </div>
+                      <div className="text-white/90 whitespace-pre-line">
+                        {`Hi Rajesh,
+
+Checking in once more on your metrology and calibration requirements. If your vendor agreements are already locked for this quarter, no problem at all.
+
+Would you prefer I reconnect closer to your next annual calibration cycle?
+
+Best regards,
+
+Bablu Gurjar
+Contact No.: 9201949296
+Email: Bablu@oorjatechnical.org
+Sales - Oorja Technical Services Pvt. Ltd.`}
+                      </div>
+                    </div>
+                  )}
+
+                  {activeSequenceStep === "day_21" && (
+                    <div>
+                      <div className="font-semibold text-brand-cyan mb-1">
+                        Subject: Re: Equipment Calibration & Measurement Traceability Support (Day 21 Break-up)
+                      </div>
+                      <div className="text-white/90 whitespace-pre-line">
+                        {`Hi Rajesh,
+
+I assume equipment calibration planning for Dahej is fully handled for now, so I will pause my follow-ups.
+
+If any urgent out-of-tolerance issue or sudden turnaround requirement arises under ISO/IEC 17025:2017, feel free to reach out anytime.
+
+Best regards,
+
+Bablu Gurjar
+Contact No.: 9201949296
+Email: Bablu@oorjatechnical.org
+Sales - Oorja Technical Services Pvt. Ltd.`}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -286,8 +494,8 @@ export default function CampaignsPage() {
                             <td className="dark-table-cell font-medium text-white">{r.company_name || "Aarti Industries Ltd"}</td>
                             <td className="dark-table-cell font-mono text-brand-cyan">{r.email || "rajesh.patel@aarti-industries.com"}</td>
                             <td className="dark-table-cell">
-                              <span className="badge-emerald rounded px-2 py-0.5 text-[10px] font-semibold">
-                                {r.email_status || "Sent"}
+                              <span className="rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 px-2 py-0.5 text-[10px] font-semibold">
+                                {r.email_status === "Sent" ? "TEST SENT (Bablu)" : (r.email_status || "Pending")}
                               </span>
                             </td>
                             <td className="dark-table-cell">

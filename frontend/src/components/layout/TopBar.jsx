@@ -112,7 +112,7 @@ export default function TopBar({ onOpenCompany, collapsed }) {
 
         {/* Ask Oorja Quick AI button */}
         <button
-          onClick={() => navigate("/assistant")}
+          onClick={() => navigate("/intelligence")}
           className="flex items-center gap-2 rounded-lg border border-brand-primary/40 bg-gradient-to-r from-brand-primary/20 to-brand-secondary/20 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:border-brand-primary hover:from-brand-primary/30 hover:to-brand-secondary/30"
         >
           <Bot className="h-4 w-4 text-brand-cyan" />

@@ -994,6 +994,51 @@ class TestSalesPersonalizationPipeline(unittest.TestCase):
         for stage in ["day_3", "day_5", "day_11", "day_21"]:
             self.assertEqual(result["followups"][stage].count("Bablu Gurjar"), 1)
 
+    def test_score_75_requires_review_and_cannot_enter_production(self):
+        """A personalization quality score of 75 MUST produce PERSONALIZATION_REVIEW_REQUIRED and be suppressed from production."""
+        record = _base_record()
+        context = build_personalization_context(record)
+
+        # Build copy that misses company name (-15) and referral CTA (-10) -> score 75
+        body_75 = (
+            f"Dear Krishna,\n\n"
+            f"We understand your Plant V operations in Baliguma are ramping up precision manufacturing activities. "
+            f"Where technically feasible, our NABL CC-3963 accredited laboratory supports high-precision equipment calibration under ISO/IEC 17025:2017 standards. "
+            f"Our team provides on-site measurement verification and calibration services tailored for industrial production lines.\n\n"
+            f"Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?\n\n"
+            f"{STANDARD_SIGNATURE_TEXT}"
+        )
+        report = self.validator.validate(
+            subject="Equipment Calibration Support",
+            body=body_75,
+            followups={
+                "day_3": f"Regarding your calibration schedule at Plant V.\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_5": f"Following up on metrology planning.\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_11": f"Touching base on ISO/IEC 17025 compliance support.\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_21": f"Final check on equipment calibration requirements.\n\n{STANDARD_SIGNATURE_TEXT}",
+            },
+            context=context,
+        )
+        self.assertEqual(report.score, 75)
+        self.assertFalse(report.valid)
+        self.assertEqual(report.status, "PERSONALIZATION_REVIEW_REQUIRED")
+
+        # Test Rediff production handoff gate suppresses score 75 / review required
+        from services.rediff_sender_adapter import RediffSenderAdapter, SUPPRESSED_NOT_READY
+        from services.opportunity_gates import evaluate_opportunity_gates
+        adapter = RediffSenderAdapter()
+        suppressed_record = {
+            "COMPANY": "CG Power and Industrial Solutions Limited",
+            "EMAIL": "pradeep.deo@cgpower.com",
+            "READY_FOR_EMAIL": "YES",
+            "PERSONALIZATION_STATUS": report.status,
+            "PERSONALIZATION_SCORE": report.score,
+            "evidence": record["evidence"],
+        }
+        res = adapter.prepare_handoff(suppressed_record, campaign="test-campaign")
+        self.assertEqual(res["status"], SUPPRESSED_NOT_READY)
+        self.assertIn("requires human review", res["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -30,6 +30,7 @@ export default function App() {
           <Route path="calibration" element={<CalibrationPage />} />
           <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="assistant" element={<Navigate to="/intelligence" replace />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Routes>
