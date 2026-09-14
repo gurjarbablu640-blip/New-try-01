@@ -27,6 +27,7 @@ backend/data/runtime_state/search_provider_cache.json
 backend/data/runtime_state/serper_budget_state.json
 backend/data/runtime_state/
 backend/data/daily_reports/
+backend/data/rediff_transport_runs/
 backend/tests/.tmp/
 pytest_basetemp/
 

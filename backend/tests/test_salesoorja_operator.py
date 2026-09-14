@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from openpyxl import load_workbook
 
 from services.rediff_sender_adapter import RediffAdapterConfig, RediffSenderAdapter
+from services.rediff_transport_bridge import TEST_TRANSPORT_AUTHORIZATION, RediffTransportBridge
 from services.salesoorja_operator import REPORT_SHEETS, SalesoorjaOperator
 
 
@@ -43,7 +44,7 @@ def _settings(**overrides):
     return SimpleNamespace(**values)
 
 
-def _operator(tmp_path: Path, **settings_overrides) -> SalesoorjaOperator:
+def _operator(tmp_path: Path, transport_bridge=None, **settings_overrides) -> SalesoorjaOperator:
     rediff = RediffSenderAdapter(
         config=RediffAdapterConfig(
             enabled=False,
@@ -62,6 +63,7 @@ def _operator(tmp_path: Path, **settings_overrides) -> SalesoorjaOperator:
         now=lambda: NOW,
         db_factory=None,
         rediff_adapter=rediff,
+        transport_bridge=transport_bridge,
     )
 
 
@@ -168,3 +170,47 @@ def test_invalid_mode_is_rejected_without_starting(tmp_path):
         "reason": "INVALID_MODE",
         "errors": ["SALESOORJA_MODE must be TEST or PRODUCTION"],
     }
+
+
+def test_controlled_transport_receipt_persists_and_blocks_restart_duplicate(tmp_path):
+    calls = []
+
+    def worker(command, **kwargs):
+        calls.append(command)
+        result_path = Path(command[command.index("--result") + 1])
+        result_path.write_text(
+            '{"transport_status":"SENT","message_id":null,"error":null}',
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    system = tmp_path / "Rediff_Email_System"
+    system.mkdir()
+    (system / "campaign_runner.py").write_text("# marker\n", encoding="utf-8")
+    bridge = RediffTransportBridge(
+        system_path=system,
+        run_dir=tmp_path / "transport-runs",
+        enabled=True,
+        process_runner=worker,
+        now=lambda: NOW,
+    )
+    operator = _operator(tmp_path, transport_bridge=bridge)
+
+    first = operator.execute_controlled_transport_test(authorization=TEST_TRANSPORT_AUTHORIZATION)
+
+    assert first["handoff_status"] == "HANDOFF_CREATED"
+    assert first["quality_score"] >= 85
+    assert first["receipt"]["transport_status"] == "SENT"
+    assert first["status"]["counters"]["emails_sent"] == 1
+    assert first["status"]["counters"]["test_emails_sent"] == 1
+    assert first["status"]["counters"]["production_emails_sent"] == 0
+    assert first["status"]["counters"]["real_prospect_emails_sent"] == 0
+    assert first["status"]["transport_receipt_count"] == 1
+
+    restarted = _operator(tmp_path, transport_bridge=bridge)
+    second = restarted.execute_controlled_transport_test(authorization=TEST_TRANSPORT_AUTHORIZATION)
+
+    assert second["receipt"]["transport_status"] == "SUPPRESSED_DUPLICATE_TRANSPORT"
+    assert second["status"]["counters"]["emails_sent"] == 1
+    assert second["status"]["transport_receipt_count"] == 1
+    assert len(calls) == 1

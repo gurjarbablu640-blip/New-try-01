@@ -18,6 +18,10 @@ from openpyxl import Workbook
 from config import settings
 from database import SessionLocal
 from services.rediff_sender_adapter import DRY_RUN_READY, QUEUED, SENT, RediffSenderAdapter
+from services.rediff_transport_bridge import (
+    SUPPRESSED_DUPLICATE_TRANSPORT,
+    RediffTransportBridge,
+)
 from services.sales_personalization import SalesPersonalizationPipeline
 
 logger = logging.getLogger(__name__)
@@ -35,6 +39,9 @@ COUNTER_KEYS = (
     "held",
     "failed",
     "rediff_handoffs",
+    "test_emails_sent",
+    "production_emails_sent",
+    "real_prospect_emails_sent",
 )
 PROVIDER_KEYS = (
     "Serper",
@@ -92,6 +99,7 @@ class SalesoorjaOperator:
         personalization_pipeline: Optional[SalesPersonalizationPipeline] = None,
         rediff_adapter: Optional[RediffSenderAdapter] = None,
         imap_poll_fn: Optional[Callable[..., dict[str, Any]]] = None,
+        transport_bridge: Optional[RediffTransportBridge] = None,
     ) -> None:
         self.settings = settings_obj
         self.state_path = state_path or BACKEND_ROOT / "data" / "runtime_state" / "operator_state.json"
@@ -103,6 +111,7 @@ class SalesoorjaOperator:
         self._personalization = personalization_pipeline or SalesPersonalizationPipeline()
         self._rediff = rediff_adapter or RediffSenderAdapter()
         self._imap_poll_fn = imap_poll_fn
+        self._transport_bridge = transport_bridge or RediffTransportBridge()
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -136,6 +145,7 @@ class SalesoorjaOperator:
             "provider_usage": deepcopy(previous.get("provider_usage")) if same_day else {key: 0 for key in PROVIDER_KEYS},
             "processed_accounts": list(previous.get("processed_accounts") or []) if same_day else [],
             "records": deepcopy(previous.get("records")) if same_day else {sheet: [] for sheet in REPORT_SHEETS},
+            "transport_receipts": deepcopy(previous.get("transport_receipts")) if same_day else [],
         }
 
     def _load_state(self) -> dict[str, Any]:
@@ -147,6 +157,7 @@ class SalesoorjaOperator:
                     loaded.setdefault("provider_usage", {key: 0 for key in PROVIDER_KEYS})
                     loaded.setdefault("processed_accounts", [])
                     loaded.setdefault("records", {sheet: [] for sheet in REPORT_SHEETS})
+                    loaded.setdefault("transport_receipts", [])
                     for key in COUNTER_KEYS:
                         loaded["counters"].setdefault(key, 0)
                     for key in PROVIDER_KEYS:
@@ -264,12 +275,112 @@ class SalesoorjaOperator:
         with self._lock:
             state = deepcopy(self._state)
         state.pop("records", None)
+        receipts = state.pop("transport_receipts", [])
+        state["transport_receipt_count"] = len(receipts)
+        state["last_transport_receipt"] = receipts[-1] if receipts else None
         state["daily_send_target"] = int(getattr(self.settings, "DAILY_SEND_TARGET", 150))
         state["daily_send_max"] = int(getattr(self.settings, "DAILY_SEND_MAX", 250))
         state["start_time"] = str(getattr(self.settings, "SALESOORJA_START_TIME", "09:00"))
         state["end_time"] = str(getattr(self.settings, "SALESOORJA_END_TIME", "18:00"))
         state["production_guard_errors"] = self._production_errors()
         return state
+
+    def execute_controlled_transport_test(self, *, authorization: str, dispatch: bool = True) -> dict[str, Any]:
+        if self._mode() != "TEST":
+            raise PermissionError("CONTROLLED_TRANSPORT_REQUIRES_TEST_MODE")
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                raise RuntimeError("OPERATOR_RUN_ALREADY_ACTIVE")
+            self._state = self._new_state(preserve_history=True)
+            self._state.update(
+                status="RUNNING",
+                mode="TEST",
+                started_at=self._state.get("started_at") or _iso(self._now()),
+                ended_at=None,
+                stop_reason=None,
+                last_error=None,
+                last_action="Preparing controlled Rediff transport test",
+            )
+            self._save_state()
+
+        record = self._synthetic_record()
+        record["record_id"] = "operator-rediff-transport-control-v1"
+        personalized = self._personalization.personalize_record(record, force_provider="DETERMINISTIC")
+        quality_score = float(personalized.get("quality_score") or 0)
+        if personalized.get("status") != "VALIDATED" or quality_score < 85:
+            raise RuntimeError("CONTROLLED_TEST_PERSONALIZATION_FAILED")
+        prepared_record = self._personalization.enrich_record_for_rediff(record, personalized)
+        prepared_record["PERSONALIZATION_STATUS"] = personalized["status"]
+        prepared_record["PERSONALIZATION_SCORE"] = quality_score
+        handoff = self._rediff.prepare_handoff(
+            prepared_record,
+            campaign="salesoorja-operator-transport-test",
+            followup_stage="INITIAL",
+        )
+        if handoff.get("status") != DRY_RUN_READY:
+            raise RuntimeError(f"CONTROLLED_TEST_HANDOFF_FAILED:{handoff.get('reason')}")
+        self._update(last_action="Rediff handoff created; invoking authorized TEST transport")
+        with self._lock:
+            receipts = deepcopy(self._state.get("transport_receipts") or [])
+            run_id = str(self._state["run_id"])
+        receipt = self._transport_bridge.execute_test_transport(
+            mapped_record=handoff["mapped_record"],
+            run_id=run_id,
+            company_reference=prepared_record.get("company"),
+            person_reference=prepared_record.get("person"),
+            campaign_reference="salesoorja-operator-transport-test",
+            initial_or_followup="INITIAL",
+            authorization=authorization,
+            existing_receipts=receipts,
+            mode="TEST",
+            dispatch=dispatch,
+        )
+        if dispatch and receipt.get("transport_status") != SUPPRESSED_DUPLICATE_TRANSPORT:
+            with self._lock:
+                self._state["transport_receipts"].append(receipt)
+                self._save_state()
+        if receipt.get("transport_status") == "SENT" and receipt.get("smtp_sent") is True:
+            self._increment("emails_sent")
+            self._increment("test_emails_sent")
+            self._append_record(
+                "SENT",
+                {
+                    "company": prepared_record.get("company"),
+                    "person": prepared_record.get("person"),
+                    "recipient": receipt.get("recipient"),
+                    "original_prospect_email": receipt.get("original_prospect_email"),
+                    "quality_score": quality_score,
+                    "transport_status": "SENT",
+                    "test_mode": True,
+                },
+            )
+        elif dispatch and receipt.get("transport_status") == "FAILED":
+            self._increment("failed")
+            self._append_record(
+                "ERRORS",
+                {
+                    "stage": "rediff_transport",
+                    "error": receipt.get("error"),
+                    "attempt_number": receipt.get("attempt_number"),
+                },
+            )
+        self._update(
+            status="STOPPED",
+            ended_at=_iso(self._now()),
+            stop_reason="CONTROLLED_TRANSPORT_TEST" if dispatch else "CONTROLLED_TRANSPORT_PREVIEW",
+            last_error=receipt.get("error"),
+            last_action=(
+                "Duplicate transport blocked from persisted receipt"
+                if receipt.get("transport_status") == SUPPRESSED_DUPLICATE_TRANSPORT
+                else f"Controlled Rediff transport {'finished' if dispatch else 'preview'}: {receipt.get('transport_status')}"
+            ),
+        )
+        return {
+            "quality_score": quality_score,
+            "handoff_status": "HANDOFF_CREATED",
+            "receipt": receipt,
+            "status": self.get_status(),
+        }
 
     def _run_safely(self) -> None:
         try:

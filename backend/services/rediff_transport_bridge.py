@@ -1,0 +1,305 @@
+"""Guarded execution bridge to the existing Rediff SMTP transport."""
+
+from __future__ import annotations
+
+import csv
+import json
+import subprocess
+import sys
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Mapping, Optional, Sequence
+
+from config import settings
+from services.rediff_sender_adapter import BACKEND_ROOT, REDIFF_CSV_FIELDS
+
+TEST_RECIPIENT = "Bablu@oorjatechnical.org"
+TEST_TRANSPORT_AUTHORIZATION = "SEND_ONE_REDIFF_TEST_TO_BABLU"
+SUPPRESSED_DUPLICATE_TRANSPORT = "SUPPRESSED_DUPLICATE_TRANSPORT"
+MAX_TRANSPORT_ATTEMPTS = 2
+
+
+class RediffTransportBridge:
+    """Execute a prepared Salesoorja record through Rediff in isolated TEST mode."""
+
+    def __init__(
+        self,
+        *,
+        system_path: Optional[Path] = None,
+        run_dir: Optional[Path] = None,
+        timeout_seconds: Optional[int] = None,
+        enabled: Optional[bool] = None,
+        process_runner: Callable[..., Any] = subprocess.run,
+        now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    ) -> None:
+        self.system_path = Path(system_path or settings.REDIFF_SYSTEM_PATH)
+        self.run_dir = run_dir or BACKEND_ROOT / "data" / "rediff_transport_runs"
+        self.timeout_seconds = int(timeout_seconds or settings.REDIFF_TRANSPORT_TIMEOUT_SECONDS)
+        self.enabled = bool(settings.REDIFF_TEST_TRANSPORT_ENABLED if enabled is None else enabled)
+        self._process_runner = process_runner
+        self._now = now
+
+    def available(self) -> bool:
+        return self.system_path.is_dir() and (self.system_path / "campaign_runner.py").is_file()
+
+    @staticmethod
+    def duplicate_key(
+        *,
+        person_reference: Any,
+        original_prospect_email: str,
+        campaign_reference: str,
+        initial_or_followup: str,
+    ) -> str:
+        parts = (
+            str(person_reference or "").strip().casefold(),
+            str(original_prospect_email or "").strip().casefold(),
+            str(campaign_reference or "").strip().casefold(),
+            str(initial_or_followup or "INITIAL").strip().casefold(),
+        )
+        return "|".join(parts)
+
+    def execute_test_transport(
+        self,
+        *,
+        mapped_record: Mapping[str, Any],
+        run_id: str,
+        company_reference: Any = None,
+        person_reference: Any = None,
+        campaign_reference: str = "salesoorja-operator-transport-test",
+        initial_or_followup: str = "INITIAL",
+        authorization: str,
+        existing_receipts: Sequence[Mapping[str, Any]] = (),
+        mode: str = "TEST",
+        dispatch: bool = True,
+    ) -> dict[str, Any]:
+        original_prospect_email = str(mapped_record.get("EMAIL") or mapped_record.get("EMAIL_ID") or "").strip()
+        duplicate_key = self.duplicate_key(
+            person_reference=person_reference or mapped_record.get("CONTACT_NAME"),
+            original_prospect_email=original_prospect_email,
+            campaign_reference=campaign_reference,
+            initial_or_followup=initial_or_followup,
+        )
+        attempt_number = 1 + sum(1 for receipt in existing_receipts if receipt.get("duplicate_key") == duplicate_key)
+        prior_sent = next(
+            (
+                receipt
+                for receipt in existing_receipts
+                if receipt.get("duplicate_key") == duplicate_key and receipt.get("transport_status") == "SENT"
+            ),
+            None,
+        )
+        if prior_sent:
+            return {
+                "transport_status": SUPPRESSED_DUPLICATE_TRANSPORT,
+                "duplicate_key": duplicate_key,
+                "duplicate_of": prior_sent.get("receipt_id"),
+                "transport_called": False,
+                "smtp_sent": False,
+                "recipient": TEST_RECIPIENT,
+                "original_prospect_email": original_prospect_email,
+                "test_mode": True,
+                "attempt_number": attempt_number,
+                "initial_or_followup": initial_or_followup,
+            }
+        if attempt_number > MAX_TRANSPORT_ATTEMPTS:
+            return self._failed_receipt(
+                run_id=run_id,
+                company_reference=company_reference,
+                person_reference=person_reference,
+                campaign_reference=campaign_reference,
+                original_prospect_email=original_prospect_email,
+                initial_or_followup=initial_or_followup,
+                attempt_number=attempt_number,
+                duplicate_key=duplicate_key,
+                error="REDIFF_TRANSPORT_RETRY_LIMIT_REACHED",
+                state_history=["READY_FOR_EMAIL", "HANDOFF_CREATED"],
+                transport_called=False,
+            )
+
+        self._assert_test_authorization(
+            authorization=authorization,
+            mode=mode,
+            actual_to=TEST_RECIPIENT,
+            cc=(),
+            bcc=(),
+            original_prospect_email=original_prospect_email,
+        )
+        if dispatch and not self.enabled:
+            return self._failed_receipt(
+                run_id=run_id,
+                company_reference=company_reference,
+                person_reference=person_reference,
+                campaign_reference=campaign_reference,
+                original_prospect_email=original_prospect_email,
+                initial_or_followup=initial_or_followup,
+                attempt_number=attempt_number,
+                duplicate_key=duplicate_key,
+                error="REDIFF_TEST_TRANSPORT_DISABLED",
+                state_history=["READY_FOR_EMAIL", "HANDOFF_CREATED"],
+                transport_called=False,
+            )
+        if not self.available():
+            return self._failed_receipt(
+                run_id=run_id,
+                company_reference=company_reference,
+                person_reference=person_reference,
+                campaign_reference=campaign_reference,
+                original_prospect_email=original_prospect_email,
+                initial_or_followup=initial_or_followup,
+                attempt_number=attempt_number,
+                duplicate_key=duplicate_key,
+                error="REDIFF_SYSTEM_UNAVAILABLE",
+                state_history=["READY_FOR_EMAIL", "HANDOFF_CREATED"],
+                transport_called=False,
+            )
+
+        execution_id = f"rediff-test-{uuid.uuid4().hex[:12]}"
+        execution_dir = self.run_dir / execution_id
+        execution_dir.mkdir(parents=True, exist_ok=False)
+        csv_path = execution_dir / "prepared_record.csv"
+        html_path = execution_dir / "operator_transport_test.html"
+        result_path = execution_dir / "transport_result.json"
+        self._write_csv(csv_path, mapped_record)
+        html_path.write_text(self._test_html(), encoding="utf-8")
+
+        worker = BACKEND_ROOT / "scripts" / "rediff_transport_worker.py"
+        command = [
+            sys.executable,
+            str(worker),
+            "--system-path",
+            str(self.system_path),
+            "--csv",
+            str(csv_path),
+            "--html",
+            str(html_path),
+            "--result",
+            str(result_path),
+            "--recipient",
+            TEST_RECIPIENT,
+        ]
+        if not dispatch:
+            command.append("--preview")
+        state_history = ["READY_FOR_EMAIL", "HANDOFF_CREATED"]
+        if dispatch:
+            state_history.append("SEND_ATTEMPTED")
+        try:
+            completed = self._process_runner(
+                command,
+                cwd=str(execution_dir),
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+                check=False,
+            )
+            worker_result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else {}
+            sent = completed.returncode == 0 and worker_result.get("transport_status") == "SENT"
+            ready = completed.returncode == 0 and worker_result.get("transport_status") == "READY"
+        except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError):
+            worker_result = {}
+            sent = False
+            ready = False
+
+        sent_at = self._now().isoformat() if sent else None
+        transport_status = "SENT" if sent else "READY" if ready and not dispatch else "FAILED"
+        state_history.append(transport_status)
+        return {
+            "receipt_id": f"receipt-{uuid.uuid4().hex[:12]}",
+            "run_id": run_id,
+            "company_reference": company_reference,
+            "person_reference": person_reference,
+            "campaign_reference": campaign_reference,
+            "recipient": TEST_RECIPIENT,
+            "original_prospect_email": original_prospect_email,
+            "test_mode": True,
+            "sent_at": sent_at,
+            "transport": "EXISTING_REDIFF_CAMPAIGN_RUNNER",
+            "transport_status": transport_status,
+            "message_id": worker_result.get("message_id"),
+            "attempt_number": attempt_number,
+            "initial_or_followup": initial_or_followup,
+            "error": None if sent or transport_status == "READY" else str(worker_result.get("error") or "REDIFF_TRANSPORT_FAILED"),
+            "duplicate_key": duplicate_key,
+            "transport_called": dispatch,
+            "smtp_sent": sent,
+            "actual_to": TEST_RECIPIENT,
+            "cc": [],
+            "bcc": [],
+            "prospect_recipient_count": 0,
+            "state_history": state_history,
+        }
+
+    @staticmethod
+    def _assert_test_authorization(
+        *,
+        authorization: str,
+        mode: str,
+        actual_to: str,
+        cc: Sequence[str],
+        bcc: Sequence[str],
+        original_prospect_email: str,
+    ) -> None:
+        if authorization != TEST_TRANSPORT_AUTHORIZATION:
+            raise PermissionError("CONTROLLED_TEST_AUTHORIZATION_REQUIRED")
+        if str(mode).upper() != "TEST":
+            raise PermissionError("CONTROLLED_TRANSPORT_REQUIRES_TEST_MODE")
+        if actual_to.casefold() != TEST_RECIPIENT.casefold():
+            raise PermissionError("TEST_RECIPIENT_OVERRIDE_FAILED")
+        if cc or bcc:
+            raise PermissionError("TEST_TRANSPORT_REQUIRES_ZERO_CC_AND_BCC")
+        if original_prospect_email.casefold() == actual_to.casefold():
+            return
+        if not original_prospect_email:
+            raise PermissionError("ORIGINAL_PROSPECT_METADATA_REQUIRED")
+
+    @staticmethod
+    def _write_csv(path: Path, mapped_record: Mapping[str, Any]) -> None:
+        with path.open("x", newline="", encoding="utf-8-sig") as handle:
+            writer = csv.DictWriter(handle, fieldnames=REDIFF_CSV_FIELDS)
+            writer.writeheader()
+            writer.writerow({field: mapped_record.get(field, "") for field in REDIFF_CSV_FIELDS})
+
+    @staticmethod
+    def _test_html() -> str:
+        return """<html><body>SALESOORJA OPERATOR TRANSPORT TEST<br><br>This email proves that the autonomous Salesoorja operator successfully passed qualification, personalization, readiness, Rediff transport and receipt persistence.<br><br>No real prospect received this message.</body></html>"""
+
+    def _failed_receipt(
+        self,
+        *,
+        run_id: str,
+        company_reference: Any,
+        person_reference: Any,
+        campaign_reference: str,
+        original_prospect_email: str,
+        initial_or_followup: str,
+        attempt_number: int,
+        duplicate_key: str,
+        error: str,
+        state_history: list[str],
+        transport_called: bool,
+    ) -> dict[str, Any]:
+        return {
+            "receipt_id": f"receipt-{uuid.uuid4().hex[:12]}",
+            "run_id": run_id,
+            "company_reference": company_reference,
+            "person_reference": person_reference,
+            "campaign_reference": campaign_reference,
+            "recipient": TEST_RECIPIENT,
+            "original_prospect_email": original_prospect_email,
+            "test_mode": True,
+            "sent_at": None,
+            "transport": "EXISTING_REDIFF_CAMPAIGN_RUNNER",
+            "transport_status": "FAILED",
+            "message_id": None,
+            "attempt_number": attempt_number,
+            "initial_or_followup": initial_or_followup,
+            "error": error,
+            "duplicate_key": duplicate_key,
+            "transport_called": transport_called,
+            "smtp_sent": False,
+            "actual_to": TEST_RECIPIENT,
+            "cc": [],
+            "bcc": [],
+            "prospect_recipient_count": 0,
+            "state_history": state_history + ["FAILED"],
+        }

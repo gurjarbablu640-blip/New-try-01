@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     REDIFF_HANDOFF_DIR: str = "data/rediff_handoff"
     REDIFF_CC_ADDRESSES: str = "Bablu@oorjatechnical.org,piyushk@oorjatechnical.com"
     REDIFF_DUPLICATE_WINDOW_DAYS: int = 14
+    REDIFF_TEST_TRANSPORT_ENABLED: bool = False
+    REDIFF_TRANSPORT_TIMEOUT_SECONDS: int = 120
 
     # One-click autonomous operator
     SALESOORJA_MODE: str = "TEST"
