@@ -384,6 +384,7 @@ def search_apollo_people_candidates(
 
     payload = {
         "q_organization_names": [company_name],
+        "q_keywords": company_name,
         "person_titles": list(titles or APOLLO_PERSON_ROLE_FAMILIES),
         "person_locations": [location for location in (locations or []) if location],
         "page": 1,
@@ -578,6 +579,8 @@ def enrich_specific_person(
     person_name: str,
     company_name: str,
     title: Optional[str] = None,
+    apollo_id: Optional[str] = None,
+    linkedin_url: Optional[str] = None,
 ) -> dict[str, Any]:
     """Enrich a SPECIFIC known person via Apollo.
 
@@ -629,6 +632,10 @@ def enrich_specific_person(
     }
     if title:
         payload["title"] = title
+    if apollo_id:
+        payload["id"] = apollo_id
+    if linkedin_url:
+        payload["linkedin_url"] = linkedin_url
 
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=20)
