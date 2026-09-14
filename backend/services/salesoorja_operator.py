@@ -32,7 +32,18 @@ from services.rediff_transport_bridge import (
 )
 from services.sales_personalization import SalesPersonalizationPipeline
 
+try:
+    import redis
+    REDIS_AVAILABLE = True
+except ImportError:
+    redis = None  # type: ignore
+    REDIS_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
+REDIS_KEY_OPERATOR_STATE = "salesoorja:operator:state"
+REDIS_KEY_OPERATOR_STOP = "salesoorja:operator:stop"
+REDIS_KEY_OPERATOR_LOCK = "salesoorja:operator:lock"
 
 COUNTER_KEYS = (
     "companies_researched",
@@ -108,6 +119,7 @@ class SalesoorjaOperator:
         rediff_adapter: Optional[RediffSenderAdapter] = None,
         imap_poll_fn: Optional[Callable[..., dict[str, Any]]] = None,
         transport_bridge: Optional[RediffTransportBridge] = None,
+        redis_client: Optional[Any] = None,
     ) -> None:
         self.settings = settings_obj
         self.state_path = state_path or BACKEND_ROOT / "data" / "runtime_state" / "operator_state.json"
@@ -120,14 +132,56 @@ class SalesoorjaOperator:
         self._rediff = rediff_adapter or RediffSenderAdapter()
         self._imap_poll_fn = imap_poll_fn
         self._transport_bridge = transport_bridge or RediffTransportBridge()
+        self._redis = redis_client
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._stop_signal_path = (state_path or BACKEND_ROOT / "data" / "runtime_state" / "operator_state.json").parent / "operator_stop.signal"
         self._thread: Optional[threading.Thread] = None
         self._state = self._load_state()
 
+    def _get_redis(self) -> Optional[Any]:
+        """Return connected Redis client for authoritative live operator state."""
+        if self._redis is not None:
+            return self._redis
+        if not REDIS_AVAILABLE:
+            return None
+        try:
+            url = str(
+                getattr(self.settings, "REDIS_URL", None)
+                or getattr(self.settings, "CELERY_BROKER_URL", None)
+                or "redis://localhost:6379/0"
+            )
+            client = redis.Redis.from_url(url, decode_responses=True, socket_timeout=1.5)
+            client.ping()
+            self._redis = client
+            return self._redis
+        except Exception as exc:
+            logger.debug("Redis connection unavailable for operator: %s", exc)
+            return None
+
     def _mode(self) -> str:
         return str(getattr(self.settings, "SALESOORJA_MODE", "TEST") or "TEST").strip().upper()
+
+    def _normalize_state(self, loaded: dict[str, Any]) -> dict[str, Any]:
+        """Ensure all required counters, provider usage, and lifecycle keys are present."""
+        loaded.setdefault("counters", {key: 0 for key in COUNTER_KEYS})
+        loaded.setdefault("historical_counters", {key: 0 for key in COUNTER_KEYS})
+        loaded.setdefault("provider_usage", {key: 0 for key in PROVIDER_KEYS})
+        loaded.setdefault("historical_provider_usage", {key: 0 for key in PROVIDER_KEYS})
+        loaded.setdefault("processed_accounts", [])
+        loaded.setdefault("records", {sheet: [] for sheet in REPORT_SHEETS})
+        loaded.setdefault("transport_receipts", [])
+        for k in ("task_id", "queued_at", "worker_started_at", "heartbeat_at", "stop_requested_at", "stopped_at"):
+            loaded.setdefault(k, None)
+        for key in COUNTER_KEYS:
+            loaded["counters"].setdefault(key, 0)
+            loaded["historical_counters"].setdefault(key, 0)
+        for key in PROVIDER_KEYS:
+            loaded["provider_usage"].setdefault(key, 0)
+            loaded["historical_provider_usage"].setdefault(key, 0)
+        for sheet in REPORT_SHEETS:
+            loaded["records"].setdefault(sheet, [])
+        return loaded
 
     def _new_state(self, *, preserve_history: bool = False) -> dict[str, Any]:
         now = self._now()
@@ -178,92 +232,132 @@ class SalesoorjaOperator:
         }
 
     def _load_state(self) -> dict[str, Any]:
+        # 1. Authoritative check from Redis
+        r = self._get_redis()
+        if r is not None:
+            try:
+                raw = r.get(REDIS_KEY_OPERATOR_STATE)
+                if raw:
+                    loaded = json.loads(raw)
+                    if isinstance(loaded, dict):
+                        self._normalize_state(loaded)
+                        if loaded.get("status") in {"RUNNING", "STOPPING", "WAITING", "STARTING", "QUEUED"}:
+                            loaded["status"] = "STOPPED"
+                            loaded["last_action"] = "Recovered interrupted run; safe to resume"
+                            loaded["stopped_at"] = _iso(self._now())
+                        return loaded
+            except Exception as exc:
+                logger.debug("Redis state load fallback: %s", exc)
+
+        # 2. Check disk snapshot fallback
         if self.state_path.is_file():
             try:
                 loaded = json.loads(self.state_path.read_text(encoding="utf-8"))
                 if isinstance(loaded, dict):
-                    loaded.setdefault("counters", {key: 0 for key in COUNTER_KEYS})
-                    loaded.setdefault("historical_counters", {key: 0 for key in COUNTER_KEYS})
-                    loaded.setdefault("provider_usage", {key: 0 for key in PROVIDER_KEYS})
-                    loaded.setdefault("historical_provider_usage", {key: 0 for key in PROVIDER_KEYS})
-                    loaded.setdefault("processed_accounts", [])
-                    loaded.setdefault("records", {sheet: [] for sheet in REPORT_SHEETS})
-                    loaded.setdefault("transport_receipts", [])
-                    loaded.setdefault("task_id", None)
-                    loaded.setdefault("queued_at", None)
-                    loaded.setdefault("worker_started_at", None)
-                    loaded.setdefault("heartbeat_at", None)
-                    loaded.setdefault("stop_requested_at", None)
-                    loaded.setdefault("stopped_at", None)
-                    for key in COUNTER_KEYS:
-                        loaded["counters"].setdefault(key, 0)
-                        loaded["historical_counters"].setdefault(key, 0)
-                    for key in PROVIDER_KEYS:
-                        loaded["provider_usage"].setdefault(key, 0)
-                        loaded["historical_provider_usage"].setdefault(key, 0)
-                    for sheet in REPORT_SHEETS:
-                        loaded["records"].setdefault(sheet, [])
+                    self._normalize_state(loaded)
                     if loaded.get("status") in {"RUNNING", "STOPPING", "WAITING", "STARTING", "QUEUED"}:
                         loaded["status"] = "STOPPED"
                         loaded["last_action"] = "Recovered interrupted run; safe to resume"
                         loaded["stopped_at"] = _iso(self._now())
                     return loaded
             except (OSError, ValueError, TypeError):
-                logger.warning("Operator state could not be loaded; starting with a clean state")
+                logger.warning("Operator state could not be loaded from disk; starting clean")
         self._state = {}
         return self._new_state()
 
     def _save_state(self) -> None:
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.state_path.with_suffix(f".tmp.{os.getpid()}")
-        temporary.write_text(json.dumps(self._state, indent=2, default=str), encoding="utf-8")
-        temporary.replace(self.state_path)
+        """Persist state to Redis (authoritative) and write optional disk snapshot (non-fatal)."""
+        payload = json.dumps(self._state, indent=2, default=str)
+        # 1. Authoritative cross-process state saved to Redis
+        r = self._get_redis()
+        if r is not None:
+            try:
+                r.set(REDIS_KEY_OPERATOR_STATE, payload)
+            except Exception as exc:
+                logger.warning("Failed to save operator state to Redis: %s", exc)
+
+        # 2. Optional disk snapshot / history (failure must NEVER crash operator)
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_path.write_text(payload, encoding="utf-8")
+        except Exception as exc:
+            logger.debug("Failed to write operator state disk snapshot (non-fatal): %s", exc)
 
     def _sync_state(self) -> None:
-        """Reload shared state from disk if written by Celery worker or another process."""
-        if not self.state_path.is_file():
-            return
-        try:
-            loaded = json.loads(self.state_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                for k in ("task_id", "queued_at", "worker_started_at", "heartbeat_at", "stop_requested_at", "stopped_at"):
-                    loaded.setdefault(k, None)
-                loaded.setdefault("counters", {key: 0 for key in COUNTER_KEYS})
-                loaded.setdefault("historical_counters", {key: 0 for key in COUNTER_KEYS})
-                loaded.setdefault("provider_usage", {key: 0 for key in PROVIDER_KEYS})
-                loaded.setdefault("historical_provider_usage", {key: 0 for key in PROVIDER_KEYS})
-                with self._lock:
-                    self._state = loaded
-        except Exception as exc:
-            logger.debug("Could not sync operator state from disk: %s", exc)
+        """Reload shared state from Redis (authoritative) or disk snapshot (fallback)."""
+        r = self._get_redis()
+        if r is not None:
+            try:
+                raw = r.get(REDIS_KEY_OPERATOR_STATE)
+                if raw:
+                    loaded = json.loads(raw)
+                    if isinstance(loaded, dict):
+                        self._normalize_state(loaded)
+                        with self._lock:
+                            self._state = loaded
+                        return
+            except Exception as exc:
+                logger.debug("Could not sync operator state from Redis: %s", exc)
+
+        if self.state_path.is_file():
+            try:
+                loaded = json.loads(self.state_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    self._normalize_state(loaded)
+                    with self._lock:
+                        self._state = loaded
+            except Exception as exc:
+                logger.debug("Could not sync operator state from disk: %s", exc)
 
     def _set_stop_signal(self) -> None:
         self._stop_event.set()
+        r = self._get_redis()
+        if r is not None:
+            try:
+                r.set(REDIS_KEY_OPERATOR_STOP, _iso(self._now()))
+            except Exception as exc:
+                logger.warning("Could not set Redis stop signal: %s", exc)
         try:
             self._stop_signal_path.parent.mkdir(parents=True, exist_ok=True)
             self._stop_signal_path.write_text(
                 json.dumps({"stop_requested_at": _iso(self._now()), "pid": os.getpid()}),
                 encoding="utf-8",
             )
-        except Exception as exc:
-            logger.warning("Could not write stop signal file: %s", exc)
+        except Exception:
+            pass
 
     def _clear_stop_signal(self) -> None:
         self._stop_event.clear()
+        r = self._get_redis()
+        if r is not None:
+            try:
+                r.delete(REDIS_KEY_OPERATOR_STOP)
+            except Exception:
+                pass
         try:
             if self._stop_signal_path.exists():
                 self._stop_signal_path.unlink()
-        except Exception as exc:
-            logger.debug("Could not remove stop signal file: %s", exc)
+        except Exception:
+            pass
 
     def _is_stop_requested(self) -> bool:
         if self._stop_event.is_set():
             return True
-        if self._stop_signal_path.exists():
-            return True
+        r = self._get_redis()
+        if r is not None:
+            try:
+                if r.get(REDIS_KEY_OPERATOR_STOP):
+                    return True
+            except Exception:
+                pass
         status = self._state.get("status")
         if status == "STOPPING" or self._state.get("stop_requested_at"):
             return True
+        try:
+            if self._stop_signal_path.exists():
+                return True
+        except Exception:
+            pass
         return False
 
     def _heartbeat(self, action: Optional[str] = None) -> None:
@@ -330,6 +424,12 @@ class SalesoorjaOperator:
     def _force_stopped(self, reason: str = "STOP_TIMEOUT") -> None:
         now_iso = _iso(self._now())
         self._clear_stop_signal()
+        r = self._get_redis()
+        if r is not None:
+            try:
+                r.delete(REDIS_KEY_OPERATOR_LOCK)
+            except Exception:
+                pass
         task_id = self._state.get("task_id")
         if task_id and not str(task_id).startswith("thread-") and not str(task_id).startswith("sync-"):
             try:
@@ -351,6 +451,12 @@ class SalesoorjaOperator:
     def _force_error(self, reason: str, message: str) -> None:
         now_iso = _iso(self._now())
         self._clear_stop_signal()
+        r = self._get_redis()
+        if r is not None:
+            try:
+                r.delete(REDIS_KEY_OPERATOR_LOCK)
+            except Exception:
+                pass
         with self._lock:
             self._state.update(
                 status="ERROR",
@@ -467,6 +573,13 @@ class SalesoorjaOperator:
         self._reconcile_runtime_state()
         with self._lock:
             active = self._state.get("status") in {"QUEUED", "STARTING", "RUNNING", "WAITING", "STOPPING"}
+            r = self._get_redis()
+            if r is not None:
+                try:
+                    if r.get(REDIS_KEY_OPERATOR_LOCK) and active and self._is_worker_alive():
+                        return {"started": False, "reason": "ALREADY_RUNNING", "status": self.get_status()}
+                except Exception:
+                    pass
             if active:
                 if self._is_worker_alive():
                     return {"started": False, "reason": "ALREADY_RUNNING", "status": self.get_status()}
@@ -539,6 +652,14 @@ class SalesoorjaOperator:
             else:
                 task_id = f"sync-{uuid.uuid4().hex[:10]}"
                 self.execute_worker_run(task_id=task_id)
+
+            # Set authoritative Redis run lock for active task
+            r = self._get_redis()
+            if r is not None and self._state.get("task_id"):
+                try:
+                    r.set(REDIS_KEY_OPERATOR_LOCK, str(self._state["task_id"]), ex=86400)
+                except Exception:
+                    pass
 
         return {"started": True, "status": self.get_status()}
 
@@ -845,7 +966,7 @@ class SalesoorjaOperator:
                 except Exception as exc:
                     logger.warning("Discovery cycle in test mode fell back to synthetic: %s", exc)
                     processed = False
-            if not processed and not self._is_stop_requested():
+            if not processed and not self._is_stop_requested() and self._db_factory is None:
                 self._process_synthetic_account()
             if self._db_factory and not self._is_stop_requested():
                 db = self._db_factory()
@@ -1071,14 +1192,24 @@ class SalesoorjaOperator:
             ]
             if test_mode:
                 discovered_count = len(candidates)
-                top_company = candidates[0].get("company_name") if candidates else "Discovered Opportunities"
-                self._update(
-                    current_company=top_company,
-                    last_action=f"Serper TEST discovery completed ({discovered_count} leads); safe test cycle idle",
-                )
-                self._increment("companies_researched", max(1, discovered_count))
-                self._increment("qualified_opportunities", 1)
-                processed = True
+                if candidates:
+                    top_company = candidates[0].get("company_name")
+                    qualified = [item for item in candidates if float(item.get("icp_score") or 0) >= 85]
+                    qualified_count = len(qualified)
+                    self._update(
+                        current_company=top_company,
+                        last_action=f"Serper TEST discovery completed ({discovered_count} leads): {top_company}",
+                    )
+                    self._increment("companies_researched", discovered_count)
+                    if qualified_count > 0:
+                        self._increment("qualified_opportunities", qualified_count)
+                    processed = True
+                else:
+                    self._update(
+                        current_company=None,
+                        last_action="Serper TEST discovery completed (0 leads found)",
+                    )
+                    processed = False
                 return processed
 
             for account in candidates:
@@ -1763,6 +1894,12 @@ class SalesoorjaOperator:
         report_path = self._write_report()
         final_email = self._send_final_report_email(report_path)
         self._clear_stop_signal()
+        r = self._get_redis()
+        if r is not None:
+            try:
+                r.delete(REDIS_KEY_OPERATOR_LOCK)
+            except Exception:
+                pass
         self._update(
             status=status,
             stopped_at=now_iso,

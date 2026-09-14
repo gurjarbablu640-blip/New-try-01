@@ -426,7 +426,7 @@ def discover_new_calibration_opportunities(
     live_search_candidates = []
     try:
         geo_query = f"{geography} " if geography and geography != "PAN INDIA" and geography != "All" else "India "
-        search_res = router.search(f"{geo_query}manufacturing plant expansion CAPEX QA hiring calibration 2026", num_results=5, db=db)
+        search_res = router.search(f"{geo_query}manufacturing plant expansion inaugurates commissioned 2026", num_results=5, db=db)
         if search_res.get("results"):
             for item in search_res["results"]:
                 title = item.get("title", "")
@@ -443,9 +443,21 @@ def discover_new_calibration_opportunities(
                     parts = re.split(r"\s+hiring\s+", raw_chunk, flags=re.IGNORECASE)
                     if len(parts) > 0 and len(parts[0].strip()) > 2:
                         extracted_name = parts[0].strip()
+                else:
+                    action_verbs = [r"\bexpands\b", r"\binaugurates\b", r"\bcommissions\b", r"\bto set up\b", r"\bsets up\b", r"\bopens\b", r"\binvests\b"]
+                    for pat in action_verbs:
+                        if re.search(pat, raw_chunk, re.IGNORECASE):
+                            lead_chunk = re.split(pat, raw_chunk, flags=re.IGNORECASE)[0].strip()
+                            if len(lead_chunk) >= 3:
+                                extracted_name = lead_chunk
+                                break
                 extracted_name = re.sub(r"[^a-zA-Z0-9\s&.,-]", "", extracted_name).strip()
 
-                if len(extracted_name) > 3 and not any(k in extracted_name.lower() for k in ["news", "report", "home", "market", "overview", "hiring", "jobs"]):
+                if (
+                    len(extracted_name) > 2
+                    and not any(k in extracted_name.lower() for k in ["news", "report", "home", "market", "overview", "hiring", "jobs"])
+                    and not extracted_name.lower().startswith(("why ", "how ", "indias ", "india ", "top ", "what "))
+                ):
                     live_search_candidates.append({
                         "company_name": extracted_name[:100],
                         "city": geography if geography and geography != "PAN INDIA" else "Industrial Corridor",
@@ -461,8 +473,8 @@ def discover_new_calibration_opportunities(
     except Exception as e:
         logger.warning("Live search discovery note: %s", e)
 
-    # Combine catalog candidates with live search candidates, ensuring state diversity
-    candidate_pool = [dict(c, data_provenance="PILOT_CATALOG_CANDIDATE") for c in filtered] + live_search_candidates
+    # Combine live search candidates with catalog candidates, prioritizing live discovered leads
+    candidate_pool = live_search_candidates + [dict(c, data_provenance="PILOT_CATALOG_CANDIDATE") for c in filtered]
     discovered_candidates = []
     for candidate in candidate_pool[:limit]:
         ingested = ingest_discovered_signal_lead(
