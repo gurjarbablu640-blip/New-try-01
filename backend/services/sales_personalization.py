@@ -153,6 +153,41 @@ PROHIBITED_NUMERIC_ROI_PATTERNS = [
     r"\b\d+\s*hours?\s+(?:downtime\s+reduction|saved)\b",
 ]
 
+# Prohibited Absolute or Exaggerated Claims (unless strictly evidence-backed)
+PROHIBITED_ABSOLUTE_CLAIM_PATTERNS = [
+    r"(?i)\bsignificantly\s+reduces?\b",
+    r"(?i)\bguarantee(?:s|d)?\b",
+    r"(?i)\beliminate(?:s|d)?\b",
+    r"(?i)\bnear\s+zero\b",
+    r"(?i)\binstant(?:ly)?\b",
+    r"(?i)\bfully\s+automated\b",
+    r"(?i)\bzero\s+(?:downtime|risk|error)\b",
+]
+
+# Audit Assertion Patterns (Must NOT assert upcoming audit unless supported by verified evidence)
+AUDIT_ASSERTION_PATTERNS = [
+    r"(?i)\bahead\s+of\s+(?:quality\s+|upcoming\s+|your\s+|oem\s+|customer\s+|iatf\s+|regulatory\s+)?audits?\b",
+    r"(?i)\bbefore\s+(?:quality\s+|upcoming\s+|your\s+|oem\s+|customer\s+|iatf\s+|regulatory\s+)?audits?\b",
+    r"(?i)\bupcoming\s+(?:quality\s+|customer\s+|oem\s+|iatf\s+|regulatory\s+|surveillance\s+)?audits?\b",
+    r"(?i)\bfor\s+your\s+(?:upcoming\s+)?audits?\b",
+    r"(?i)\bpreparation\s+for\s+(?:your\s+)?audits?\b",
+]
+
+# Keywords confirming verified audit context in trigger evidence
+AUDIT_EVIDENCE_KEYWORDS = [
+    "audit",
+    "certification inspection",
+    "customer audit",
+    "regulatory inspection",
+    "quality-system assessment",
+    "surveillance",
+    "inspection",
+    "assessment",
+    "iatf",
+    "iso renewal",
+    "nabl renewal",
+]
+
 
 @dataclass(frozen=True)
 class PersonalizationContext:
@@ -202,6 +237,112 @@ def derive_persona(designation: str) -> str:
     if any(w in d for w in ["procurement", "purchase", "sourcing", "commercial"]):
         return "Procurement"
     return "Engineering Lead"
+
+
+def classify_trigger_type(context: PersonalizationContext) -> str:
+    """Classify trigger context into primary business event category.
+
+    Primary trigger event takes precedence over secondary reasoning context.
+    """
+    trigger_lower = (context.trigger_event or "").lower()
+
+    if any(w in trigger_lower for w in ["audit", "surveillance", "certification inspection", "customer audit", "regulatory inspection", "quality-system assessment", "iatf"]):
+        return "AUDIT_SURVEILLANCE"
+    if any(w in trigger_lower for w in ["new plant", "greenfield", "new facility", "unit setup", "site setup", "new manufacturing unit"]):
+        return "NEW_PLANT"
+    if any(w in trigger_lower for w in ["new line", "line commissioning", "press line", "machining line", "assembly line", "production line", "commercial commissioning", "machinery commissioning"]):
+        return "NEW_LINE"
+    if any(w in trigger_lower for w in ["expansion", "phase ii", "phase 2", "ramp-up", "capacity expansion", "expanding", "scale-up"]):
+        return "CAPACITY_EXPANSION"
+    if any(w in trigger_lower for w in ["hiring", "appointed", "new role", "joined", "lead appointed"]):
+        return "HIRING"
+
+    # Secondary check on facility_activity or reasoning if trigger is generic
+    activity_lower = f"{context.facility_activity} {context.reasoning}".lower()
+    if any(w in activity_lower for w in ["audit", "surveillance", "certification inspection", "customer audit", "regulatory inspection", "quality-system assessment", "iatf"]):
+        return "AUDIT_SURVEILLANCE"
+    if any(w in activity_lower for w in ["new plant", "greenfield", "new facility", "unit setup", "site setup", "new manufacturing unit"]):
+        return "NEW_PLANT"
+    if any(w in activity_lower for w in ["new line", "line commissioning", "press line", "machining line", "assembly line", "production line", "commercial commissioning", "machinery commissioning"]):
+        return "NEW_LINE"
+    if any(w in activity_lower for w in ["expansion", "phase ii", "phase 2", "ramp-up", "capacity expansion", "expanding", "scale-up"]):
+        return "CAPACITY_EXPANSION"
+
+    return "ROUTINE"
+
+
+def extract_technical_focus(calibration_opportunity: str) -> Dict[str, Any]:
+    """Parse calibration opportunity into 1-3 specific technical disciplines and natural phrasing.
+
+    Avoids injecting generic four-discipline lists when specific instruments are provided.
+    """
+    opp_lower = (calibration_opportunity or "").lower()
+    disciplines: List[str] = []
+    technical_terms: List[str] = []
+    value_points: List[str] = []
+
+    # 1. CMM / Dimensional
+    if any(k in opp_lower for k in ["cmm", "dimensional", "coordinate measuring", "micrometer", "vernier", "caliper", "gauges", "gauge", "height gauge", "plug gauge", "thread gauge"]):
+        disciplines.append("dimensional & CMM measurement")
+        technical_terms.append("dimensional masters and CMM systems")
+        value_points.append("measurement accuracy and dimensional master traceability")
+
+    # 2. Furnace / Pyrometry / Thermal
+    if any(k in opp_lower for k in ["furnace", "pyrometry", "thermal", "temperature", "oven", "heat treat", "thermocouple", "rtd"]):
+        disciplines.append("thermal instrumentation & furnace pyrometry")
+        technical_terms.append("thermal process instrumentation")
+        value_points.append("temperature uniformity and thermal process traceability")
+
+    # 3. Torque
+    if any(k in opp_lower for k in ["torque", "tightening", "torque wrench", "torque tool"]):
+        disciplines.append("torque tooling & control")
+        technical_terms.append("torque tools and assembly gauges")
+        value_points.append("assembly tool readiness and torque control")
+
+    # 4. Pressure
+    if any(k in opp_lower for k in ["pressure", "transmitter", "transducer", "barometer", "differential pressure"]):
+        disciplines.append("process pressure instrumentation")
+        technical_terms.append("pressure transmitters and process gauges")
+        value_points.append("process instrument reliability and production availability")
+
+    # 5. Electrical
+    if any(k in opp_lower for k in ["electrical", "electro-technical", "multimeter", "voltmeter", "current", "power analyzer"]):
+        disciplines.append("electrical instrumentation")
+        technical_terms.append("electrical test instruments and process loops")
+        value_points.append("sensor loop checks and electrical measurement integrity")
+
+    # 6. Mass / Weighing
+    if any(k in opp_lower for k in ["mass", "weighing", "balance", "scale", "weights"]):
+        disciplines.append("mass & weighing standards")
+        technical_terms.append("precision balances and weighing equipment")
+        value_points.append("weighing accuracy and calibration records")
+
+    is_specific = len(disciplines) > 0
+    disciplines = disciplines[:3]
+    technical_terms = technical_terms[:3]
+    value_points = value_points[:3]
+
+    if not disciplines:
+        disciplines = ["precision plant instrumentation"]
+        technical_terms = ["precision gauges and measurement standards"]
+        value_points = ["measurement accuracy and audit-ready records"]
+
+    if len(technical_terms) == 1:
+        equipment_phrase = technical_terms[0]
+    elif len(technical_terms) == 2:
+        t0 = technical_terms[0].replace(" and ", ", ")
+        equipment_phrase = f"{t0}, and {technical_terms[1]}"
+    else:
+        t0 = technical_terms[0].replace(" and ", ", ")
+        t1 = technical_terms[1].replace(" and ", ", ")
+        equipment_phrase = f"{t0}, {t1}, and {technical_terms[2]}"
+
+    return {
+        "disciplines": disciplines,
+        "equipment_phrase": equipment_phrase,
+        "value_points": value_points,
+        "is_specific": is_specific,
+    }
 
 
 def build_personalization_context(record: Mapping[str, Any]) -> PersonalizationContext:
@@ -338,6 +479,45 @@ class EmailQualityValidator:
                 violations.append(f"UNSUPPORTED_NUMERIC_ROI: Invented percentage/cost saving '{m.group(0)}' detected")
                 score -= 30
 
+        # 4b. Prohibited Absolute or Exaggerated Claims (Qualitative ROI only)
+        for pat in PROHIBITED_ABSOLUTE_CLAIM_PATTERNS:
+            m = re.search(pat, full_text)
+            if m:
+                violations.append(
+                    f"UNSUPPORTED_ABSOLUTE_CLAIM: Absolute claim '{m.group(0)}' detected (must use qualitative ROI like 'can help', 'can reduce', 'may simplify')"
+                )
+                score -= 30
+
+        # 4c. Unsupported Upcoming Audit Assertions
+        evidence_text = f"{context.trigger_event} {context.facility_activity} {context.reasoning}".lower()
+        has_audit_evidence = any(kw in evidence_text for kw in AUDIT_EVIDENCE_KEYWORDS)
+        if not has_audit_evidence:
+            for pat in AUDIT_ASSERTION_PATTERNS:
+                m = re.search(pat, full_text)
+                if m:
+                    violations.append(
+                        f"UNSUPPORTED_AUDIT_ASSERTION: Audit claim '{m.group(0)}' asserted without verified audit evidence in trigger context"
+                    )
+                    score -= 30
+                    break
+
+        # 4d. Generic Four-Discipline Boilerplate when Opportunity is Narrower
+        generic_4_pattern = r"(?i)mechanical,\s*thermal,\s*pressure,\s*(?:and\s+)?electrical"
+        if re.search(generic_4_pattern, full_text):
+            tech_info = extract_technical_focus(context.calibration_opportunity)
+            opp_lower = (context.calibration_opportunity or "").lower()
+            has_all_4 = (
+                "mechanical" in opp_lower
+                and "thermal" in opp_lower
+                and "pressure" in opp_lower
+                and "electrical" in opp_lower
+            )
+            if tech_info["is_specific"] and not has_all_4:
+                violations.append(
+                    f"GENERIC_DISCIPLINE_BOILERPLATE: Generic four-discipline list found when calibration opportunity is narrower ('{context.calibration_opportunity}')"
+                )
+                score -= 25
+
         # 5. Length Validation (Target 80 - 150 words)
         if word_count < self.MIN_WORDS:
             violations.append(f"TOO_SHORT: Initial body has {word_count} words (minimum {self.MIN_WORDS})")
@@ -433,6 +613,9 @@ class EmailQualityValidator:
             "CLAIM_VIOLATION" in v
             or "FRAMEWORK_LEAKAGE" in v
             or "UNSUPPORTED_NUMERIC_ROI" in v
+            or "UNSUPPORTED_ABSOLUTE_CLAIM" in v
+            or "UNSUPPORTED_AUDIT_ASSERTION" in v
+            or "GENERIC_DISCIPLINE_BOILERPLATE" in v
             or "DUPLICATE_SIGNATURE" in v
             or "MISSING_SIGNATURE" in v
             or "ACCREDITATION_IN_SIGNATURE" in v
@@ -469,96 +652,320 @@ class DeterministicPersonalizationGenerator:
         persona = context.persona
         calibration_opp = context.calibration_opportunity
 
-        # Persona-specific tailored observations & value angles
-        if persona == "Plant Head":
-            hook = (
-                f"With {company} advancing operations at {facility}, "
-                f"planning calibration around scheduled production windows helps prevent avoidable equipment movement and startup bottlenecks."
+        trigger_type = classify_trigger_type(context)
+        tech_info = extract_technical_focus(calibration_opp)
+        equipment_phrase = tech_info["equipment_phrase"]
+
+        # Persona-specific tailored observations, Challenger insights, and value angles
+        if persona == "Quality Head":
+            subject = f"Measurement Traceability & Calibration Control - {company} ({city})"
+            if trigger_type == "NEW_LINE":
+                hook = (
+                    f"As {company} prepares for production launch on the new line at {facility}, "
+                    f"qualification activity often increases the volume of measurement equipment that needs to be verified and documented before routine manufacturing starts."
+                )
+                challenger = (
+                    "Calibration planning often gets attention only after equipment installation, "
+                    "which can leave qualification activity compressed close to production start."
+                )
+            elif trigger_type == "NEW_PLANT":
+                hook = (
+                    f"Commissioning activity at {company}'s {facility} often increases the amount of measurement equipment "
+                    f"that needs to be qualified, calibrated, and documented before routine production."
+                )
+                challenger = (
+                    "Calibration planning often gets attention only after machinery installation, "
+                    "which can compress qualification timelines and create scheduling friction across multiple external labs."
+                )
+            elif trigger_type == "CAPACITY_EXPANSION":
+                hook = (
+                    f"With {company} expanding capacity at {facility}, "
+                    f"adding new instruments can create calibration-planning workload and increase the coordination needed to maintain continuous certificate availability."
+                )
+                challenger = (
+                    "When instrument calibration is scattered across multiple external labs, "
+                    "tracking out-of-tolerance notifications and certificate availability can create administrative friction for quality teams."
+                )
+            elif trigger_type == "AUDIT_SURVEILLANCE":
+                hook = (
+                    f"Ahead of upcoming audit and surveillance requirements at {company}'s {facility}, "
+                    f"maintaining continuous measurement traceability and rapid certificate retrieval is a practical priority for quality teams."
+                )
+                challenger = (
+                    "Traceability gaps and certificate retrieval delays often surface late during audit preparations, "
+                    "creating unnecessary pressure on quality teams."
+                )
+            elif trigger_type == "HIRING":
+                hook = (
+                    f"Following recent quality leadership transitions at {company}'s {facility}, "
+                    f"establishing an organized calibration baseline helps ensure consistent measurement traceability across all active instruments."
+                )
+                challenger = (
+                    "Reviewing calibration master scopes early in a new leadership cycle often reveals opportunities "
+                    "to bring scattered external lab scopes into a consolidated on-site plan."
+                )
+            else:  # ROUTINE
+                hook = (
+                    f"As {company} plans its upcoming calibration cycle at {facility}, "
+                    f"reviewing instrument schedules early helps maintain continuous measurement traceability and avoid out-of-tolerance surprises."
+                )
+                challenger = (
+                    "When instrument calibration is scattered across multiple external labs, "
+                    "tracking out-of-tolerance notifications and certificate availability can create administrative friction for quality teams."
+                )
+
+            value_prop = (
+                f"Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
+                f"We support quality teams by coordinating on-site calibration for {equipment_phrase}, "
+                f"helping maintain strict measurement traceability and certificate availability without moving critical masters offsite."
             )
-            roi_angle = "downtime reduction and vendor consolidation"
-            operational_angle = "consolidated on-site batch calibration during planned shutdown slots"
+            cta = "Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?"
+            referral_ask = f"If another colleague directly leads metrology or calibration planning for {facility}, could you kindly point me to the right person?"
+
+            day_5 = (
+                f"Dear {first_name},\n\n"
+                f"From a quality management perspective, managing calibration through fragmented external laboratories often makes tracking certificate availability and out-of-tolerance notifications more difficult than it needs to be. "
+                f"Consolidating calibration for {equipment_phrase} under our NABL CC-3963 accredited on-site schedule can make calibration records easier to retrieve when required and support measurement traceability.\n\n"
+                f"If you have an upcoming equipment list, I would be glad to review it for on-site feasibility.\n\n"
+                f"{STANDARD_SIGNATURE_TEXT}"
+            )
+
+            roi_angle = "audit readiness and certificate retrieval" if trigger_type == "AUDIT_SURVEILLANCE" else "measurement traceability and certificate availability"
+            compliance_angle = "NABL CC-3963 audit-ready certification and IATF 16949 measurement integrity" if trigger_type == "AUDIT_SURVEILLANCE" else "ISO/IEC 17025:2017 CC-3963 accredited traceability for manufacturing equipment"
+            operational_angle = "in-situ verification and on-site master calibration to eliminate transit delays"
+
+        elif persona == "Plant Head":
+            subject = f"Shutdown Calibration Planning & Equipment Availability - {company} ({city})"
+            if trigger_type in {"NEW_LINE", "NEW_PLANT"}:
+                hook = (
+                    f"With {company} advancing commissioning at {facility}, "
+                    f"planning calibration around scheduled production windows helps prevent avoidable equipment movement and startup delays."
+                )
+            elif trigger_type == "CAPACITY_EXPANSION":
+                hook = (
+                    f"As {company} ramps up capacity at {facility}, "
+                    f"coordinating calibration during planned maintenance windows helps maintain equipment availability without interrupting active production runs."
+                )
+            elif trigger_type == "AUDIT_SURVEILLANCE":
+                hook = (
+                    f"With audit readiness on the radar for {company}'s {facility}, "
+                    f"ensuring all operational instruments are verified without disrupting scheduled production runs is essential."
+                )
+            elif trigger_type == "HIRING":
+                hook = (
+                    f"As operational leadership drives execution at {company}'s {facility}, "
+                    f"structured calibration planning helps ensure equipment availability across both new and existing lines."
+                )
+            else:  # ROUTINE
+                hook = (
+                    f"As {company} reviews ongoing operations at {facility}, "
+                    f"aligning equipment calibration with planned shutdown windows helps keep production schedules predictable."
+                )
+
+            challenger = "Moving multiple instrument categories offsite at different times can create more operational disruption than the calibration work itself."
+            value_prop = (
+                f"Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
+                f"We work with plant leadership to execute batch on-site calibration for {equipment_phrase} during planned maintenance windows, "
+                f"helping avoid transit downtime and keep equipment on the floor."
+            )
+            cta = "Would it make sense to explore an on-site calibration slot aligned with your next planned maintenance window?"
+            referral_ask = f"If your Plant Quality Head or Metrology Lead directly coordinates this planning for {facility}, could you point me to the right lead?"
+
+            day_5 = (
+                f"Dear {first_name},\n\n"
+                f"A recurring friction point for plant heads during busy production cycles is having critical instruments stuck in off-site transit across multiple vendors. "
+                f"Where technically feasible, grouping calibration for {equipment_phrase} into a single planned on-site execution window can protect production continuity and reduce equipment movement.\n\n"
+                f"Would it be helpful to review your site equipment list to identify which instruments can be handled on-site?\n\n"
+                f"{STANDARD_SIGNATURE_TEXT}"
+            )
+
+            roi_angle = "production continuity and minimized equipment transit downtime"
             compliance_angle = "ISO/IEC 17025:2017 CC-3963 accredited traceability for manufacturing equipment"
-        elif persona == "Quality Head":
-            hook = (
-                f"With {company}'s ongoing activity around {trigger} at {facility}, "
-                f"maintaining continuous measurement traceability becomes critical as instrument populations expand ahead of quality audits."
-            )
-            roi_angle = "audit readiness and reduced certificate retrieval friction"
-            operational_angle = "documented uncertainty budgets and comprehensive in-situ verification"
-            compliance_angle = "NABL CC-3963 audit-ready certification and IATF 16949 measurement integrity"
-        elif persona == "Metrology Head":
-            hook = (
-                f"Regarding precision calibration and measurement standards for {company}'s {facility}, "
-                f"managing instrument verification across {calibration_opp} requires rigorous calibration budgets and reliable turnaround."
-            )
-            roi_angle = "calibration turnaround and measurement uncertainty control"
-            operational_angle = "range-specific CMC alignment and on-site master calibration"
-            compliance_angle = "ISO/IEC 17025:2017 accredited CMC schedule under Certificate CC-3963"
+            operational_angle = "consolidated on-site batch calibration during planned shutdown slots"
+
         elif persona == "Operations Head":
-            hook = (
-                f"As {company} ramps up {trigger} at {facility}, "
-                f"unplanned gauge or sensor calibration delays can interrupt production readiness when lines go live."
+            subject = f"Line Readiness & Calibration Coordination - {company} ({city})"
+            if trigger_type in {"NEW_LINE", "NEW_PLANT"}:
+                hook = (
+                    f"As {company} prepares to bring the new line into commercial production at {facility}, "
+                    f"uncoordinated gauge or sensor calibration can delay line readiness just as startup targets approach."
+                )
+            elif trigger_type == "CAPACITY_EXPANSION":
+                hook = (
+                    f"With {company} expanding output at {facility}, "
+                    f"managing calibration turnarounds without slowing line speed or causing staging bottlenecks is a practical priority."
+                )
+            elif trigger_type == "AUDIT_SURVEILLANCE":
+                hook = (
+                    f"Maintaining operational line readiness while verifying production instruments for upcoming compliance reviews "
+                    f"at {facility} requires tight coordination on the shop floor."
+                )
+            else:
+                hook = (
+                    f"Managing ongoing production schedules at {company}'s {facility} "
+                    f"requires keeping line instruments verified without pulling critical gauges from active shifts."
+                )
+
+            challenger = "Staggering calibration across multiple external labs during line commissioning can introduce unexpected delays just as production schedules firm up."
+            value_prop = (
+                f"Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
+                f"We help operations teams maintain line readiness by performing on-site calibration for {equipment_phrase}, "
+                f"minimizing equipment movement and supporting scheduled shift changeovers."
             )
-            roi_angle = "production continuity and minimized equipment transit delays"
-            operational_angle = "single-slot on-site execution to eliminate transit turnaround"
+            cta = "Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?"
+            referral_ask = f"If a colleague in Quality or Maintenance directly manages this schedule for {facility}, could you kindly point me to the right person?"
+
+            day_5 = (
+                f"Dear {first_name},\n\n"
+                f"In our experience with manufacturing operations, sending production tools and gauges off-site often creates unexpected shift downtime and spare-tool shortages. "
+                f"Performing accredited calibration for {equipment_phrase} directly on-site during planned shift intervals can maintain line readiness with minimal equipment movement.\n\n"
+                f"Happy to take a quick look at your current equipment list to outline an on-site calibration approach.\n\n"
+                f"{STANDARD_SIGNATURE_TEXT}"
+            )
+
+            roi_angle = "line readiness and minimal equipment movement"
             compliance_angle = "traceable calibration baseline before commercial production release"
-        elif persona == "Maintenance Head":
+            operational_angle = "single-slot on-site execution to eliminate transit turnaround"
+
+        elif persona == "Metrology Head":
+            subject = f"Metrology Scope & Standards Traceability - {company} ({city})"
+            hook = (
+                f"Regarding precision metrology standards and calibration discipline for {company}'s {facility}, "
+                f"maintaining accredited traceability across {equipment_phrase} requires rigorous uncertainty budgets and verified master standards."
+            )
+            challenger = "Separating items that genuinely require laboratory calibration from those that can be handled onsite can simplify the overall calibration plan."
+            value_prop = (
+                f"Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited metrology and calibration laboratory (Certificate CC-3963). "
+                f"Our technical scope covers high-precision calibration for {equipment_phrase}, "
+                f"providing documented CMC capabilities, clear uncertainty budgets, and practical onsite-versus-lab scoping."
+            )
+            cta = "Would you be open to a technical scope review of your equipment list to evaluate on-site calibration feasibility?"
+            referral_ask = f"If another colleague in your standards lab directly manages this schedule for {facility}, could you point me to the right lead?"
+
+            day_5 = (
+                f"Dear {first_name},\n\n"
+                f"From a standards-room perspective, keeping reference masters in active rotation while managing field instruments can create scheduling friction. "
+                f"Clearly delineating which items in {equipment_phrase} can be calibrated in-situ versus those requiring controlled lab environments can simplify calibration planning while preserving measurement accuracy.\n\n"
+                f"If you have an equipment inventory for {facility}, I would welcome the opportunity to review your technical scope.\n\n"
+                f"{STANDARD_SIGNATURE_TEXT}"
+            )
+
+            roi_angle = "calibration turnaround and measurement uncertainty control"
+            compliance_angle = "ISO/IEC 17025:2017 accredited CMC schedule under Certificate CC-3963"
+            operational_angle = "range-specific CMC alignment and on-site master calibration"
+
+        elif persona == "Procurement":
+            subject = f"Calibration Vendor Consolidation & Scope Review - {company} ({city})"
+            if trigger_type in {"NEW_LINE", "NEW_PLANT"}:
+                hook = (
+                    f"As {company} progresses with commercial commissioning at {facility}, "
+                    f"onboarding multiple separate calibration vendors for newly installed machinery can introduce commercial complexity and administrative overhead."
+                )
+            elif trigger_type == "CAPACITY_EXPANSION":
+                hook = (
+                    f"With {company} expanding capacity at {facility}, "
+                    f"managing calibration contracts across multiple fragmented suppliers can increase coordination effort and invoice processing."
+                )
+            elif trigger_type == "AUDIT_SURVEILLANCE":
+                hook = (
+                    f"Ensuring all calibration purchase orders and vendor accreditations are aligned ahead of site compliance reviews "
+                    f"at {facility} helps avoid last-minute administrative friction."
+                )
+            else:
+                hook = (
+                    f"As {company} reviews annual vendor agreements for {facility}, "
+                    f"consolidating calibration requirements under a single accredited provider can simplify commercial coordination."
+                )
+
+            challenger = "The hidden cost is often not the calibration rate alone, but the coordination involved in managing multiple vendors and repeated equipment movement."
+            value_prop = (
+                f"Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
+                f"We support commercial teams by consolidating calibration for {equipment_phrase} under a unified on-site agreement, "
+                f"reducing vendor coordination effort and providing clear scope clarity."
+            )
+            cta = "Would it make sense to review your upcoming calibration scope to see where vendor consolidation can simplify execution?"
+            referral_ask = f"If your Plant Quality Head or Commercial Lead directly coordinates this evaluation for {facility}, could you kindly point me to the right person?"
+
+            day_5 = (
+                f"Dear {first_name},\n\n"
+                f"Managing calibration through four or five separate specialized vendors often creates hidden administrative costs in purchase order management, gate-pass tracking, and commercial follow-ups. "
+                f"Consolidating {equipment_phrase} under a single ISO/IEC 17025:2017 accredited agreement can simplify commercial coordination and reduce vendor management overhead.\n\n"
+                f"If you have a scope list for the upcoming cycle at {facility}, I can quickly provide a unified feasibility review.\n\n"
+                f"{STANDARD_SIGNATURE_TEXT}"
+            )
+
+            roi_angle = "vendor consolidation and reduced coordination effort"
+            compliance_angle = "ISO/IEC 17025:2017 NABL CC-3963 accredited commercial coverage"
+            operational_angle = "multi-parameter lab and on-site coverage under single SLA"
+
+        else:
+            subject = f"Instrumentation Calibration & Field Reliability - {company} ({city})"
             hook = (
                 f"As your team oversees instrument reliability at {company}'s {facility}, "
-                f"preventing sensor drift across {calibration_opp} is vital during commissioning and routine plant operation."
+                f"managing sensor drift and calibration schedules across {equipment_phrase} is essential for continuous process uptime."
             )
-            roi_angle = "instrument availability and process reliability"
-            operational_angle = "on-site loop checking and direct sensor calibration"
-            compliance_angle = "CC-3963 accredited field tolerances and verified master traceability"
-        else:
-            hook = (
-                f"In light of {company}'s operational activity around {trigger} at {facility}, "
-                f"establishing a consolidated calibration schedule helps avoid multi-vendor coordination bottlenecks."
+            challenger = "Instrument drift in process sensors often goes unnoticed until routine maintenance cycles, when uncoordinated dispatches can delay line restarts."
+            value_prop = (
+                f"Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
+                f"We support engineering teams by performing on-site calibration for {equipment_phrase}, "
+                f"reducing equipment movement and supporting reliable field tolerances."
             )
-            roi_angle = "coordination effort and vendor consolidation"
-            operational_angle = "multi-parameter lab and on-site coverage"
-            compliance_angle = "ISO/IEC 17025:2017 NABL CC-3963 accredited traceability"
+            cta = "Would it make sense to review your upcoming sensor and instrument calibration schedule for on-site feasibility?"
+            referral_ask = f"If another colleague in Quality or Operations leads calibration planning for {facility}, could you kindly point me to the right person?"
 
-        subject = f"Calibration Planning & Audit Readiness - {company} ({city})"
+            day_5 = (
+                f"Dear {first_name},\n\n"
+                f"Coordinating sensor loop checks and instrument verification during short maintenance windows can be challenging when equipment must be dispatched off-site. "
+                f"Performing on-site calibration for {equipment_phrase} can reduce equipment movement and help keep critical instruments available for production.\n\n"
+                f"Happy to review your upcoming instrument schedule to explore on-site feasibility.\n\n"
+                f"{STANDARD_SIGNATURE_TEXT}"
+            )
+
+            roi_angle = "instrument availability and process reliability"
+            compliance_angle = "CC-3963 accredited field tolerances and verified master traceability"
+            operational_angle = "on-site loop checking and direct sensor calibration"
 
         body = (
             f"Dear {first_name},\n\n"
             f"{hook}\n\n"
-            f"During expansion or commissioning periods, calibration planning often gets addressed after machinery installation, "
-            f"which can compress qualification timelines and create scheduling friction across multiple external labs.\n\n"
-            f"Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
-            f"We support industrial facilities by grouping mechanical, thermal, pressure, and electrical calibration into coordinated on-site execution slots, "
-            f"reducing equipment movement and administrative overhead.\n\n"
-            f"Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?\n\n"
-            f"If another colleague directly leads metrology or quality planning for {facility}, could you kindly point me to the right person?\n\n"
+            f"{challenger}\n\n"
+            f"{value_prop}\n\n"
+            f"{cta}\n\n"
+            f"{referral_ask}\n\n"
             f"{STANDARD_SIGNATURE_TEXT}"
         )
+
+        if trigger_type == "NEW_LINE":
+            trigger_ref = "new production lines transition into regular operations"
+        elif trigger_type == "NEW_PLANT":
+            trigger_ref = "commissioning activity progresses toward routine production"
+        elif trigger_type == "CAPACITY_EXPANSION":
+            trigger_ref = "expanded operations ramp up toward regular production"
+        elif trigger_type == "AUDIT_SURVEILLANCE":
+            trigger_ref = "scheduled compliance and audit reviews approach"
+        else:
+            trigger_ref = "upcoming calibration schedules are planned"
 
         followups = {
             "day_3": (
                 f"Dear {first_name},\n\n"
-                f"Following up on my earlier note regarding {facility}. As new lines and equipment transition into regular production, "
-                f"teams often face an unexpected spike in calibration documentation and gage verification workloads.\n\n"
+                f"Following up on my earlier note regarding {facility}. As {trigger_ref}, "
+                f"teams often see an increase in calibration documentation and gage verification workloads.\n\n"
                 f"Are you the right person to discuss calibration planning for this site, or should I connect with someone else on your team?\n\n"
                 f"{STANDARD_SIGNATURE_TEXT}"
             ),
-            "day_5": (
-                f"Dear {first_name},\n\n"
-                f"One challenge we frequently see in expanding facilities is the administrative friction of coordinating multiple specialized calibration vendors. "
-                f"Where technically feasible, consolidating dimensional, thermal, and pressure calibration into a single planned on-site slot significantly reduces logistics overhead and equipment transit risk.\n\n"
-                f"If you have an upcoming equipment list, I would be glad to review it and identify on-site feasibility.\n\n"
-                f"{STANDARD_SIGNATURE_TEXT}"
-            ),
+            "day_5": day_5,
             "day_11": (
                 f"Dear {first_name},\n\n"
-                f"If your calibration coverage for {facility} is already fully arranged, please feel free to disregard this note. "
-                f"If you still have open requirements for the upcoming cycle, I can quickly review your list and separate on-site feasible items from those better suited for in-lab testing.\n\n"
+                f"If your calibration coverage for {facility} is already fully arranged for this cycle, please feel free to disregard this note. "
+                f"If you still have open requirements, I can quickly review your equipment list and separate items that can be handled on-site from those better suited for in-lab testing.\n\n"
                 f"{STANDARD_SIGNATURE_TEXT}"
             ),
             "day_21": (
                 f"Dear {first_name},\n\n"
-                f"I will close the loop with this note so as not to crowd your inbox. If calibration or audit traceability support becomes an active priority for {company}'s {facility} in the future, we would be glad to assist.\n\n"
-                f"If a colleague in Quality or Operations owns this responsibility, a brief referral would be greatly appreciated.\n\n"
+                f"I will close the loop with this note so as not to crowd your inbox. "
+                f"If calibration planning or measurement traceability support becomes an active priority for {company}'s {facility} in the future, we would be glad to assist.\n\n"
+                f"If another colleague in Quality or Operations owns this responsibility, a brief referral would be greatly appreciated.\n\n"
                 f"{STANDARD_SIGNATURE_TEXT}"
             ),
         }
@@ -569,7 +976,7 @@ class DeterministicPersonalizationGenerator:
             "why_this_person": f"Functional leader ({persona} - {context.designation}) overseeing technical execution or compliance.",
             "pain_hypothesis": "Expanding instrumentation increases calibration scheduling burden, equipment movement, and audit certificate sprawl.",
             "implication": "Delayed equipment qualification, production disruption during uncoordinated shutdowns, and audit compliance risk.",
-            "value_hypothesis": "Consolidated on-site calibration under ISO/IEC 17025:2017 CC-3963 minimizes transit downtime and vendor interfaces.",
+            "value_hypothesis": f"Consolidated on-site calibration for {equipment_phrase} under ISO/IEC 17025:2017 CC-3963 minimizes transit downtime and vendor interfaces.",
             "roi_angle": roi_angle,
             "compliance_angle": compliance_angle,
             "operational_angle": operational_angle,
@@ -600,7 +1007,7 @@ class DeterministicPersonalizationGenerator:
 
         claims = [
             "ISO/IEC 17025:2017 NABL Accredited Calibration Laboratory (CC-3963)",
-            "On-site and in-lab calibration for mechanical, thermal, pressure, and electrical parameters",
+            f"On-site and in-lab calibration for {equipment_phrase}",
             "Documented uncertainty budgets and traceable master standards",
         ]
 
@@ -629,37 +1036,48 @@ YOUR OBJECTIVE:
 Generate highly consultative, commercially intelligent outreach for an industrial decision-maker using verified Salesoorja evidence.
 
 CRITICAL INSTRUCTIONS & PRINCIPLES:
-1. EVIDENCE FIRST:
+1. EVIDENCE FIRST & CLAIM SAFETY:
    - Use ONLY the verified company, facility, person, designation, and trigger facts provided in the prompt.
    - NEVER invent unverified facts, numeric ROI (e.g. 'save 35% cost'), satellite centers (e.g. 'Pune & Dahej Regional Metrology Center'), unapproved turnaround SLAs (e.g. '48-hour turnaround'), or active audits unless verified.
-   - If an operational pain is probable, frame it cautiously as an industry observation (e.g. 'During commissioning, teams often see...'), NEVER as an accusatory fact (NEVER 'You are struggling with...').
+   - AUDIT RESTRICTION: Do NOT say or imply an audit is upcoming or scheduled (NEVER 'ahead of your upcoming audit' or 'before quality audits') UNLESS the verified trigger evidence explicitly contains 'audit', 'surveillance', or 'inspection'. General phrasing like 'support measurement traceability', 'make calibration records easier to retrieve when required', or 'support audit readiness' is allowed only when context makes sense.
+   - QUALITATIVE ROI ONLY: NEVER use absolute claims like 'significantly reduce', 'guarantee', 'eliminate', 'near zero', 'instant', 'fully automated', or 'zero downtime'. Use conservative qualitative phrasing: 'can help', 'can reduce equipment movement and vendor coordination', 'may simplify', 'where technically feasible'.
+   - CALIBRATION OPPORTUNITY ALIGNMENT: Do NOT automatically insert a generic four-discipline list ('mechanical, thermal, pressure, and electrical') if the supplied opportunity is specific (e.g. dimensional CMM, furnace pyrometry, torque, pressure). Focus strictly on the 1-3 specific technical disciplines supplied in the opportunity.
+   - Frame operational friction cautiously as an industry observation (e.g. 'Commissioning activity often increases...'), NEVER as an accusatory fact (NEVER 'You are struggling with...').
 
-2. SALES METHODOLOGY (APPLY INTERNALLY ONLY):
+2. PERSONA MATERIAL DIFFERENTIATION:
+   Value proposition and Challenger insight MUST materially differ by role:
+   - QUALITY HEAD: Emphasize traceability, measurement confidence, calibration control, certificate availability, and out-of-tolerance risk.
+   - PLANT HEAD: Emphasize production continuity, shutdown planning, equipment availability, and execution coordination.
+   - OPERATIONS HEAD: Emphasize line readiness, minimal equipment movement, commissioning timing, and uptime.
+   - METROLOGY HEAD: Emphasize technical feasibility, CMC range/scope, onsite vs lab, masters, and measurement discipline.
+   - PROCUREMENT: Emphasize vendor consolidation, commercial coordination, scope clarity, and execution planning.
+
+3. SALES METHODOLOGY (APPLY INTERNALLY ONLY):
    - SPIN SELLING: Understand Situation (trigger & plant), Problem (measurement workload), Implication (qualification/audit delay), Need-Payoff (consolidated on-site calibration).
-   - CHALLENGER SALE: Teach one practical observation, Tailor to the persona, Take Control with a low-friction next step.
+   - CHALLENGER SALE: Teach one practical observation tailored to the persona and trigger, Take Control with a low-friction next step.
    - GAP SELLING: Highlight friction between scattered vendor logistics and a streamlined on-site calibration plan.
    - VALUE / ROI SELLING: Focus on qualitative outcomes (reduced equipment movement, lower coordination effort, audit readiness).
    - MEDDPICC: Ground the internal strategy in buyer criteria, pain, and process.
 
-3. FORBIDDEN FRAMEWORK TERMS:
+4. FORBIDDEN FRAMEWORK TERMS:
    - Recipient must NEVER see framework terminology in email text.
    - NEVER write 'Situation:', 'Problem:', 'Implication:', 'Need-Payoff:', 'Challenger:', 'MEDDPICC:', 'GAP Selling:', 'ROI:', or 'Teach:'.
 
-4. EMAIL STRUCTURE (DAY 1 INITIAL EMAIL):
+5. EMAIL STRUCTURE (DAY 1 INITIAL EMAIL):
    - Length: Strictly between 80 and 150 words.
-   - Opening: Grounded in verified trigger and facility context.
-   - Observation: Practical insight on calibration workload or coordination friction.
-   - Value: How Oorja CC-3963 accredited on-site support simplifies execution.
-   - CTA: Low-friction discovery ask (e.g., review equipment list for on-site feasibility).
+   - Opening: Grounded in verified trigger, persona, and facility context.
+   - Observation / Challenger: Practical, persona-specific insight on calibration workload or coordination friction.
+   - Value: How Oorja CC-3963 accredited on-site support simplifies execution for the specific equipment supplied.
+   - CTA: Low-friction discovery ask tailored to the persona.
    - Referral ask: Polite ask to connect with the right Quality/Metrology lead if recipient is not direct owner.
 
-5. FOLLOW-UP CADENCE (STRICTLY DIFFERENTIATED):
-   - Day 3 (40-75 words): Relevance reminder & brief situation/problem check.
-   - Day 5 (50-85 words): Challenger insight on grouping multi-parameter calibration on-site to reduce vendor overhead.
+6. FOLLOW-UP CADENCE (STRICTLY DIFFERENTIATED):
+   - Day 3 (40-75 words): Relevance reminder & conservative situation/problem check referencing facility/trigger.
+   - Day 5 (50-85 words): Introduce a PERSONA-SPECIFIC Challenger/value insight (Quality: certificate availability & traceability; Plant: off-site equipment transit disruption; Operations: shift delays & line readiness; Metrology: separating in-situ from lab masters; Procurement: hidden coordination costs of fragmented vendors). Do NOT use identical Day-5 copy across personas!
    - Day 11 (40-70 words): Practical offer to review upcoming equipment list to classify on-site vs lab items.
    - Day 21 (30-60 words): Courteous final note, close loop, polite referral request.
 
-6. STANDARDIZED SENDER SIGNATURE (MANDATORY):
+7. STANDARDIZED SENDER SIGNATURE (MANDATORY):
    Every generated customer-facing email (initial body and all follow-ups) MUST end with this exact signature:
    Best regards,
 

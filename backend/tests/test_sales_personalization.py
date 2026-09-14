@@ -340,7 +340,7 @@ class TestSalesPersonalizationPipeline(unittest.TestCase):
                 "During ramp-up phases, calibration planning often gets addressed after mechanical installation, "
                 "which can compress qualification timelines and create scheduling bottlenecks across multiple external labs.\n\n"
                 "Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
-                "We provide consolidated on-site calibration across mechanical, thermal, pressure, and electrical instruments, "
+                "We provide consolidated on-site calibration for dimensional masters, CMM systems, and thermal process instrumentation, "
                 "reducing equipment movement and administrative overhead.\n\n"
                 "Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?\n\n"
                 "If another colleague directly leads metrology or quality planning for Plant V, could you kindly point me to the right lead?\n\n"
@@ -402,7 +402,7 @@ class TestSalesPersonalizationPipeline(unittest.TestCase):
                 "During ramp-up phases, calibration planning often gets addressed after mechanical installation, "
                 "which can compress qualification timelines and create scheduling bottlenecks across multiple external labs.\n\n"
                 "Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
-                "We provide consolidated on-site calibration across mechanical, thermal, pressure, and electrical instruments, "
+                "We provide consolidated on-site calibration for dimensional masters, CMM systems, and thermal process instrumentation, "
                 "reducing equipment movement and administrative overhead.\n\n"
                 "Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?\n\n"
                 "If another colleague directly leads metrology or quality planning for Plant V, could you kindly point me to the right lead?\n\n"
@@ -410,7 +410,7 @@ class TestSalesPersonalizationPipeline(unittest.TestCase):
             ),
             "followups": {
                 "day_3": f"Dear Krishna, following up on Plant V calibration planning. Are you the right lead?\n\n{STANDARD_SIGNATURE_TEXT}",
-                "day_5": f"Dear Krishna, grouping multiple parameter calibrations into an on-site slot reduces transit overhead.\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_5": f"Dear Krishna, grouping calibrations into an on-site slot reduces transit overhead.\n\n{STANDARD_SIGNATURE_TEXT}",
                 "day_11": f"Dear Krishna, happy to review open items on your equipment list if scheduling is underway.\n\n{STANDARD_SIGNATURE_TEXT}",
                 "day_21": f"Dear Krishna, closing the loop. Please let me know if another colleague leads this activity.\n\n{STANDARD_SIGNATURE_TEXT}",
             },
@@ -606,6 +606,243 @@ class TestSalesPersonalizationPipeline(unittest.TestCase):
         # Zero SMTP verified
         self.assertTrue(preview["test_mode"])
         self.assertTrue(preview["no_send_enforced"])
+
+    def test_validator_rejects_unsupported_audit_assertion(self):
+        """Quality validator fails copy asserting an upcoming audit without verified evidence."""
+        record = _base_record(
+            trigger="New precision machining and press line commissioning",
+            reasoning="Commissioning of new manufacturing machinery",
+        )
+        context = build_personalization_context(record)
+        bad_body = (
+            "Dear Krishna,\n\n"
+            "With Bharat Precision Forgings Ltd advancing commissioning at Plant V, "
+            "maintaining continuous measurement traceability becomes essential ahead of your upcoming audit.\n\n"
+            "Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
+            "We provide consolidated on-site calibration for dimensional masters and CMM systems, "
+            "reducing equipment movement and administrative overhead.\n\n"
+            "Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?\n\n"
+            "If another colleague directly leads metrology or quality planning for Plant V, could you kindly point me to the right person?\n\n"
+            f"{STANDARD_SIGNATURE_TEXT}"
+        )
+        report = self.validator.validate(
+            subject="Audit Preparation Support",
+            body=bad_body,
+            followups={
+                "day_3": f"f3\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_5": f"f5\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_11": f"f11\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_21": f"f21\n\n{STANDARD_SIGNATURE_TEXT}",
+            },
+            context=context,
+        )
+        self.assertFalse(report.valid)
+        self.assertEqual(report.status, "PERSONALIZATION_REVIEW_REQUIRED")
+        self.assertTrue(any("UNSUPPORTED_AUDIT_ASSERTION" in v for v in report.violations))
+
+    def test_validator_allows_audit_mention_when_audit_evidence_present(self):
+        """Quality validator permits audit context when verified audit evidence is present."""
+        record = _base_record(
+            trigger="Upcoming annual IATF and customer surveillance audit",
+            reasoning="Audit compliance requires calibration certificate retrieval",
+        )
+        context = build_personalization_context(record)
+        valid_result = DeterministicPersonalizationGenerator.generate(context)
+        report = self.validator.validate(
+            subject=valid_result["subject"],
+            body=valid_result["body"],
+            followups=valid_result["followups"],
+            context=context,
+        )
+        self.assertTrue(report.valid)
+        self.assertFalse(any("UNSUPPORTED_AUDIT_ASSERTION" in v for v in report.violations))
+
+    def test_validator_rejects_unsupported_absolute_claims(self):
+        """Quality validator fails copy containing unverified absolute claims like 'significantly reduces'."""
+        context = build_personalization_context(_base_record())
+        bad_body = (
+            "Dear Krishna,\n\n"
+            "With Bharat Precision Forgings Ltd advancing commissioning at Plant V, "
+            "managing instrument verification across newly installed press lines is a practical priority.\n\n"
+            "Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
+            "Our on-site execution significantly reduces logistics overhead and eliminates downtime risk.\n\n"
+            "Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?\n\n"
+            "If another colleague directly leads metrology or quality planning for Plant V, could you kindly point me to the right person?\n\n"
+            f"{STANDARD_SIGNATURE_TEXT}"
+        )
+        report = self.validator.validate(
+            subject="Calibration Support",
+            body=bad_body,
+            followups={
+                "day_3": f"f3\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_5": f"f5\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_11": f"f11\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_21": f"f21\n\n{STANDARD_SIGNATURE_TEXT}",
+            },
+            context=context,
+        )
+        self.assertFalse(report.valid)
+        self.assertEqual(report.status, "PERSONALIZATION_REVIEW_REQUIRED")
+        self.assertTrue(any("UNSUPPORTED_ABSOLUTE_CLAIM" in v for v in report.violations))
+
+    def test_validator_rejects_generic_four_discipline_boilerplate_when_narrower(self):
+        """Quality validator rejects generic four-discipline list when opportunity is narrower."""
+        context = build_personalization_context(_base_record(
+            calibration_opportunity="Dimensional CMM and furnace pyrometry calibration"
+        ))
+        bad_body = (
+            "Dear Krishna,\n\n"
+            "With Bharat Precision Forgings Ltd advancing commissioning at Plant V, "
+            "managing instrument verification across newly installed press lines is a practical priority.\n\n"
+            "Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
+            "We group mechanical, thermal, pressure, and electrical calibration into a single planned on-site slot.\n\n"
+            "Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?\n\n"
+            "If another colleague directly leads metrology or quality planning for Plant V, could you kindly point me to the right person?\n\n"
+            f"{STANDARD_SIGNATURE_TEXT}"
+        )
+        report = self.validator.validate(
+            subject="Calibration Support",
+            body=bad_body,
+            followups={
+                "day_3": f"f3\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_5": f"f5\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_11": f"f11\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_21": f"f21\n\n{STANDARD_SIGNATURE_TEXT}",
+            },
+            context=context,
+        )
+        self.assertFalse(report.valid)
+        self.assertEqual(report.status, "PERSONALIZATION_REVIEW_REQUIRED")
+        self.assertTrue(any("GENERIC_DISCIPLINE_BOILERPLATE" in v for v in report.violations))
+
+    def test_synthetic_comparison_three_personas_materially_differ(self):
+        """Synthetic Comparison: 1 company, 1 facility, 1 trigger, 3 personas materially differ."""
+        base_kwargs = dict(
+            company="Tata Motors Commercial Vehicles Ltd",
+            facility="Commercial Vehicle Plant, Pimpri, Pune, Maharashtra",
+            city="Pune",
+            state="Maharashtra",
+            trigger="new production line commissioning",
+            calibration_opportunity="dimensional + temperature calibration",
+            reasoning="Commissioning of new transmission assembly line",
+        )
+
+        rec_quality = _base_record(
+            person="Arun Deshmukh",
+            first_name="Arun",
+            designation="Head of Quality Assurance",
+            persona="Quality Head",
+            **base_kwargs,
+        )
+        rec_plant = _base_record(
+            person="Rajesh Sharma",
+            first_name="Rajesh",
+            designation="Executive Director & Plant Head",
+            persona="Plant Head",
+            **base_kwargs,
+        )
+        rec_proc = _base_record(
+            person="Siddharth Mehta",
+            first_name="Siddharth",
+            designation="Head of Sourcing & Vendor Procurement",
+            persona="Procurement",
+            **base_kwargs,
+        )
+
+        res_quality = self.pipeline.personalize_record(rec_quality, force_provider="DETERMINISTIC")
+        res_plant = self.pipeline.personalize_record(rec_plant, force_provider="DETERMINISTIC")
+        res_proc = self.pipeline.personalize_record(rec_proc, force_provider="DETERMINISTIC")
+
+        # 1. All must be VALIDATED
+        self.assertEqual(res_quality["status"], "VALIDATED")
+        self.assertEqual(res_plant["status"], "VALIDATED")
+        self.assertEqual(res_proc["status"], "VALIDATED")
+
+        body_q = res_quality["body"]
+        body_p = res_plant["body"]
+        body_pr = res_proc["body"]
+
+        # 2. None may be identical
+        self.assertNotEqual(body_q, body_p)
+        self.assertNotEqual(body_q, body_pr)
+        self.assertNotEqual(body_p, body_pr)
+
+        # 3. Persona-specific content checks
+        self.assertTrue("traceability" in body_q.lower() or "qualification" in body_q.lower())
+        self.assertTrue("production" in body_p.lower() or "shutdown" in body_p.lower())
+        self.assertTrue("vendor" in body_pr.lower() or "commercial" in body_pr.lower())
+
+        # 4. Day 5 follow-up differentiation
+        d5_q = res_quality["followups"]["day_5"]
+        d5_p = res_plant["followups"]["day_5"]
+        d5_pr = res_proc["followups"]["day_5"]
+        self.assertNotEqual(d5_q, d5_p)
+        self.assertNotEqual(d5_q, d5_pr)
+        self.assertNotEqual(d5_p, d5_pr)
+
+        # 5. Opportunity alignment (no generic 4-discipline boilerplate)
+        for b in [body_q, body_p, body_pr]:
+            self.assertNotIn("mechanical, thermal, pressure, and electrical", b.lower())
+            self.assertNotIn("significantly reduces", b.lower())
+
+        # 6. No invented upcoming audit assertion
+        for b in [body_q, body_p, body_pr]:
+            self.assertNotIn("ahead of quality audits", b.lower())
+            self.assertNotIn("upcoming audit", b.lower())
+
+    def test_synthetic_comparison_three_triggers_materially_differ(self):
+        """Synthetic Comparison: 1 Quality Head across 3 triggers materially differs."""
+        base_kwargs = dict(
+            company="Bharat Precision Forgings Ltd",
+            facility="Plant V, Baliguma, Jamshedpur",
+            city="Jamshedpur",
+            person="Krishna Kumar Jha",
+            first_name="Krishna",
+            designation="Head of Quality & Metrology",
+            persona="Quality Head",
+            calibration_opportunity="dimensional CMM and furnace pyrometry calibration",
+        )
+
+        rec_new_line = _base_record(
+            trigger="new production line commissioning",
+            reasoning="Installation of high-precision forging press line",
+            **base_kwargs,
+        )
+        rec_audit = _base_record(
+            trigger="upcoming annual IATF and customer surveillance audit",
+            reasoning="Annual surveillance audit approaching",
+            **base_kwargs,
+        )
+        rec_routine = _base_record(
+            trigger="routine plant maintenance cycle",
+            reasoning="Regular scheduled annual calibration",
+            **base_kwargs,
+        )
+
+        res_nl = self.pipeline.personalize_record(rec_new_line, force_provider="DETERMINISTIC")
+        res_aud = self.pipeline.personalize_record(rec_audit, force_provider="DETERMINISTIC")
+        res_rtn = self.pipeline.personalize_record(rec_routine, force_provider="DETERMINISTIC")
+
+        self.assertEqual(res_nl["status"], "VALIDATED")
+        self.assertEqual(res_aud["status"], "VALIDATED")
+        self.assertEqual(res_rtn["status"], "VALIDATED")
+
+        body_nl = res_nl["body"]
+        body_aud = res_aud["body"]
+        body_rtn = res_rtn["body"]
+
+        # None may be identical
+        self.assertNotEqual(body_nl, body_aud)
+        self.assertNotEqual(body_nl, body_rtn)
+        self.assertNotEqual(body_aud, body_rtn)
+
+        # Trigger-specific language
+        self.assertTrue("new line" in body_nl.lower() or "launch" in body_nl.lower())
+        self.assertTrue("audit" in body_aud.lower() or "surveillance" in body_aud.lower())
+        self.assertTrue("upcoming calibration cycle" in body_rtn.lower() or "routine" in body_rtn.lower())
+        # Routine must NOT fake urgency with audit
+        self.assertNotIn("ahead of quality audits", body_rtn.lower())
+        self.assertNotIn("upcoming audit", body_rtn.lower())
 
 
 if __name__ == "__main__":
