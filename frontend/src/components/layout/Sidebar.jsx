@@ -18,6 +18,7 @@ import {
   ChevronRight,
   Flame,
   Zap,
+  Power,
 } from "lucide-react";
 
 export default function Sidebar({ collapsed, setCollapsed }) {
@@ -25,6 +26,7 @@ export default function Sidebar({ collapsed, setCollapsed }) {
 
   const navItems = [
     { to: "/dashboard", label: "Command Center", icon: LayoutDashboard },
+    { to: "/operator", label: "Operator", icon: Power, badge: "Run" },
     { to: "/intelligence", label: "Decision Intel", icon: Zap, badge: "Core", highlight: true },
     { to: "/leads", label: "Lead Factory", icon: Users, badge: "AI" },
     { to: "/companies", label: "Companies 360", icon: Building2 },

@@ -183,3 +183,8 @@ export const getContactResearchStatus = () => api.get("/contact-research/status"
 export const getContactResearchRuns = () => api.get("/contact-research/runs");
 export const getContactResearchRun = (id) => api.get(`/contact-research/runs/${id}`);
 export const startContactResearchRun = (data) => api.post("/contact-research/runs", data);
+
+// One-click autonomous operator
+export const getOperatorStatus = () => api.get("/operator/status");
+export const startOperator = () => api.post("/operator/start");
+export const stopOperator = () => api.post("/operator/stop");

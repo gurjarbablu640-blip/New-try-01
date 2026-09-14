@@ -1,0 +1,170 @@
+"""Zero-provider, zero-SMTP tests for the one-click Salesoorja operator."""
+
+from __future__ import annotations
+
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+
+from openpyxl import load_workbook
+
+from services.rediff_sender_adapter import RediffAdapterConfig, RediffSenderAdapter
+from services.salesoorja_operator import REPORT_SHEETS, SalesoorjaOperator
+
+
+NOW = datetime(2026, 9, 14, 10, 30, tzinfo=timezone.utc)
+
+
+def _settings(**overrides):
+    values = {
+        "SALESOORJA_MODE": "TEST",
+        "REAL_OUTREACH_ENABLED": False,
+        "OUTBOUND_TEST_MODE": True,
+        "REDIFF_SENDER_ENABLED": False,
+        "REDIFF_TEST_MODE": True,
+        "SERPER_API_KEY": "",
+        "APOLLO_API_KEY": "",
+        "BRIGHTDATA_API_TOKEN": "",
+        "BRIGHTDATA_LINKEDIN_PROFILE_DATASET_ID": "",
+        "HIVE_API_KEY": "",
+        "GEMINI_API_KEY": "",
+        "GOOGLE_API_KEY": "",
+        "DAILY_SEND_TARGET": 150,
+        "DAILY_SEND_MAX": 250,
+        "MAX_SERPER_CALLS_PER_DAY": 1500,
+        "SALESOORJA_START_TIME": "09:00",
+        "SALESOORJA_END_TIME": "18:00",
+        "SALESOORJA_CYCLE_INTERVAL_SECONDS": 1,
+        "SALESOORJA_INBOX_INTERVAL_SECONDS": 1,
+        "SALESOORJA_TEST_MAX_CYCLES": 1,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _operator(tmp_path: Path, **settings_overrides) -> SalesoorjaOperator:
+    rediff = RediffSenderAdapter(
+        config=RediffAdapterConfig(
+            enabled=False,
+            test_mode=True,
+            system_path=tmp_path / "missing-rediff",
+            handoff_dir=tmp_path / "handoff",
+            cc_addresses=("Bablu@oorjatechnical.org", "piyushk@oorjatechnical.com"),
+            duplicate_window_days=14,
+        ),
+        now=lambda: NOW,
+    )
+    return SalesoorjaOperator(
+        settings_obj=_settings(**settings_overrides),
+        state_path=tmp_path / "runtime" / "operator_state.json",
+        report_dir=tmp_path / "reports",
+        now=lambda: NOW,
+        db_factory=None,
+        rediff_adapter=rediff,
+    )
+
+
+def test_complete_synthetic_run_generates_expected_report_without_smtp(tmp_path, monkeypatch):
+    smtp_calls = []
+    monkeypatch.setattr("smtplib.SMTP", lambda *args, **kwargs: smtp_calls.append((args, kwargs)))
+    monkeypatch.setattr("smtplib.SMTP_SSL", lambda *args, **kwargs: smtp_calls.append((args, kwargs)))
+    operator = _operator(tmp_path)
+
+    result = operator.start_run(background=False)
+    status = result["status"]
+
+    assert result["started"] is True
+    assert status["status"] == "STOPPED"
+    assert status["stop_reason"] == "TEST_COMPLETE"
+    assert status["counters"]["companies_researched"] == 1
+    assert status["counters"]["qualified_opportunities"] == 1
+    assert status["counters"]["people_verified"] == 1
+    assert status["counters"]["contacts_enriched"] == 1
+    assert status["counters"]["emails_sent"] == 0
+    assert status["provider_usage"]["Rediff"] == 1
+    assert status["provider_usage"]["Serper"] == 0
+    assert smtp_calls == []
+
+    report = Path(status["report_path"])
+    assert report.is_file()
+    workbook = load_workbook(report, read_only=True)
+    assert workbook.sheetnames == ["SUMMARY", *REPORT_SHEETS]
+    assert status["final_report_email"]["status"] == "DRY_RUN_READY"
+    assert status["final_report_email"]["smtp_sent"] is False
+    assert status["final_report_email"]["attachment"] == str(report)
+
+
+def test_restart_resumes_history_without_duplicate_handoff(tmp_path):
+    first = _operator(tmp_path)
+    first.start_run(background=False)
+    first_status = first.get_status()
+
+    resumed = _operator(tmp_path)
+    second_result = resumed.start_run(background=False)
+    second_status = second_result["status"]
+
+    assert second_status["run_id"] == first_status["run_id"]
+    assert second_status["counters"]["companies_researched"] == 1
+    assert second_status["provider_usage"]["Rediff"] == 1
+    assert second_status["processed_accounts"] == ["synthetic:operator-control"]
+    assert "duplicate safely skipped" in second_status["last_action"].lower() or second_status["last_action"].startswith("Run finalized")
+
+
+def test_manual_stop_finishes_current_safe_work_and_finalizes(tmp_path):
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingOperator(SalesoorjaOperator):
+        def _process_synthetic_account(self):
+            entered.set()
+            release.wait(timeout=5)
+            return super()._process_synthetic_account()
+
+    base = _operator(tmp_path)
+    operator = BlockingOperator(
+        settings_obj=base.settings,
+        state_path=base.state_path,
+        report_dir=base.report_dir,
+        now=lambda: NOW,
+        db_factory=None,
+        rediff_adapter=base._rediff,
+    )
+
+    operator.start_run(background=True)
+    assert entered.wait(timeout=3)
+    stop_result = operator.stop_run(wait=False)
+    assert stop_result["stopped"] is True
+    assert stop_result["status"]["status"] == "STOPPING"
+    release.set()
+    operator._thread.join(timeout=5)
+
+    status = operator.get_status()
+    assert status["status"] == "STOPPED"
+    assert status["stop_reason"] == "MANUAL_STOP"
+    assert status["counters"]["emails_sent"] == 0
+    assert Path(status["report_path"]).is_file()
+
+
+def test_production_mode_requires_all_explicit_safety_switches(tmp_path):
+    operator = _operator(tmp_path, SALESOORJA_MODE="PRODUCTION")
+
+    result = operator.start_run(background=False)
+
+    assert result["started"] is False
+    assert result["reason"] == "PRODUCTION_GUARD_FAILED"
+    assert "REAL_OUTREACH_ENABLED=true" in result["errors"]
+    assert "OUTBOUND_TEST_MODE=false" in result["errors"]
+    assert operator.get_status()["counters"]["emails_sent"] == 0
+
+
+def test_invalid_mode_is_rejected_without_starting(tmp_path):
+    operator = _operator(tmp_path, SALESOORJA_MODE="UNSAFE")
+
+    result = operator.start_run(background=False)
+
+    assert result == {
+        "started": False,
+        "reason": "INVALID_MODE",
+        "errors": ["SALESOORJA_MODE must be TEST or PRODUCTION"],
+    }

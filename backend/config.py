@@ -77,6 +77,18 @@ class Settings(BaseSettings):
     REDIFF_CC_ADDRESSES: str = "Bablu@oorjatechnical.org,piyushk@oorjatechnical.com"
     REDIFF_DUPLICATE_WINDOW_DAYS: int = 14
 
+    # One-click autonomous operator
+    SALESOORJA_MODE: str = "TEST"
+    REAL_OUTREACH_ENABLED: bool = False
+    DAILY_SEND_TARGET: int = 150
+    DAILY_SEND_MAX: int = 250
+    MAX_SERPER_CALLS_PER_DAY: int = 1500
+    SALESOORJA_START_TIME: str = "09:00"
+    SALESOORJA_END_TIME: str = "18:00"
+    SALESOORJA_CYCLE_INTERVAL_SECONDS: int = 300
+    SALESOORJA_INBOX_INTERVAL_SECONDS: int = 1800
+    SALESOORJA_TEST_MAX_CYCLES: int = 1
+
     # Inbound IMAP Settings
     IMAP_HOST: str = ""
     IMAP_PORT: int = 993

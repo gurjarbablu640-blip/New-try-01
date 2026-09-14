@@ -207,16 +207,31 @@ def test_followup_thread_metadata_survives_handoff_mapping(tmp_path):
     assert mapped["REFERENCES"] == "<rediff-parent-001@oorja.local>"
 
 
-def test_rediff_system_unavailable_returns_safe_structured_error(tmp_path):
-    result = _adapter(tmp_path, system_path=tmp_path / "missing-rediff").prepare_handoff(_qualified_record())
+def test_rediff_system_unavailable_returns_safe_structured_error_in_production(tmp_path):
+    record = _qualified_record(provenance="REAL")
+    record["email"] = "asha.verma@precision-components.in"
+    record["evidence"]["reachable_email"]["email"] = record["email"]
+    result = _adapter(
+        tmp_path,
+        test_mode=False,
+        system_path=tmp_path / "missing-rediff",
+    ).prepare_handoff(record)
 
     assert result == {
         "status": FAILED,
         "reason": "REDIFF_SYSTEM_UNAVAILABLE",
         "transport_called": False,
         "smtp_sent": False,
-        "test_mode": True,
+        "test_mode": False,
     }
+
+
+def test_dry_run_does_not_require_external_rediff_installation(tmp_path):
+    result = _adapter(tmp_path, system_path=tmp_path / "missing-rediff").prepare_handoff(_qualified_record())
+
+    assert result["status"] == DRY_RUN_READY
+    assert result["transport_called"] is False
+    assert result["smtp_sent"] is False
 
 
 def test_transport_failure_never_normalizes_to_sent_and_redacts_credentials(tmp_path, caplog):
@@ -298,4 +313,3 @@ def test_sender_disabled_in_production_mode_is_safely_blocked(tmp_path):
     assert result["reason"] == "REDIFF_SENDER_DISABLED"
     assert result["transport_called"] is False
     assert result["smtp_sent"] is False
-

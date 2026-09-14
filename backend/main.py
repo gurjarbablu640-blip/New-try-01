@@ -49,6 +49,7 @@ from routes.intelligence import router as intelligence_router  # noqa: E402
 from routes.settings import router as settings_router  # noqa: E402
 from routes.lab_scopes import router as lab_scopes_router  # noqa: E402
 from routes.contact_research import router as contact_research_router  # noqa: E402
+from routes.operator import router as operator_router  # noqa: E402
 
 app.include_router(api_router)
 app.include_router(pipeline_router)
@@ -71,6 +72,7 @@ app.include_router(intelligence_router)
 app.include_router(settings_router)
 app.include_router(lab_scopes_router)
 app.include_router(contact_research_router)
+app.include_router(operator_router)
 
 
 @app.get("/api/health")

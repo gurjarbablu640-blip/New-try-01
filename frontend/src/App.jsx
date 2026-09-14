@@ -13,6 +13,7 @@ import InboxPage from "./pages/InboxPage";
 import CalibrationPage from "./pages/CalibrationPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import SettingsPage from "./pages/SettingsPage";
+import OperatorPage from "./pages/OperatorPage";
 
 export default function App() {
   return (
@@ -30,6 +31,7 @@ export default function App() {
           <Route path="calibration" element={<CalibrationPage />} />
           <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="operator" element={<OperatorPage />} />
           <Route path="assistant" element={<Navigate to="/intelligence" replace />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>

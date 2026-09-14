@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
-from config import PROJECT_ROOT, settings
+from config import settings
 from services.email_validator import EMAIL_REGEX, ROLE_PREFIXES
 from services.qualification_state_machine import determine_qualification_state
 
@@ -37,6 +37,7 @@ SUPPRESSED_BOUNCE = "SUPPRESSED_BOUNCE"
 INVALID_EMAIL = "INVALID_EMAIL"
 
 REDIFF_ENTRYPOINTS = ("campaign_runner.py", "send_email.py")
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
 SENSITIVE_KEY_PARTS = ("password", "secret", "token", "credential", "authorization")
 TEST_PROVENANCE = {"MOCK", "SYNTHETIC", "TEST", "DEMO"}
 STOP_REPLY_CLASSES = {
@@ -113,7 +114,7 @@ class RediffAdapterConfig:
     def from_settings(cls) -> "RediffAdapterConfig":
         handoff_dir = Path(settings.REDIFF_HANDOFF_DIR)
         if not handoff_dir.is_absolute():
-            handoff_dir = PROJECT_ROOT / "backend" / handoff_dir
+            handoff_dir = BACKEND_ROOT / handoff_dir
         return cls(
             enabled=bool(settings.REDIFF_SENDER_ENABLED),
             test_mode=bool(settings.OUTBOUND_TEST_MODE or settings.REDIFF_TEST_MODE),
@@ -214,6 +215,9 @@ class RediffSenderAdapter:
     def _system_available(self) -> bool:
         path = self.config.system_path
         return bool(path and path.is_dir() and all((path / name).is_file() for name in REDIFF_ENTRYPOINTS))
+
+    def system_available(self) -> bool:
+        return self._system_available()
 
     def _result(self, status: str, reason: str, **extra: Any) -> dict[str, Any]:
         result = {
@@ -392,7 +396,7 @@ class RediffSenderAdapter:
         """Apply Salesoorja gates and return a dry-run or queued file handoff."""
         if not self.config.enabled and not self.config.test_mode:
             return self._result(FAILED, "REDIFF_SENDER_DISABLED")
-        if not self._system_available():
+        if not self.config.test_mode and not self._system_available():
             return self._result(FAILED, "REDIFF_SYSTEM_UNAVAILABLE")
         if attachments:
             return self._result(FAILED, "ATTACHMENTS_UNSUPPORTED_BY_CURRENT_REDIFF_TRANSPORT")
