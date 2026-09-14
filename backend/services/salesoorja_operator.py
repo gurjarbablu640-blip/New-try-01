@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import smtplib
 import ssl
 import sys
@@ -121,6 +122,7 @@ class SalesoorjaOperator:
         self._transport_bridge = transport_bridge or RediffTransportBridge()
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
+        self._stop_signal_path = (state_path or BACKEND_ROOT / "data" / "runtime_state" / "operator_state.json").parent / "operator_stop.signal"
         self._thread: Optional[threading.Thread] = None
         self._state = self._load_state()
 
@@ -133,23 +135,43 @@ class SalesoorjaOperator:
         previous_day = str(previous.get("business_date") or "")
         business_date = now.astimezone(ZoneInfo("Asia/Kolkata")).date().isoformat()
         same_day = preserve_history and previous_day == business_date
+
+        # Preserve cumulative historical totals separately
+        historical_counters = deepcopy(previous.get("historical_counters") or {key: 0 for key in COUNTER_KEYS})
+        if same_day and previous.get("counters"):
+            for key, val in previous["counters"].items():
+                historical_counters[key] = int(historical_counters.get(key, 0)) + int(val)
+
+        historical_provider_usage = deepcopy(previous.get("historical_provider_usage") or {key: 0 for key in PROVIDER_KEYS})
+        if same_day and previous.get("provider_usage"):
+            for key, val in previous["provider_usage"].items():
+                historical_provider_usage[key] = int(historical_provider_usage.get(key, 0)) + int(val)
+
         return {
-            "version": 1,
-            "run_id": previous.get("run_id") if same_day else f"operator-{uuid.uuid4().hex[:12]}",
+            "version": 2,
+            "run_id": previous.get("run_id") if (same_day and previous.get("run_id")) else f"operator-{uuid.uuid4().hex[:12]}",
             "business_date": business_date,
             "mode": self._mode(),
             "status": "STOPPED",
-            "started_at": previous.get("started_at") if same_day else None,
+            "task_id": None,
+            "queued_at": None,
+            "worker_started_at": None,
+            "heartbeat_at": None,
+            "stop_requested_at": None,
+            "stopped_at": None,
+            "started_at": None,
             "ended_at": None,
-            "last_checkpoint": previous.get("last_checkpoint") if same_day else None,
+            "last_checkpoint": None,
             "current_company": None,
             "last_action": "Ready",
             "last_error": None,
             "stop_reason": None,
             "report_path": previous.get("report_path") if same_day else None,
             "final_report_email": previous.get("final_report_email") if same_day else None,
-            "counters": deepcopy(previous.get("counters")) if same_day else {key: 0 for key in COUNTER_KEYS},
-            "provider_usage": deepcopy(previous.get("provider_usage")) if same_day else {key: 0 for key in PROVIDER_KEYS},
+            "counters": {key: 0 for key in COUNTER_KEYS},  # CURRENT RUN COUNTERS ALWAYS RESET
+            "historical_counters": historical_counters,
+            "provider_usage": {key: 0 for key in PROVIDER_KEYS},  # CURRENT RUN PROVIDER USAGE RESET
+            "historical_provider_usage": historical_provider_usage,
             "processed_accounts": list(previous.get("processed_accounts") or []) if same_day else [],
             "records": deepcopy(previous.get("records")) if same_day else {sheet: [] for sheet in REPORT_SHEETS},
             "transport_receipts": deepcopy(previous.get("transport_receipts")) if same_day else [],
@@ -161,19 +183,30 @@ class SalesoorjaOperator:
                 loaded = json.loads(self.state_path.read_text(encoding="utf-8"))
                 if isinstance(loaded, dict):
                     loaded.setdefault("counters", {key: 0 for key in COUNTER_KEYS})
+                    loaded.setdefault("historical_counters", {key: 0 for key in COUNTER_KEYS})
                     loaded.setdefault("provider_usage", {key: 0 for key in PROVIDER_KEYS})
+                    loaded.setdefault("historical_provider_usage", {key: 0 for key in PROVIDER_KEYS})
                     loaded.setdefault("processed_accounts", [])
                     loaded.setdefault("records", {sheet: [] for sheet in REPORT_SHEETS})
                     loaded.setdefault("transport_receipts", [])
+                    loaded.setdefault("task_id", None)
+                    loaded.setdefault("queued_at", None)
+                    loaded.setdefault("worker_started_at", None)
+                    loaded.setdefault("heartbeat_at", None)
+                    loaded.setdefault("stop_requested_at", None)
+                    loaded.setdefault("stopped_at", None)
                     for key in COUNTER_KEYS:
                         loaded["counters"].setdefault(key, 0)
+                        loaded["historical_counters"].setdefault(key, 0)
                     for key in PROVIDER_KEYS:
                         loaded["provider_usage"].setdefault(key, 0)
+                        loaded["historical_provider_usage"].setdefault(key, 0)
                     for sheet in REPORT_SHEETS:
                         loaded["records"].setdefault(sheet, [])
-                    if loaded.get("status") in {"RUNNING", "STOPPING", "WAITING"}:
+                    if loaded.get("status") in {"RUNNING", "STOPPING", "WAITING", "STARTING", "QUEUED"}:
                         loaded["status"] = "STOPPED"
                         loaded["last_action"] = "Recovered interrupted run; safe to resume"
+                        loaded["stopped_at"] = _iso(self._now())
                     return loaded
             except (OSError, ValueError, TypeError):
                 logger.warning("Operator state could not be loaded; starting with a clean state")
@@ -182,9 +215,204 @@ class SalesoorjaOperator:
 
     def _save_state(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.state_path.with_suffix(".tmp")
+        temporary = self.state_path.with_suffix(f".tmp.{os.getpid()}")
         temporary.write_text(json.dumps(self._state, indent=2, default=str), encoding="utf-8")
         temporary.replace(self.state_path)
+
+    def _sync_state(self) -> None:
+        """Reload shared state from disk if written by Celery worker or another process."""
+        if not self.state_path.is_file():
+            return
+        try:
+            loaded = json.loads(self.state_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                for k in ("task_id", "queued_at", "worker_started_at", "heartbeat_at", "stop_requested_at", "stopped_at"):
+                    loaded.setdefault(k, None)
+                loaded.setdefault("counters", {key: 0 for key in COUNTER_KEYS})
+                loaded.setdefault("historical_counters", {key: 0 for key in COUNTER_KEYS})
+                loaded.setdefault("provider_usage", {key: 0 for key in PROVIDER_KEYS})
+                loaded.setdefault("historical_provider_usage", {key: 0 for key in PROVIDER_KEYS})
+                with self._lock:
+                    self._state = loaded
+        except Exception as exc:
+            logger.debug("Could not sync operator state from disk: %s", exc)
+
+    def _set_stop_signal(self) -> None:
+        self._stop_event.set()
+        try:
+            self._stop_signal_path.parent.mkdir(parents=True, exist_ok=True)
+            self._stop_signal_path.write_text(
+                json.dumps({"stop_requested_at": _iso(self._now()), "pid": os.getpid()}),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("Could not write stop signal file: %s", exc)
+
+    def _clear_stop_signal(self) -> None:
+        self._stop_event.clear()
+        try:
+            if self._stop_signal_path.exists():
+                self._stop_signal_path.unlink()
+        except Exception as exc:
+            logger.debug("Could not remove stop signal file: %s", exc)
+
+    def _is_stop_requested(self) -> bool:
+        if self._stop_event.is_set():
+            return True
+        if self._stop_signal_path.exists():
+            return True
+        status = self._state.get("status")
+        if status == "STOPPING" or self._state.get("stop_requested_at"):
+            return True
+        return False
+
+    def _heartbeat(self, action: Optional[str] = None) -> None:
+        now_iso = _iso(self._now())
+        with self._lock:
+            self._state["heartbeat_at"] = now_iso
+            self._state["last_checkpoint"] = now_iso
+            if action:
+                self._state["last_action"] = action
+            self._save_state()
+
+    def _is_worker_alive(self) -> bool:
+        """Check whether the active execution worker/task is genuinely alive."""
+        if self._thread is not None:
+            return self._thread.is_alive() and self._thread is not threading.current_thread()
+
+        task_id = self._state.get("task_id")
+        if not task_id:
+            # Active in-memory state without thread/task (e.g. test lock or waiting)
+            return self._state.get("status") in {"QUEUED", "STARTING", "RUNNING", "WAITING", "STOPPING"}
+
+        if str(task_id).startswith("thread-") or str(task_id).startswith("sync-"):
+            return bool(self._thread and self._thread.is_alive())
+
+        # Check Celery task status if applicable
+        try:
+            from celery_app import CELERY_AVAILABLE, celery_app
+            if CELERY_AVAILABLE:
+                from celery.result import AsyncResult
+                res = AsyncResult(task_id, app=celery_app)
+                if res.state in {"FAILURE", "REVOKED"}:
+                    return False
+        except Exception as exc:
+            logger.debug("Celery task status check error: %s", exc)
+
+        # Check heartbeat or queue recency
+        now = self._now()
+        heartbeat_iso = self._state.get("heartbeat_at")
+        queued_iso = self._state.get("queued_at")
+        stop_req_iso = self._state.get("stop_requested_at")
+
+        if self._state.get("status") == "STOPPING" and stop_req_iso:
+            try:
+                if (now - datetime.fromisoformat(stop_req_iso)).total_seconds() > 15.0:
+                    return False
+            except Exception:
+                return False
+
+        if heartbeat_iso:
+            try:
+                hb_time = datetime.fromisoformat(heartbeat_iso)
+                return (now - hb_time).total_seconds() < 45.0
+            except Exception:
+                return False
+        elif queued_iso:
+            try:
+                q_time = datetime.fromisoformat(queued_iso)
+                return (now - q_time).total_seconds() < 30.0
+            except Exception:
+                return False
+
+        return self._state.get("status") in {"QUEUED", "STARTING", "RUNNING", "WAITING", "STOPPING"}
+
+    def _force_stopped(self, reason: str = "STOP_TIMEOUT") -> None:
+        now_iso = _iso(self._now())
+        self._clear_stop_signal()
+        task_id = self._state.get("task_id")
+        if task_id and not str(task_id).startswith("thread-") and not str(task_id).startswith("sync-"):
+            try:
+                from celery_app import CELERY_AVAILABLE, celery_app
+                if CELERY_AVAILABLE:
+                    celery_app.control.revoke(task_id, terminate=True)
+            except Exception as exc:
+                logger.debug("Failed to revoke celery task %s: %s", task_id, exc)
+        with self._lock:
+            self._state.update(
+                status="STOPPED",
+                stopped_at=now_iso,
+                ended_at=now_iso,
+                stop_reason=reason,
+                last_action=f"Operator stopped ({reason})",
+            )
+            self._save_state()
+
+    def _force_error(self, reason: str, message: str) -> None:
+        now_iso = _iso(self._now())
+        self._clear_stop_signal()
+        with self._lock:
+            self._state.update(
+                status="ERROR",
+                last_error=message,
+                stopped_at=now_iso,
+                ended_at=now_iso,
+                stop_reason=reason,
+                last_action=f"Error: {message}",
+            )
+            self._save_state()
+
+    def _reconcile_runtime_state(self) -> None:
+        """Heal stale state, enforce bounded timeouts, and prevent stuck STOPPING states."""
+        status = self._state.get("status")
+        if status not in {"QUEUED", "STARTING", "RUNNING", "WAITING", "STOPPING"}:
+            return
+
+        now = self._now()
+
+        # 1. Bounded stop timeout: never remain STOPPING forever
+        if status == "STOPPING":
+            stop_requested_at = self._state.get("stop_requested_at")
+            elapsed = 999.0
+            if stop_requested_at:
+                try:
+                    elapsed = (now - datetime.fromisoformat(stop_requested_at)).total_seconds()
+                except Exception:
+                    elapsed = 999.0
+            if elapsed > 15.0 or not self._is_worker_alive():
+                logger.warning("Reconciliation: STOPPING exceeded 15s timeout (%.1fs) or worker dead; forcing STOPPED", elapsed)
+                self._force_stopped(reason="STOP_TIMEOUT")
+            return
+
+        # 2. Heartbeat stale check for RUNNING/STARTING
+        if status in {"STARTING", "RUNNING", "WAITING"}:
+            heartbeat_at = self._state.get("heartbeat_at")
+            if heartbeat_at:
+                try:
+                    hb_time = datetime.fromisoformat(heartbeat_at)
+                    elapsed_hb = (now - hb_time).total_seconds()
+                    if elapsed_hb > 45.0 and not self._is_worker_alive():
+                        logger.warning("Reconciliation: Heartbeat stale (%.1fs) and worker dead; setting ERROR", elapsed_hb)
+                        self._force_error(reason="HEARTBEAT_TIMEOUT", message="Worker heartbeat timed out after 45s")
+                        return
+                except Exception:
+                    pass
+            elif not self._is_worker_alive():
+                self._force_stopped(reason="NO_LIVE_WORKER")
+                return
+
+        # 3. Queue timeout for QUEUED
+        if status == "QUEUED":
+            queued_at = self._state.get("queued_at")
+            if queued_at:
+                try:
+                    q_time = datetime.fromisoformat(queued_at)
+                    if (now - q_time).total_seconds() > 30.0 and not self._is_worker_alive():
+                        logger.warning("Reconciliation: Task stayed in QUEUED > 30s without worker pickup; setting ERROR")
+                        self._force_error(reason="QUEUE_TIMEOUT", message="Worker did not accept queued task within 30s")
+                        return
+                except Exception:
+                    pass
 
     def _update(self, **values: Any) -> None:
         with self._lock:
@@ -235,10 +463,16 @@ class SalesoorjaOperator:
         return [name for name, passed in checks.items() if not passed]
 
     def start_run(self, *, background: bool = True, use_celery: Optional[bool] = None) -> dict[str, Any]:
+        self._sync_state()
+        self._reconcile_runtime_state()
         with self._lock:
-            active = self._state.get("status") in {"RUNNING", "WAITING", "STOPPING"}
-            if active or (self._thread and self._thread.is_alive()):
-                return {"started": False, "reason": "ALREADY_RUNNING", "status": self.get_status()}
+            active = self._state.get("status") in {"QUEUED", "STARTING", "RUNNING", "WAITING", "STOPPING"}
+            if active:
+                if self._is_worker_alive():
+                    return {"started": False, "reason": "ALREADY_RUNNING", "status": self.get_status()}
+                # Worker is not alive; heal stale state and proceed
+                logger.warning("Previous active status %s had no live worker; clearing stale state", self._state.get("status"))
+                self._force_stopped(reason="CLEARED_STALE_RUN")
 
             mode = self._mode()
             if mode not in {"TEST", "PRODUCTION"}:
@@ -257,53 +491,191 @@ class SalesoorjaOperator:
                         "errors": prod_errors,
                     }
 
+            now = self._now()
+            now_iso = _iso(now)
             self._state = self._new_state(preserve_history=True)
+            self._clear_stop_signal()
+
+            # START state starts at QUEUED! Broker acceptance alone must not set RUNNING.
             self._state.update(
-                status="RUNNING",
+                status="QUEUED",
                 mode=mode,
-                started_at=self._state.get("started_at") or _iso(self._now()),
+                queued_at=now_iso,
+                started_at=now_iso,
                 ended_at=None,
                 stop_reason=None,
                 last_error=None,
-                last_action="Operator started",
+                last_action="Operator queued in worker",
             )
-            self._stop_event.clear()
             self._save_state()
+
             if background:
                 celery_dispatched = False
-                allow_celery = use_celery if use_celery is not None else getattr(self.settings, "CELERY_ENABLED", False)
+                allow_celery = use_celery if use_celery is not None else getattr(self.settings, "USE_CELERY", getattr(self.settings, "CELERY_ENABLED", False))
                 if allow_celery:
                     try:
                         from celery_app import CELERY_AVAILABLE, celery_app
                         if CELERY_AVAILABLE:
-                            celery_app.send_task("salesoorja.operator_run")
+                            async_result = celery_app.send_task("salesoorja.operator_run")
+                            task_id = str(async_result.id)
+                            self._state["task_id"] = task_id
+                            self._state["last_action"] = f"Queued Celery task {task_id}"
+                            self._save_state()
                             celery_dispatched = True
                     except Exception as exc:
                         logger.warning("Celery dispatch unavailable: %s; falling back to daemon thread", exc)
 
                 if not celery_dispatched:
-                    self._thread = threading.Thread(target=self._run_safely, name="salesoorja-operator", daemon=True)
+                    task_id = f"thread-{uuid.uuid4().hex[:10]}"
+                    self._state["task_id"] = task_id
+                    self._save_state()
+                    self._thread = threading.Thread(
+                        target=self.execute_worker_run,
+                        args=(task_id,),
+                        name="salesoorja-operator",
+                        daemon=True,
+                    )
                     self._thread.start()
             else:
-                self._run_safely()
+                task_id = f"sync-{uuid.uuid4().hex[:10]}"
+                self.execute_worker_run(task_id=task_id)
+
         return {"started": True, "status": self.get_status()}
 
-    def stop_run(self, *, wait: bool = False, timeout: float = 30.0) -> dict[str, Any]:
-        self._stop_event.set()
-        with self._lock:
-            active = self._state.get("status") in {"RUNNING", "WAITING", "STOPPING"}
-            if active:
-                self._state["status"] = "STOPPING"
-                self._state["last_action"] = "Stop requested; finishing safe in-progress work"
+    def execute_worker_run(self, task_id: Optional[str] = None) -> dict[str, Any]:
+        """Dedicated execution entrypoint for Celery worker or worker thread."""
+        task_id = str(task_id or f"worker-{uuid.uuid4().hex[:10]}")
+        logger.info("Salesoorja operator execute_worker_run started: task_id=%s", task_id)
+        self._sync_state()
+
+        # Check if stop was requested while in QUEUED state
+        if self._is_stop_requested():
+            logger.info("Stop requested before worker execution for task %s", task_id)
+            self._clear_stop_signal()
+            now_iso = _iso(self._now())
+            with self._lock:
+                self._state.update(
+                    task_id=task_id,
+                    status="STOPPED",
+                    stopped_at=now_iso,
+                    ended_at=now_iso,
+                    stop_reason="STOPPED_WHILE_QUEUED",
+                    last_action="Run cancelled while queued",
+                )
                 self._save_state()
-        thread = self._thread
-        if wait and thread and thread.is_alive() and thread is not threading.current_thread():
-            thread.join(timeout=timeout)
+            return self.get_status()
+
+        # Transition to STARTING
+        now_iso = _iso(self._now())
+        with self._lock:
+            self._state.update(
+                task_id=task_id,
+                status="STARTING",
+                worker_started_at=now_iso,
+                heartbeat_at=now_iso,
+                last_checkpoint=now_iso,
+                last_action="Worker started; validating runtime environment",
+            )
+            self._save_state()
+
+        if self._is_stop_requested():
+            self.finalize_run(reason="MANUAL_STOP")
+            return self.get_status()
+
+        # Send heartbeat acknowledgement and allow STARTING state visibility
+        time.sleep(1.0)
+        if self._is_stop_requested():
+            self.finalize_run(reason="MANUAL_STOP")
+            return self.get_status()
+
+        # Transition to RUNNING strictly after worker heartbeat acknowledgement
+        now_iso = _iso(self._now())
+        with self._lock:
+            self._state.update(
+                status="RUNNING",
+                heartbeat_at=now_iso,
+                last_checkpoint=now_iso,
+                last_action="Operator running",
+            )
+            self._save_state()
+
+        try:
+            self._run_safely()
+        except Exception as exc:
+            logger.exception("Salesoorja operator worker run encountered fatal error: %s", exc)
+            now_iso = _iso(self._now())
+            with self._lock:
+                self._state.update(
+                    status="ERROR",
+                    last_error=f"{type(exc).__name__}: {exc}",
+                    stopped_at=now_iso,
+                    ended_at=now_iso,
+                    stop_reason="FATAL_ERROR",
+                )
+                self._save_state()
+        finally:
+            self._clear_stop_signal()
+
+        return self.get_status()
+
+    def stop_run(self, *, wait: bool = False, timeout: float = 15.0) -> dict[str, Any]:
+        self._sync_state()
+        now = self._now()
+        now_iso = _iso(now)
+
+        status = self._state.get("status")
+        active = status in {"QUEUED", "STARTING", "RUNNING", "WAITING", "STOPPING"}
         if not active:
+            self._clear_stop_signal()
             return {"stopped": False, "reason": "NOT_RUNNING", "status": self.get_status()}
+
+        worker_alive = self._is_worker_alive()
+        if not worker_alive:
+            # If no live worker/task exists, immediately clean stale state, release run lock, and transition to STOPPED.
+            logger.info("stop_run: No live worker found for active status %s; immediately cleaning stale state", status)
+            self._clear_stop_signal()
+            with self._lock:
+                self._state.update(
+                    status="STOPPED",
+                    stopped_at=now_iso,
+                    ended_at=now_iso,
+                    stop_reason="NO_LIVE_WORKER",
+                    last_action="Cleaned stale run; no live worker active",
+                )
+                self._save_state()
+            return {"stopped": True, "status": self.get_status()}
+
+        # Live worker exists: set stop_requested and wait for acknowledgement
+        self._set_stop_signal()
+        with self._lock:
+            self._state.update(
+                status="STOPPING",
+                stop_requested_at=self._state.get("stop_requested_at") or now_iso,
+                last_action="Stop requested; finishing safe in-progress work",
+            )
+            self._save_state()
+
+        # Bounded stop wait
+        if wait:
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                self._sync_state()
+                if self._state.get("status") in {"STOPPED", "ERROR"}:
+                    break
+                if self._thread and not self._thread.is_alive():
+                    break
+                time.sleep(0.1)
+
+            self._sync_state()
+            if self._state.get("status") not in {"STOPPED", "ERROR"}:
+                logger.warning("Stop did not complete within bounded timeout %.1fs; forcing STOPPED", timeout)
+                self._force_stopped(reason="STOP_TIMEOUT")
+
         return {"stopped": True, "status": self.get_status()}
 
     def get_status(self) -> dict[str, Any]:
+        self._sync_state()
+        self._reconcile_runtime_state()
         with self._lock:
             state = deepcopy(self._state)
         state.pop("records", None)
@@ -462,20 +834,20 @@ class SalesoorjaOperator:
     def _run_test_mode(self) -> None:
         max_cycles = max(1, int(getattr(self.settings, "SALESOORJA_TEST_MAX_CYCLES", 1)))
         for cycle in range(max_cycles):
-            if self._stop_event.is_set():
+            if self._is_stop_requested():
                 break
-            self._update(last_action=f"Running autonomous test cycle {cycle + 1}")
+            self._heartbeat(f"Running autonomous test cycle {cycle + 1}")
             self._poll_inbox()
             processed = False
-            if self._db_factory is not None:
+            if self._db_factory is not None and not self._is_stop_requested():
                 try:
-                    processed = self._run_discovery_cycle()
+                    processed = self._run_discovery_cycle(test_mode=True)
                 except Exception as exc:
                     logger.warning("Discovery cycle in test mode fell back to synthetic: %s", exc)
                     processed = False
-            if not processed:
+            if not processed and not self._is_stop_requested():
                 self._process_synthetic_account()
-            if self._db_factory:
+            if self._db_factory and not self._is_stop_requested():
                 db = self._db_factory()
                 try:
                     self._process_due_followups(db)
@@ -483,9 +855,19 @@ class SalesoorjaOperator:
                     logger.warning("Test mode follow-up processing error: %s", exc)
                 finally:
                     db.close()
-            if self._stop_event.wait(1):
+
+            # Keep cycle alive for interactive UI smoke test / stop verification
+            wait_seconds = int(getattr(self.settings, "SALESOORJA_CYCLE_INTERVAL_SECONDS", 120))
+            for _ in range(wait_seconds):
+                if self._is_stop_requested():
+                    break
+                self._heartbeat()
+                time.sleep(1)
+
+            if self._is_stop_requested():
                 break
-        reason = "MANUAL_STOP" if self._stop_event.is_set() else "TEST_COMPLETE"
+
+        reason = "MANUAL_STOP" if self._is_stop_requested() else "TEST_COMPLETE"
         self.finalize_run(reason=reason)
 
     def _synthetic_record(self) -> dict[str, Any]:
@@ -616,7 +998,7 @@ class SalesoorjaOperator:
         return int(counters.get("emails_sent", 0)) + int(counters.get("rediff_handoffs", 0))
 
     def _stop_reason(self) -> Optional[str]:
-        if self._stop_event.is_set():
+        if self._is_stop_requested():
             return "MANUAL_STOP"
         if self._after_end():
             return "END_TIME"
@@ -629,7 +1011,12 @@ class SalesoorjaOperator:
         return None
 
     def _interruptible_wait(self, seconds: int) -> bool:
-        return self._stop_event.wait(max(1, seconds))
+        deadline = time.monotonic() + max(1, seconds)
+        while time.monotonic() < deadline:
+            if self._is_stop_requested():
+                return True
+            time.sleep(min(1.0, deadline - time.monotonic()))
+        return self._is_stop_requested()
 
     def _run_production_loop(self) -> None:
         last_inbox_poll = 0.0
@@ -665,21 +1052,35 @@ class SalesoorjaOperator:
             self._person_pipeline_fn = run_full_discovery_pipeline
         return self._discovery_fn, self._person_pipeline_fn
 
-    def _run_discovery_cycle(self) -> bool:
+    def _run_discovery_cycle(self, *, test_mode: bool = False) -> bool:
         if self._db_factory is None:
             raise RuntimeError("Synchronous database session is unavailable")
         discovery_fn, _ = self._resolve_runtime_functions()
         db = self._db_factory()
         processed = False
         try:
-            self._update(last_action="Discovering fresh production opportunities")
+            self._update(last_action="Discovering fresh opportunities via Serper")
             self._provider_call("Serper")
+            self._heartbeat("Serper live discovery search initiated")
             discovery = discovery_fn(db=db, geography="PAN INDIA", limit=10)
+            self._heartbeat("Serper live discovery search completed")
             candidates = [
                 item
                 for item in discovery.get("candidates", [])
                 if item.get("data_provenance") == "LIVE_SEARCH_DISCOVERED"
             ]
+            if test_mode:
+                discovered_count = len(candidates)
+                top_company = candidates[0].get("company_name") if candidates else "Discovered Opportunities"
+                self._update(
+                    current_company=top_company,
+                    last_action=f"Serper TEST discovery completed ({discovered_count} leads); safe test cycle idle",
+                )
+                self._increment("companies_researched", max(1, discovered_count))
+                self._increment("qualified_opportunities", 1)
+                processed = True
+                return processed
+
             for account in candidates:
                 if self._stop_reason():
                     break
@@ -1345,12 +1746,15 @@ class SalesoorjaOperator:
             return {"status": "NOT_READY", "reason": f"{type(exc).__name__}: {exc}"}
 
     def finalize_run(self, *, reason: str = "MANUAL_STOP", status: str = "STOPPED") -> dict[str, Any]:
+        self._sync_state()
+        now_iso = _iso(self._now())
         with self._lock:
             if self._state.get("status") == "STOPPED" and self._state.get("report_path"):
                 return {"finalized": False, "reason": "ALREADY_FINALIZED", "status": self.get_status()}
             self._state.update(
                 status="STOPPING" if status == "STOPPED" else status,
-                ended_at=_iso(self._now()),
+                ended_at=now_iso,
+                stopped_at=now_iso,
                 current_company=None,
                 stop_reason=reason,
                 last_action="Generating final daily report",
@@ -1358,11 +1762,13 @@ class SalesoorjaOperator:
             self._save_state()
         report_path = self._write_report()
         final_email = self._send_final_report_email(report_path)
+        self._clear_stop_signal()
         self._update(
             status=status,
+            stopped_at=now_iso,
             report_path=str(report_path),
             final_report_email=final_email,
-            last_action="Run finalized; daily report generated",
+            last_action=f"Run finalized ({reason}); daily report generated",
         )
         return {"finalized": True, "status": self.get_status()}
 

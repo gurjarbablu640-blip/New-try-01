@@ -68,7 +68,7 @@ export default function OperatorPage() {
   };
 
   const opStatus = status?.status || "IDLE";
-  const isRunning = ["RUNNING", "WAITING", "STOPPING"].includes(opStatus);
+  const isRunning = ["QUEUED", "STARTING", "RUNNING", "WAITING", "STOPPING"].includes(opStatus);
   const counters = status?.counters || {};
   const finalReport = status?.final_report_email;
   const reportPath = status?.report_path;
@@ -117,6 +117,22 @@ export default function OperatorPage() {
   ];
 
   const getStatusBadge = () => {
+    if (opStatus === "QUEUED") {
+      return (
+        <span className="inline-flex items-center gap-2 rounded-full border border-blue-500/40 bg-blue-950/60 px-3.5 py-1 text-xs font-semibold text-blue-300">
+          <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />
+          QUEUED IN WORKER
+        </span>
+      );
+    }
+    if (opStatus === "STARTING") {
+      return (
+        <span className="inline-flex items-center gap-2 rounded-full border border-cyan-500/40 bg-cyan-950/60 px-3.5 py-1 text-xs font-semibold text-cyan-300">
+          <span className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />
+          STARTING (WORKER ACK)
+        </span>
+      );
+    }
     if (opStatus === "RUNNING") {
       return (
         <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-950/60 px-3.5 py-1 text-xs font-semibold text-emerald-300">
@@ -245,6 +261,16 @@ export default function OperatorPage() {
             <div className="flex justify-between">
               <dt className="text-zinc-500">Started At</dt>
               <dd className="text-zinc-300 text-xs">{status?.started_at ? new Date(status.started_at).toLocaleTimeString() : "-"}</dd>
+            </div>
+            {status?.task_id && (
+              <div className="flex justify-between">
+                <dt className="text-zinc-500">Task ID</dt>
+                <dd className="font-mono text-zinc-300 text-xs truncate max-w-[130px]" title={status.task_id}>{status.task_id}</dd>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <dt className="text-zinc-500">Heartbeat</dt>
+              <dd className="font-mono text-emerald-400 text-xs">{status?.heartbeat_at ? new Date(status.heartbeat_at).toLocaleTimeString() : "-"}</dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-zinc-500">Checkpoint</dt>

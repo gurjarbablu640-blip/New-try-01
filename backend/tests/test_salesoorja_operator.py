@@ -107,8 +107,8 @@ def test_restart_resumes_history_without_duplicate_handoff(tmp_path):
     second_status = second_result["status"]
 
     assert second_status["run_id"] == first_status["run_id"]
-    assert second_status["counters"]["companies_researched"] == 1
-    assert second_status["provider_usage"]["Rediff"] == 1
+    assert second_status["counters"]["companies_researched"] == 0
+    assert second_status["historical_counters"]["companies_researched"] == 1
     assert second_status["processed_accounts"] == ["synthetic:operator-control"]
     assert "duplicate safely skipped" in second_status["last_action"].lower() or second_status["last_action"].startswith("Run finalized")
 
@@ -211,6 +211,7 @@ def test_controlled_transport_receipt_persists_and_blocks_restart_duplicate(tmp_
     second = restarted.execute_controlled_transport_test(authorization=TEST_TRANSPORT_AUTHORIZATION)
 
     assert second["receipt"]["transport_status"] == "SUPPRESSED_DUPLICATE_TRANSPORT"
-    assert second["status"]["counters"]["emails_sent"] == 1
+    assert second["status"]["counters"]["emails_sent"] == 0
+    assert second["status"]["historical_counters"]["emails_sent"] == 1
     assert second["status"]["transport_receipt_count"] == 1
     assert len(calls) == 1

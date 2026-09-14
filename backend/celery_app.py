@@ -21,6 +21,7 @@ TASK_MODULES = [
     "services.icpLearner",
     "services.buyingWindow",
     "services.abOptimizer",
+    "services.salesoorja_operator",
 ]
 
 CELERY_AVAILABLE = False
@@ -92,11 +93,10 @@ try:
         report = autonomous_scheduler.execute_evening_cutoff_and_report()
         return report.to_dict()
 
-    @celery_app.task(name="salesoorja.operator_run")
-    def operator_run_task():
+    @celery_app.task(name="salesoorja.operator_run", bind=True)
+    def operator_run_task(self):
         from services.salesoorja_operator import salesoorja_operator
-        salesoorja_operator._run_safely()
-        return salesoorja_operator.get_status()
+        return salesoorja_operator.execute_worker_run(task_id=str(self.request.id))
 
     CELERY_AVAILABLE = True
 except Exception as exc:

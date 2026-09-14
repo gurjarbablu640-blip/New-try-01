@@ -518,3 +518,81 @@ def test_non_blocking_error_handling_continues_operator(tmp_path):
     assert status["status"] in {"STOPPED", "ERROR"}
     assert status["last_error"] is not None
     assert "Test candidate failure" in status["last_error"]
+
+
+# =========================================================================
+# 8. Runtime State Machine & Timeout Invariants
+# =========================================================================
+
+def test_queued_to_starting_to_running_lifecycle(tmp_path):
+    """Execution follows QUEUED -> STARTING -> RUNNING strictly."""
+    op = _operator(tmp_path)
+    events = []
+
+    # Intercept state saves to trace transitions
+    orig_save = op._save_state
+    def tracking_save():
+        st = op._state.get("status")
+        if not events or events[-1] != st:
+            events.append(st)
+        return orig_save()
+
+    op._save_state = tracking_save
+
+    # Start run with background worker thread
+    res = op.start_run(background=True, use_celery=False)
+    assert res["started"] is True
+    assert events[0] == "QUEUED"
+
+    if op._thread:
+        op._thread.join(timeout=5)
+
+    assert "QUEUED" in events
+    assert "STARTING" in events
+    assert "RUNNING" in events
+    assert "STOPPED" in events
+    status = op.get_status()
+    assert status["task_id"] is not None
+    assert status["worker_started_at"] is not None
+    assert status["heartbeat_at"] is not None
+    assert status["stopped_at"] is not None
+
+
+def test_bounded_stop_timeout_forces_stopped(tmp_path):
+    """If state is STOPPING for more than 15s without worker completion, status is forced to STOPPED."""
+    op = _operator(tmp_path)
+    with op._lock:
+        op._state["status"] = "STOPPING"
+        op._state["stop_requested_at"] = (NOW - timedelta(seconds=20)).isoformat()
+
+    status = op.get_status()
+    assert status["status"] == "STOPPED"
+    assert status["stop_reason"] == "STOP_TIMEOUT"
+
+
+def test_stale_heartbeat_reconciles_to_error(tmp_path):
+    """If worker heartbeat is older than 45s and worker is dead, status transitions to ERROR."""
+    op = _operator(tmp_path)
+    with op._lock:
+        op._state["status"] = "RUNNING"
+        op._state["task_id"] = "dead-task-12345"
+        op._state["heartbeat_at"] = (NOW - timedelta(seconds=60)).isoformat()
+
+    status = op.get_status()
+    assert status["status"] == "ERROR"
+    assert status["stop_reason"] == "HEARTBEAT_TIMEOUT"
+
+
+def test_no_live_worker_immediate_cleanup_on_stop(tmp_path):
+    """If stop_run() is called and no live worker/task exists, state is immediately cleaned to STOPPED."""
+    op = _operator(tmp_path)
+    with op._lock:
+        op._state["status"] = "QUEUED"
+        op._state["queued_at"] = (NOW - timedelta(seconds=50)).isoformat()
+        op._state["task_id"] = "nonexistent-worker-task"
+
+    res = op.stop_run(wait=False)
+    assert res["stopped"] is True
+    assert res["status"]["status"] == "STOPPED"
+    assert res["status"]["stop_reason"] in {"NO_LIVE_WORKER", "QUEUE_TIMEOUT"}
+
