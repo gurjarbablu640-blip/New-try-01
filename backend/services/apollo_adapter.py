@@ -16,6 +16,27 @@ from services.settings_manager import get_setting_value
 
 logger = logging.getLogger(__name__)
 
+APOLLO_PERSON_ROLE_FAMILIES = [
+    "Plant Head",
+    "Factory Head",
+    "Unit Head",
+    "Plant Quality Head",
+    "Head Quality",
+    "Quality Head",
+    "QA Head",
+    "QC Head",
+    "Metrology Head",
+    "Calibration Head",
+    "GM Quality",
+    "AGM Quality",
+    "Manufacturing Head",
+    "Operations Head",
+    "Maintenance Head",
+    "Instrumentation Head",
+    "Senior Quality Manager",
+    "Quality Manager",
+]
+
 
 # Realistic industrial dataset for mock testing
 MOCK_INDUSTRIAL_COMPANIES = [
@@ -333,6 +354,117 @@ def search_apollo_leads(
             "error": str(exc),
             "mock_mode": False,
         }
+
+
+def search_apollo_people_candidates(
+    company_name: str,
+    *,
+    locations: Optional[list[str]] = None,
+    titles: Optional[list[str]] = None,
+    max_results: int = 10,
+    request_fn: Any = None,
+) -> dict[str, Any]:
+    """Return identity-only Apollo people-search evidence without contact fields."""
+    api_key = str(
+        getattr(settings, "APOLLO_API_KEY", "")
+        or get_setting_value("APOLLO_API_KEY", "")
+    ).strip()
+    if not api_key or api_key == "mock_apollo_key_123" or api_key.startswith("YOUR_"):
+        return {
+            "status": "CONFIG_REQUIRED",
+            "candidates": [],
+            "telemetry": {"APOLLO_SEARCH_CALLS": 0, "CONTACT_REVEAL_CALLS": 0},
+        }
+
+    base_url = str(getattr(settings, "APOLLO_API_BASE_URL", "")).rstrip("/")
+    if not base_url.endswith("/api/v1") and not base_url.endswith("/v1"):
+        base_url = f"{base_url}/api/v1"
+    elif base_url.endswith("/v1") and not base_url.endswith("/api/v1"):
+        base_url = base_url.replace("/v1", "/api/v1")
+
+    payload = {
+        "q_organization_names": [company_name],
+        "person_titles": list(titles or APOLLO_PERSON_ROLE_FAMILIES),
+        "person_locations": [location for location in (locations or []) if location],
+        "page": 1,
+        "per_page": min(max(int(max_results), 1), 25),
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
+        "X-Api-Key": api_key,
+    }
+    caller = request_fn or requests.post
+    try:
+        response = caller(
+            f"{base_url}/mixed_people/api_search",
+            json=payload,
+            headers=headers,
+            timeout=20,
+        )
+    except requests.RequestException:
+        return {
+            "status": "ERROR",
+            "error": "APOLLO_NETWORK_ERROR",
+            "candidates": [],
+            "telemetry": {"APOLLO_SEARCH_CALLS": 1, "CONTACT_REVEAL_CALLS": 0},
+        }
+    if response.status_code != 200:
+        return {
+            "status": "ERROR",
+            "error": f"APOLLO_HTTP_{response.status_code}",
+            "candidates": [],
+            "telemetry": {"APOLLO_SEARCH_CALLS": 1, "CONTACT_REVEAL_CALLS": 0},
+        }
+
+    try:
+        people = response.json().get("people") or []
+    except (AttributeError, TypeError, ValueError):
+        return {
+            "status": "ERROR",
+            "error": "APOLLO_RESPONSE_PARSE_ERROR",
+            "candidates": [],
+            "telemetry": {"APOLLO_SEARCH_CALLS": 1, "CONTACT_REVEAL_CALLS": 0},
+        }
+
+    candidates = []
+    seen = set()
+    for person in people:
+        if not isinstance(person, dict):
+            continue
+        organization = person.get("organization") or {}
+        name = (
+            f"{person.get('first_name', '')} {person.get('last_name', '')}".strip()
+            or str(person.get("name") or "").strip()
+        )
+        linkedin_url = str(person.get("linkedin_url") or "").strip()
+        marker = str(person.get("id") or linkedin_url or f"{name}|{person.get('title')}").casefold()
+        if not name or marker in seen:
+            continue
+        seen.add(marker)
+        location_parts = [
+            str(person.get(field) or "").strip()
+            for field in ("city", "state", "country")
+        ]
+        candidates.append({
+            "apollo_id": str(person.get("id") or ""),
+            "name": name,
+            "title": str(person.get("title") or "").strip(),
+            "seniority": str(person.get("seniority") or "").strip(),
+            "company": str(organization.get("name") or person.get("organization_name") or "").strip(),
+            "location": ", ".join(part for part in location_parts if part),
+            "linkedin_url": linkedin_url,
+            "source": "APOLLO_DISCOVERY",
+            "verification_status": "PERSON_CANDIDATE",
+        })
+        if len(candidates) >= payload["per_page"]:
+            break
+
+    return {
+        "status": "READY" if candidates else "NO_MATCH",
+        "candidates": candidates,
+        "telemetry": {"APOLLO_SEARCH_CALLS": 1, "CONTACT_REVEAL_CALLS": 0},
+    }
 
 
 def execute_apollo_pilot_validation(

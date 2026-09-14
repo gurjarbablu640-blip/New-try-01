@@ -493,6 +493,22 @@ def classify_current_employment(snippet: str, title: str, company_name: str) -> 
             return True
         return False
 
+    explicit_current = re.search(
+        r"\bcurrently\s+(?:working\s+)?(?:at|with)\s+([^|.;]+)",
+        combined,
+    )
+    if explicit_current:
+        return "VERIFIED" if is_target_comp(explicit_current.group(1)) else "CONTRADICTED"
+
+    present_experiences = re.findall(
+        r"experience:\s*([^|.]+)\|[^.]{0,180}\bpresent\b",
+        combined,
+    )
+    if any(is_target_comp(company) for company in present_experiences):
+        return "VERIFIED"
+    if present_experiences:
+        return "CONTRADICTED"
+
     # 1. Direct Contradiction via Title headline: "@<Company>" or "at <Company>"
     headline_match = re.search(r"(?:@|\bat\s+)\s*([A-Za-z0-9\s&.-]{3,35})(?:\s*[-–—|•,]|\s*I\s*|\.\s|$)", clean_title)
     if headline_match:
@@ -773,6 +789,20 @@ def classify_facility_relationship(
     )
     is_plant_head = any(w in candidate_title.lower() for w in ["plant head", "works manager", "factory manager", "unit head", "site head"])
     is_quality = any(w in candidate_title.lower() for w in ["quality", "qa", "qc", "metrology", "calibration"])
+
+    designator_pattern = re.compile(
+        r"\b(?:plant|unit|factory|facility|works|site)\s*(?:no\.?|number|#)?\s*[-:/]?\s*([ivxlcdm]+|\d+[a-z]?)\b",
+        re.IGNORECASE,
+    )
+    target_designators = {match.casefold() for match in designator_pattern.findall(t_fac)}
+    candidate_designators = {match.casefold() for match in designator_pattern.findall(clean_text)}
+    if target_designators and candidate_designators and target_designators.isdisjoint(candidate_designators):
+        if is_plant_head or any(
+            word in candidate_title.lower()
+            for word in ("head", "manager", "quality", "operations", "manufacturing", "production", "maintenance")
+        ):
+            return "OTHER_FACILITY_OWNER"
+        return "FACILITY_CONTRADICTED"
 
     # Extract non-generic facility tokens
     fac_tokens = [w for w in t_fac.split() if len(w) >= 4 and w not in GENERIC_FACILITY_TOKENS]
@@ -1319,7 +1349,11 @@ class PersonEvidencePacket:
             if st == "CONTRADICTED":
                 date_signal = "CONTRADICTED"
                 proof_category = "CONTRADICTED_EMPLOYMENT"
-                strength = "CONTRADICTING"
+                has_explicit_current_other = bool(
+                    re.search(r"\bcurrently\s+(?:working\s+)?(?:at|with)\b", text)
+                    or re.search(r"experience:\s*[^.]{0,240}\bpresent\b", text)
+                )
+                strength = "STRONG_CONTRADICTING" if has_explicit_current_other else "CONTRADICTING"
             elif stype == "PROFESSIONAL_DIRECTORY":
                 # Directory is SUPPORTING ONLY. Directory-only evidence != VERIFIED
                 date_signal = "DIRECTORY_RECORD"
@@ -1419,18 +1453,24 @@ class PersonEvidencePacket:
     def derive(self) -> None:
         """Deterministically derive multi-source verified attributes."""
         # 1. Current Employment
-        # Correction 2: Contradiction strictly overrides corroboration
+        # Explicit current-employer contradictions override current proof; ambiguous
+        # headlines do not override structured target-company Present evidence.
         has_contradicted = (
             any(p.get("classification") == "CONTRADICTED_EMPLOYMENT" for p in self.employment_proofs)
             or any(classify_current_employment(s.get("snippet", ""), s.get("title", ""), self.target_company) == "CONTRADICTED" for s in self.employment_sources)
         )
+        has_strong_contradiction = any(
+            p.get("strength") == "STRONG_CONTRADICTING" for p in self.employment_proofs
+        )
         has_strong_current_proof = any(p.get("strength") == "STRONG_CURRENT_PROOF" for p in self.employment_proofs)
         has_supporting_proof = any(p.get("strength") == "SUPPORTING_ONLY" for p in self.employment_proofs)
 
-        if has_contradicted:
+        if has_strong_contradiction:
             self.current_employment = "CONTRADICTED"
         elif has_strong_current_proof:
             self.current_employment = "VERIFIED"
+        elif has_contradicted:
+            self.current_employment = "CONTRADICTED"
         elif has_supporting_proof:
             # Supporting-only evidence (directory, old post, conference bio, undated snippet) may corroborate facility/function
             # but must NOT independently create VERIFIED current employment.
@@ -1547,7 +1587,11 @@ class PersonEvidencePacket:
             "employment_proofs": self.employment_proofs,
             "strong_current_proofs_count": sum(1 for p in self.employment_proofs if p.get("strength") == "STRONG_CURRENT_PROOF"),
             "supporting_proofs_count": sum(1 for p in self.employment_proofs if p.get("strength") == "SUPPORTING_ONLY"),
-            "contradicting_proofs_count": sum(1 for p in self.employment_proofs if p.get("strength") == "CONTRADICTING"),
+            "contradicting_proofs_count": sum(
+                1
+                for p in self.employment_proofs
+                if p.get("strength") in {"CONTRADICTING", "STRONG_CONTRADICTING"}
+            ),
         }
 
 
@@ -1755,6 +1799,222 @@ def qualify_brightdata_person_records(
         "source": "BRIGHTDATA_LINKEDIN",
         "retrieved_at": str(strongest.get("retrieved_at") or ""),
         "ready_for_contact_enrichment": False,
+    }
+
+
+def discover_people_with_apollo(
+    *,
+    company_name: str,
+    facility_name: str = "",
+    city: str = "",
+    state: str = "",
+    role_families: Optional[List[str]] = None,
+    max_candidates: int = 5,
+    search_fn: Any = None,
+) -> Dict[str, Any]:
+    """Discover identity-only Apollo candidates and rank them locally."""
+    from services.apollo_adapter import (
+        APOLLO_PERSON_ROLE_FAMILIES,
+        search_apollo_people_candidates,
+    )
+    from services.brightdata_linkedin_provider import rank_people_records
+
+    roles = list(role_families or APOLLO_PERSON_ROLE_FAMILIES)
+    caller = search_fn or search_apollo_people_candidates
+    search_result = caller(
+        company_name,
+        locations=[location for location in (city, state) if location],
+        titles=roles,
+        max_results=10,
+    )
+    raw_candidates = search_result.get("candidates") or []
+    normalized = [
+        {
+            "name": str(candidate.get("name") or "").strip(),
+            "linkedin_url": str(candidate.get("linkedin_url") or "").strip(),
+            "linkedin_id": str(candidate.get("apollo_id") or ""),
+            "headline": str(candidate.get("title") or "").strip(),
+            "location": str(candidate.get("location") or "").strip(),
+            "current_company": str(candidate.get("company") or "").strip(),
+            "current_title": str(candidate.get("title") or "").strip(),
+            "experience": [],
+            "source": "APOLLO_DISCOVERY",
+            "evidence_kind": "APOLLO_DISCOVERY",
+            "seniority": str(candidate.get("seniority") or "").strip(),
+            "verification_status": "PERSON_CANDIDATE",
+            "ready_for_contact_enrichment": False,
+        }
+        for candidate in raw_candidates
+        if isinstance(candidate, dict)
+    ]
+    ranked = rank_people_records(
+        normalized,
+        company=company_name,
+        facility=facility_name,
+        city=city,
+        role_families=roles,
+    )
+    retained_limit = min(max(int(max_candidates), 1), 5)
+    return {
+        "status": search_result.get("status", "ERROR"),
+        "provider": "APOLLO",
+        "candidates": ranked[:retained_limit],
+        "telemetry": search_result.get("telemetry") or {
+            "APOLLO_SEARCH_CALLS": 0,
+            "CONTACT_REVEAL_CALLS": 0,
+        },
+    }
+
+
+def verify_apollo_candidates_with_brightdata(
+    candidates: List[Dict[str, Any]],
+    *,
+    company_name: str,
+    facility_name: str = "",
+    city: str = "",
+    state: str = "",
+    company_domain: str = "",
+    max_attempts: int = 3,
+    provider: Any = None,
+) -> Dict[str, Any]:
+    """Verify at most three Apollo identities using Bright Data profile evidence."""
+    if provider is None:
+        from services.brightdata_linkedin_provider import brightdata_linkedin_provider
+        provider = brightdata_linkedin_provider
+
+    attempts = []
+    verified_candidates = []
+    profile_fetches = 0
+    attempt_limit = min(max(int(max_attempts), 1), 3)
+    for discovery_candidate in candidates[:attempt_limit]:
+        linkedin_url = str(discovery_candidate.get("linkedin_url") or "").strip()
+        if not linkedin_url:
+            attempts.append({
+                "name": discovery_candidate.get("name"),
+                "state": "WRONG_PERSON",
+                "profile_status": "INVALID_PROFILE_URL",
+            })
+            continue
+        profile_result = provider.get_person_profile(linkedin_url)
+        profile_fetches += 1
+        profile_record = profile_result.get("record")
+        if not isinstance(profile_record, dict):
+            attempts.append({
+                "name": discovery_candidate.get("name"),
+                "state": "WRONG_PERSON",
+                "profile_status": profile_result.get("status", "ERROR"),
+            })
+            continue
+        profile_evidence = dict(profile_record)
+        profile_evidence["name"] = str(
+            profile_evidence.get("name") or discovery_candidate.get("name") or ""
+        ).strip()
+        profile_evidence["linkedin_url"] = str(
+            profile_evidence.get("linkedin_url") or linkedin_url
+        ).strip()
+        candidate = qualify_brightdata_person_records(
+            [profile_evidence],
+            company_name=company_name,
+            facility_name=facility_name,
+            city=city,
+            state=state,
+            company_domain=company_domain,
+        )
+        if not candidate:
+            attempts.append({
+                "name": discovery_candidate.get("name"),
+                "state": "WRONG_PERSON",
+                "profile_status": profile_result.get("status", "ERROR"),
+            })
+            continue
+        if candidate.get("current_employment") == "CONTRADICTED":
+            state_value = "CURRENT_EMPLOYMENT_CONTRADICTED"
+        elif candidate.get("facility_relationship") in {
+            "OTHER_FACILITY_OWNER",
+            "FACILITY_CONTRADICTED",
+        }:
+            state_value = "WRONG_FACILITY"
+        elif (
+            candidate.get("current_employment") != "VERIFIED"
+            or candidate.get("verification_status") != "PERSON_PUBLICLY_VERIFIED"
+        ):
+            state_value = "WRONG_PERSON"
+        else:
+            state_value = "PERSON_VERIFIED_CONTACT_MISSING"
+        candidate.update({
+            "apollo_discovery": dict(discovery_candidate),
+            "bright_profile_verified": profile_result.get("status") == "WORKING",
+            "profile_status": profile_result.get("status", "ERROR"),
+            "funnel_state": state_value,
+            "ready_for_contact_enrichment": False,
+        })
+        attempts.append({
+            "name": candidate.get("name"),
+            "state": state_value,
+            "profile_status": candidate["profile_status"],
+        })
+        verified_candidates.append(candidate)
+
+    has_viable_candidate = any(
+        candidate.get("funnel_state") == "PERSON_VERIFIED_CONTACT_MISSING"
+        for candidate in verified_candidates
+    )
+    return {
+        "status": "READY" if has_viable_candidate else "HOLD_CONTACT_NOT_FOUND",
+        "candidates": verified_candidates,
+        "attempts": attempts,
+        "profile_fetches": profile_fetches,
+        "telemetry": provider.telemetry(),
+    }
+
+
+def run_contact_fallback_ladder(
+    candidates: List[Dict[str, Any]],
+    *,
+    enrich_fn: Any,
+    max_attempts: int = 3,
+) -> Dict[str, Any]:
+    """Enrich verified people sequentially and stop at the first usable contact."""
+    attempts = []
+    enrichment_calls = 0
+    attempt_limit = min(max(int(max_attempts), 0), 3)
+    for candidate in candidates[:attempt_limit]:
+        state_value = str(candidate.get("funnel_state") or "WRONG_PERSON")
+        if state_value in {"WRONG_PERSON", "WRONG_FACILITY", "CURRENT_EMPLOYMENT_CONTRADICTED"}:
+            attempts.append({"name": candidate.get("name"), "state": state_value})
+            continue
+        gate_passed = bool(
+            candidate.get("bright_profile_verified")
+            and candidate.get("ready_for_contact_enrichment")
+            and candidate.get("current_employment") == "VERIFIED"
+            and candidate.get("facility_relationship")
+            in {"FACILITY_OWNER", "FACILITY_FUNCTION_OWNER", "GROUP_FUNCTION_OWNER"}
+            and candidate.get("function_ownership")
+            not in {"UNKNOWN", "COMPANY_ONLY", "GENERAL_QUALITY", "JUNIOR_IC"}
+            and candidate.get("authority") == "DECISION_MAKER"
+            and candidate.get("person_confidence") == "HIGH"
+            and float(candidate.get("person_score") or 0) >= 85
+        )
+        if not gate_passed:
+            attempts.append({"name": candidate.get("name"), "state": "PERSON_VERIFIED_CONTACT_MISSING"})
+            continue
+        result = enrich_fn(candidate)
+        enrichment_calls += 1
+        if result.get("email") or result.get("phone"):
+            attempts.append({"name": candidate.get("name"), "state": "CONTACT_FOUND"})
+            return {
+                "status": "CONTACT_FOUND",
+                "attempts": attempts,
+                "enrichment_calls": enrichment_calls,
+                "result": result,
+            }
+        candidate["funnel_state"] = "PERSON_VERIFIED_CONTACT_MISSING"
+        attempts.append({"name": candidate.get("name"), "state": candidate["funnel_state"]})
+    return {
+        "status": "HOLD_CONTACT_NOT_FOUND",
+        "attempts": attempts,
+        "enrichment_calls": enrichment_calls,
+        "result": None,
     }
 
 

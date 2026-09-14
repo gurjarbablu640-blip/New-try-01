@@ -2,13 +2,12 @@
 
 Implements the complete 8-step pipeline:
 1. Persona inference from signal/industry
-2. Search query generation
-3. Bright Data LinkedIn person discovery
-4. Person candidate extraction
-5. Person verification & scoring
-6. Apollo enrichment (specific person)
-7. Research brief assembly
-8. Full pipeline orchestration
+2. Apollo identity-only person discovery
+3. Bright Data profile verification
+4. Person candidate extraction and scoring
+5. Apollo enrichment (specific verified person)
+6. Research brief assembly
+7. Full pipeline orchestration
 
 Core principle: PERSONA ≠ PERSON.
 A persona inference such as "Quality / Metrology Manager" is NOT a person.
@@ -902,6 +901,7 @@ def is_apollo_eligible_lead(
     facility_info: Dict[str, Any],
     trigger_info: Dict[str, Any],
     contact_info: Optional[Dict[str, Any]] = None,
+    opportunity_icp_score: float = 0.0,
 ) -> Tuple[bool, str]:
     """Strict Apollo Enrichment Gatekeeper (Phase 7).
 
@@ -910,7 +910,8 @@ def is_apollo_eligible_lead(
     2. Facility linkage is DIRECT or corroborated STRONG (never AMBIGUOUS or WEAK).
     3. Person candidate has HIGH confidence, verified current employment, relevant authority,
        and a source-backed facility relationship.
-    4. Free public contact research was performed, and contact remains unverified.
+    4. Opportunity ICP score is at least 85.
+    5. Free public contact research was performed, and contact remains unverified.
     """
     # 1. Trigger Check
     trigger_valid = trigger_info.get("valid_trigger") if "valid_trigger" in trigger_info else bool(trigger_info.get("trigger") or trigger_info.get("title"))
@@ -951,6 +952,9 @@ def is_apollo_eligible_lead(
         "GROUP_FUNCTION_OWNER",
     }:
         return False, f"Candidate authority is {authority or 'UNKNOWN'}; responsible-person ownership is not verified"
+
+    if float(opportunity_icp_score or 0) < 85.0:
+        return False, f"Opportunity ICP score {float(opportunity_icp_score or 0):.1f} is below 85.0"
 
     # 4. Contact Check (Free research exhausted)
     if contact_info:
@@ -1242,8 +1246,8 @@ def run_full_discovery_pipeline(
     Steps:
     1. Company lookup
     2. Persona inference
-    3. Bright Data LinkedIn people discovery
-    4. Deterministic verification and scoring
+    3. Apollo identity-only people discovery
+    4. Bright Data profile verification and deterministic scoring
     5. Apollo enrichment after strict eligibility gates
     6. Research brief assembly
 
@@ -1305,28 +1309,37 @@ def run_full_discovery_pipeline(
     db.commit()
 
     # ── 3. Search Query Generation ────────────────────────────────────
-    from services.brightdata_linkedin_provider import PRIORITY_ROLE_FAMILIES
-    from services.person_intelligence_service import discover_people_with_brightdata
+    from services.apollo_adapter import APOLLO_PERSON_ROLE_FAMILIES
+    from services.person_intelligence_service import (
+        discover_people_with_apollo,
+        verify_apollo_candidates_with_brightdata,
+    )
 
     stages["search_queries"] = {
         "status": "REAL",
         "query_count": 1,
-        "strategy": "BRIGHTDATA_DATASET_SEARCH_COMPANY_FIRST",
-        "role_families": PRIORITY_ROLE_FAMILIES,
+        "strategy": "APOLLO_IDENTITY_ONLY_PEOPLE_SEARCH",
+        "role_families": APOLLO_PERSON_ROLE_FAMILIES,
     }
 
-    # Official pages are first: stop search if they already identify a relevant person.
-    discovery = discover_people_with_brightdata(
+    discovery = discover_people_with_apollo(
+        company_name=company.name,
+        facility_name=target_facility,
+        city=target_city,
+        state=target_state,
+        role_families=APOLLO_PERSON_ROLE_FAMILIES,
+        max_candidates=5,
+    )
+    verification = verify_apollo_candidates_with_brightdata(
+        discovery.get("candidates") or [],
         company_name=company.name,
         facility_name=target_facility,
         city=target_city,
         state=target_state,
         company_domain=company.domain or "",
-        role_families=PRIORITY_ROLE_FAMILIES,
-        max_candidates=5,
-        max_profile_fetches=2,
+        max_attempts=3,
     )
-    raw_candidates = discovery.get("candidates") or []
+    raw_candidates = verification.get("candidates") or []
 
     # ── 4. Web/Public Research ────────────────────────────────────────
     public_person_evidence = [
@@ -1334,26 +1347,32 @@ def run_full_discovery_pipeline(
             "title": f"{candidate.get('name', '')} - {candidate.get('title', '')}",
             "snippet": candidate.get("evidence_snippet", ""),
             "url": candidate.get("linkedin_url", ""),
-            "source": "BRIGHTDATA_LINKEDIN",
+            "source": "BRIGHTDATA_LINKEDIN_PROFILE",
         }
         for candidate in raw_candidates
     ]
     search_results = {
-        "search_provider": "brightdata_linkedin",
-        "overall_status": discovery.get("status", "ERROR"),
-        "provider_statuses": {"brightdata_linkedin": discovery.get("search_status", "ERROR")},
-        "queries_executed": [{"strategy": "company_first_dataset_filter"}],
+        "search_provider": "apollo",
+        "overall_status": verification.get("status", "ERROR"),
+        "provider_statuses": {
+            "apollo": discovery.get("status", "ERROR"),
+            "brightdata_profile": verification.get("status", "ERROR"),
+        },
+        "queries_executed": [{"strategy": "apollo_identity_only_people_search"}],
         "total_results": len(raw_candidates),
         "results": public_person_evidence + list(additional_evidence or []),
     }
     stages["person_search"] = {
-        "status": discovery.get("status", "ERROR"),
-        "provider": "brightdata_linkedin",
-        "people_search": discovery.get("search_status", "ERROR"),
-        "profile_lookup": discovery.get("profile_status", "NOT_CALLED"),
+        "status": verification.get("status", "ERROR"),
+        "provider": "apollo_then_brightdata",
+        "people_search": discovery.get("status", "ERROR"),
+        "profile_lookup": verification.get("status", "NOT_CALLED"),
         "total_results": search_results["total_results"],
-        "queries_executed": 1 if discovery.get("search_status") != "CONFIG_REQUIRED" else 0,
-        "telemetry": discovery.get("telemetry", {}),
+        "queries_executed": int(discovery.get("telemetry", {}).get("APOLLO_SEARCH_CALLS", 0)),
+        "apollo_telemetry": discovery.get("telemetry", {}),
+        "brightdata_telemetry": verification.get("telemetry", {}),
+        "verification_attempts": verification.get("attempts", []),
+        "bright_dataset_search_role": "FALLBACK",
     }
 
     # ── 5. Person Candidate Extraction ────────────────────────────────
@@ -1415,7 +1434,7 @@ def run_full_discovery_pipeline(
             ),
             candidate_location=raw_c.get("location", ""),
             evidence_sources=[{
-                "source": "BRIGHTDATA_LINKEDIN",
+                "source": "BRIGHTDATA_LINKEDIN_PROFILE",
                 "url": raw_c.get("linkedin_url", ""),
                 "snippet": raw_c.get("evidence_snippet", ""),
                 "retrieved_at": raw_c.get("retrieved_at") or datetime.utcnow().isoformat(),
@@ -1426,7 +1445,7 @@ def run_full_discovery_pipeline(
             }],
             public_profile_url=raw_c.get("linkedin_url"),
             public_profile_evidence=raw_c.get("evidence_snippet", ""),
-            search_queries_used=["BRIGHTDATA_DATASET_SEARCH"],
+            search_queries_used=["APOLLO_IDENTITY_ONLY_SEARCH", "BRIGHTDATA_PROFILE_LOOKUP"],
             verification_status=verification_status,
             verification_confidence=normalized_score,
             verification_notes=f"Deterministic person score: {person_score:.1f}/100",
@@ -1587,6 +1606,7 @@ def run_full_discovery_pipeline(
             facility_info,
             trigger_info,
             {"evidence_level": "NOT_FOUND"},
+            opportunity_icp_score=float(company.icp_score or 0),
         )
         apollo_gate_results[candidate.id] = (eligible, reason)
         raw["ready_for_contact_enrichment"] = eligible
@@ -1611,23 +1631,47 @@ def run_full_discovery_pipeline(
         ],
     }
 
+    from services.person_intelligence_service import run_contact_fallback_ladder
+
     apollo_results = []
-    for candidate in apollo_eligible:
+    ladder_candidates = []
+    for candidate in verified_candidates:
+        raw = candidate_evidence.get(
+            (candidate.candidate_name.casefold(), (candidate.candidate_title or "").casefold()),
+            {},
+        )
+        raw["_candidate_record"] = candidate
+        ladder_candidates.append(raw)
+
+    def enrich_ladder_candidate(raw_candidate):
+        candidate_record = raw_candidate["_candidate_record"]
         if before_apollo is not None and not before_apollo():
-            break
-        result = enrich_candidate_via_apollo(candidate, company.name, db)
+            return {"status": "BLOCKED", "email": None, "phone": None}
+        result = enrich_candidate_via_apollo(candidate_record, company.name, db)
         apollo_results.append({
-            "name": candidate.candidate_name,
+            "name": candidate_record.candidate_name,
             "status": result.get("status", "ERROR"),
             "email": result.get("email", "NOT FOUND"),
             "email_confidence": result.get("email_confidence"),
         })
+        if not result.get("email") and not result.get("phone"):
+            candidate_record.verification_status = "PERSON_VERIFIED_CONTACT_MISSING"
+        return result
+
+    contact_ladder = run_contact_fallback_ladder(
+        ladder_candidates,
+        enrich_fn=enrich_ladder_candidate,
+        max_attempts=min(max_apollo_enrichments, 3),
+    )
+    db.commit()
 
     stages["apollo"] = {
-        "status": "REAL" if apollo_results else "BLOCKED",
+        "status": contact_ladder["status"],
         "eligible_count": len(apollo_eligible),
         "enriched_count": sum(1 for r in apollo_results if r["status"] == "ENRICHED"),
         "results": apollo_results,
+        "attempts": contact_ladder["attempts"],
+        "max_candidate_attempts": 3,
     }
 
     # ── 8. Email Status ───────────────────────────────────────────────

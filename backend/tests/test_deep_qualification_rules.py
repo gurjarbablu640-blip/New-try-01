@@ -87,7 +87,13 @@ class TestDeepQualificationRules(unittest.TestCase):
 
         # Case C: Facility is STRONG -> Apollo is permitted for paid queue
         facility_strong = {"linkage_confidence": "STRONG", "facility_verified": True}
-        eligible, reason = is_apollo_eligible_lead(candidate, facility_strong, trigger_info, contact_info)
+        eligible, reason = is_apollo_eligible_lead(
+            candidate,
+            facility_strong,
+            trigger_info,
+            contact_info,
+            opportunity_icp_score=90,
+        )
         self.assertTrue(eligible)
 
     def test_contact_evidence_policy_inferred_never_production_send(self):
@@ -174,7 +180,13 @@ class TestDeepQualificationRules(unittest.TestCase):
         contact_inferred = {"evidence_level": "INFERRED_PERSON_SPECIFIC", "mailbox_verified": False}
 
         # Candidate is Apollo eligible
-        is_apollo, _ = is_apollo_eligible_lead(candidate, facility_info, trigger_info, contact_inferred)
+        is_apollo, _ = is_apollo_eligible_lead(
+            candidate,
+            facility_info,
+            trigger_info,
+            contact_inferred,
+            opportunity_icp_score=90,
+        )
         self.assertTrue(is_apollo)
 
         # But candidate is NOT production send eligible!

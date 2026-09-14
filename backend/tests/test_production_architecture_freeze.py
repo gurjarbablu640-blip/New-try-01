@@ -51,7 +51,9 @@ def test_brightdata_person_provider_is_configured_and_env_only():
 
 def test_production_person_discovery_cannot_reach_serper_or_deleted_providers():
     source = inspect.getsource(run_full_discovery_pipeline)
-    assert "discover_people_with_brightdata" in source
+    assert "discover_people_with_apollo" in source
+    assert "verify_apollo_candidates_with_brightdata" in source
+    assert "discover_people_with_brightdata" not in source
     assert "execute_web_person_search(" not in source
     assert "research_router" not in source
     for removed in ("linkedin_mcp", "searxng", "playwright", "apify"):
