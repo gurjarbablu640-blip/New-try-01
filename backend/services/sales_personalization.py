@@ -188,6 +188,51 @@ AUDIT_EVIDENCE_KEYWORDS = [
     "nabl renewal",
 ]
 
+# Prohibited Invented Quantities (Never invent counts, e.g. "four or five vendors")
+PROHIBITED_INVENTED_QUANTITY_PATTERNS = [
+    r"(?i)\b(?:\d+|two|three|four|five|six|seven|eight|nine|ten)(?:\s*(?:-|or|\/)\s*(?:\d+|two|three|four|five|six|seven|eight|nine|ten))?\s+(?:separate\s+|different\s+|specialized\s+)?vendors?\b",
+]
+
+# Prohibited Unsupported Operational Claims
+PROHIBITED_UNSUPPORTED_OPERATIONAL_PATTERNS = [
+    r"(?i)\bkeep\s+equipment\s+on\s+the\s+floor\b",
+    r"(?i)\bavoid\s+transit\s+downtime\b",
+    r"(?i)\bwithout\s+moving\s+(?:critical\s+)?masters\s+offsite\b",
+    r"(?i)\bunder\s+a\s+(?:single|unified)\s+(?:(?:accredited\s+)?agreement|contract)\b",
+]
+
+# Maintenance Window Assertion Patterns (Must NOT assert planned maintenance window without verified evidence)
+MAINTENANCE_WINDOW_ASSERTION_PATTERNS = [
+    r"(?i)\bplanned\s+maintenance\s+windows?\b",
+]
+MAINTENANCE_WINDOW_EVIDENCE_KEYWORDS = [
+    "maintenance window",
+    "maintenance shutdown",
+    "scheduled shutdown",
+    "planned shutdown",
+    "shutdown window",
+]
+
+# Prohibited Unhedged / Unqualified On-site Promises (Capability != Opportunity)
+PROHIBITED_UNHEDGED_ONSITE_PATTERNS = [
+    r"(?i)\bguarantee(?:s|d)?\s+on-?site\b",
+    r"(?i)\b(?:we\s+(?:will|can|do|perform|execute|provide))\s+(?:all\s+)?on-?site\s+calibration\s+for\s+[^.\n]*(?:cmm|furnace|pyrometry|masters?)\b",
+]
+ONSITE_FEASIBILITY_QUALIFIERS = [
+    "technically feasible",
+    "feasibility",
+    "subject to scope",
+    "scope feasibility",
+    "range feasibility",
+    "scope review",
+    "onsite versus lab",
+    "on-site versus lab",
+    "can be supported on-site",
+    "handled on-site",
+    "evaluate on-site",
+    "explore on-site",
+]
+
 
 @dataclass(frozen=True)
 class PersonalizationContext:
@@ -518,6 +563,56 @@ class EmailQualityValidator:
                 )
                 score -= 25
 
+        # 4e. Prohibited Invented Vendor Count / Quantity
+        for pat in PROHIBITED_INVENTED_QUANTITY_PATTERNS:
+            m = re.search(pat, full_text)
+            if m:
+                violations.append(
+                    f"INVENTED_VENDOR_COUNT: Invented vendor quantity '{m.group(0)}' detected (must use 'multiple vendors' instead of specific count unless verified in evidence)"
+                )
+                score -= 30
+                break
+
+        # 4f. Prohibited Unsupported Operational Claims
+        for pat in PROHIBITED_UNSUPPORTED_OPERATIONAL_PATTERNS:
+            m = re.search(pat, full_text)
+            if m:
+                violations.append(
+                    f"UNSUPPORTED_OPERATIONAL_CLAIM: Unsupported operational claim '{m.group(0)}' detected (must use cautious phrasing like 'where technically feasible, onsite calibration can reduce equipment movement' or 'can reduce transport-related handling')"
+                )
+                score -= 30
+                break
+
+        # 4g. Unsupported Maintenance Window Assertion
+        has_maint_evidence = any(kw in evidence_text for kw in MAINTENANCE_WINDOW_EVIDENCE_KEYWORDS)
+        if not has_maint_evidence:
+            for pat in MAINTENANCE_WINDOW_ASSERTION_PATTERNS:
+                m = re.search(pat, full_text)
+                if m:
+                    violations.append(
+                        f"UNSUPPORTED_MAINTENANCE_WINDOW: Maintenance window claim '{m.group(0)}' asserted without verified evidence (use 'scheduled operating intervals' or 'scheduled maintenance intervals')"
+                    )
+                    score -= 30
+                    break
+
+        # 4h. Capability Safety & Unhedged On-site Promises (Opportunity != Capability)
+        for pat in PROHIBITED_UNHEDGED_ONSITE_PATTERNS:
+            m = re.search(pat, full_text)
+            if m:
+                violations.append(
+                    f"UNSUPPORTED_ONSITE_PROMISES: Unhedged on-site promise '{m.group(0)}' detected (opportunity does not prove capability; qualify with 'where technically feasible' or 'subject to scope/range feasibility')"
+                )
+                score -= 30
+                break
+
+        has_onsite = bool(re.search(r"(?i)\bon-?site\b", full_text))
+        has_feasibility = any(q in full_text.lower() for q in ONSITE_FEASIBILITY_QUALIFIERS)
+        if has_onsite and not has_feasibility:
+            violations.append(
+                "UNQUALIFIED_ONSITE_CLAIM: On-site calibration mentioned without capability feasibility qualification (must include 'where technically feasible', 'subject to scope/range feasibility', or 'review onsite versus lab feasibility')"
+            )
+            score -= 25
+
         # 5. Length Validation (Target 80 - 150 words)
         if word_count < self.MIN_WORDS:
             violations.append(f"TOO_SHORT: Initial body has {word_count} words (minimum {self.MIN_WORDS})")
@@ -616,6 +711,11 @@ class EmailQualityValidator:
             or "UNSUPPORTED_ABSOLUTE_CLAIM" in v
             or "UNSUPPORTED_AUDIT_ASSERTION" in v
             or "GENERIC_DISCIPLINE_BOILERPLATE" in v
+            or "INVENTED_VENDOR_COUNT" in v
+            or "UNSUPPORTED_OPERATIONAL_CLAIM" in v
+            or "UNSUPPORTED_MAINTENANCE_WINDOW" in v
+            or "UNSUPPORTED_ONSITE_PROMISES" in v
+            or "UNQUALIFIED_ONSITE_CLAIM" in v
             or "DUPLICATE_SIGNATURE" in v
             or "MISSING_SIGNATURE" in v
             or "ACCREDITATION_IN_SIGNATURE" in v
@@ -716,8 +816,8 @@ class DeterministicPersonalizationGenerator:
 
             value_prop = (
                 f"Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
-                f"We support quality teams by coordinating on-site calibration for {equipment_phrase}, "
-                f"helping maintain strict measurement traceability and certificate availability without moving critical masters offsite."
+                f"Where technically feasible, on-site calibration for {equipment_phrase} can reduce equipment movement "
+                f"and help maintain strict measurement traceability and certificate availability, subject to scope feasibility."
             )
             cta = "Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?"
             referral_ask = f"If another colleague directly leads metrology or calibration planning for {facility}, could you kindly point me to the right person?"
@@ -725,14 +825,14 @@ class DeterministicPersonalizationGenerator:
             day_5 = (
                 f"Dear {first_name},\n\n"
                 f"From a quality management perspective, managing calibration through fragmented external laboratories often makes tracking certificate availability and out-of-tolerance notifications more difficult than it needs to be. "
-                f"Consolidating calibration for {equipment_phrase} under our NABL CC-3963 accredited on-site schedule can make calibration records easier to retrieve when required and support measurement traceability.\n\n"
+                f"Where technically feasible, consolidating calibration for {equipment_phrase} under our NABL CC-3963 accredited on-site schedule can reduce transport-related handling and support measurement traceability.\n\n"
                 f"If you have an upcoming equipment list, I would be glad to review it for on-site feasibility.\n\n"
                 f"{STANDARD_SIGNATURE_TEXT}"
             )
 
             roi_angle = "audit readiness and certificate retrieval" if trigger_type == "AUDIT_SURVEILLANCE" else "measurement traceability and certificate availability"
             compliance_angle = "NABL CC-3963 audit-ready certification and IATF 16949 measurement integrity" if trigger_type == "AUDIT_SURVEILLANCE" else "ISO/IEC 17025:2017 CC-3963 accredited traceability for manufacturing equipment"
-            operational_angle = "in-situ verification and on-site master calibration to eliminate transit delays"
+            operational_angle = "in-situ verification where technically feasible and review of on-site versus lab scope"
 
         elif persona == "Plant Head":
             subject = f"Shutdown Calibration Planning & Equipment Availability - {company} ({city})"
@@ -744,7 +844,7 @@ class DeterministicPersonalizationGenerator:
             elif trigger_type == "CAPACITY_EXPANSION":
                 hook = (
                     f"As {company} ramps up capacity at {facility}, "
-                    f"coordinating calibration during planned maintenance windows helps maintain equipment availability without interrupting active production runs."
+                    f"coordinating calibration around scheduled maintenance intervals helps maintain equipment availability without interrupting active production runs."
                 )
             elif trigger_type == "AUDIT_SURVEILLANCE":
                 hook = (
@@ -759,16 +859,16 @@ class DeterministicPersonalizationGenerator:
             else:  # ROUTINE
                 hook = (
                     f"As {company} reviews ongoing operations at {facility}, "
-                    f"aligning equipment calibration with planned shutdown windows helps keep production schedules predictable."
+                    f"aligning equipment calibration with scheduled operational intervals helps keep production schedules predictable."
                 )
 
             challenger = "Moving multiple instrument categories offsite at different times can create more operational disruption than the calibration work itself."
             value_prop = (
                 f"Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
-                f"We work with plant leadership to execute batch on-site calibration for {equipment_phrase} during planned maintenance windows, "
-                f"helping avoid transit downtime and keep equipment on the floor."
+                f"Where technically feasible, on-site calibration for {equipment_phrase} can reduce transport-related handling and equipment movement, "
+                f"helping support production continuity during scheduled plant maintenance intervals."
             )
-            cta = "Would it make sense to explore an on-site calibration slot aligned with your next planned maintenance window?"
+            cta = "Would it make sense to review your equipment list to evaluate on-site calibration feasibility for your next maintenance cycle?"
             referral_ask = f"If your Plant Quality Head or Metrology Lead directly coordinates this planning for {facility}, could you point me to the right lead?"
 
             day_5 = (
@@ -779,9 +879,9 @@ class DeterministicPersonalizationGenerator:
                 f"{STANDARD_SIGNATURE_TEXT}"
             )
 
-            roi_angle = "production continuity and minimized equipment transit downtime"
+            roi_angle = "production continuity and reduced equipment movement"
             compliance_angle = "ISO/IEC 17025:2017 CC-3963 accredited traceability for manufacturing equipment"
-            operational_angle = "consolidated on-site batch calibration during planned shutdown slots"
+            operational_angle = "consolidated on-site batch calibration where technically feasible"
 
         elif persona == "Operations Head":
             subject = f"Line Readiness & Calibration Coordination - {company} ({city})"
@@ -809,8 +909,8 @@ class DeterministicPersonalizationGenerator:
             challenger = "Staggering calibration across multiple external labs during line commissioning can introduce unexpected delays just as production schedules firm up."
             value_prop = (
                 f"Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
-                f"We help operations teams maintain line readiness by performing on-site calibration for {equipment_phrase}, "
-                f"minimizing equipment movement and supporting scheduled shift changeovers."
+                f"Where technically feasible, on-site calibration for {equipment_phrase} can reduce equipment movement "
+                f"and help operations teams maintain line readiness with minimal transport handling."
             )
             cta = "Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?"
             referral_ask = f"If a colleague in Quality or Maintenance directly manages this schedule for {facility}, could you kindly point me to the right person?"
@@ -818,14 +918,14 @@ class DeterministicPersonalizationGenerator:
             day_5 = (
                 f"Dear {first_name},\n\n"
                 f"In our experience with manufacturing operations, sending production tools and gauges off-site often creates unexpected shift downtime and spare-tool shortages. "
-                f"Performing accredited calibration for {equipment_phrase} directly on-site during planned shift intervals can maintain line readiness with minimal equipment movement.\n\n"
+                f"Where technically feasible, performing accredited calibration for {equipment_phrase} directly on-site during planned shift intervals can maintain line readiness with minimal equipment movement.\n\n"
                 f"Happy to take a quick look at your current equipment list to outline an on-site calibration approach.\n\n"
                 f"{STANDARD_SIGNATURE_TEXT}"
             )
 
             roi_angle = "line readiness and minimal equipment movement"
             compliance_angle = "traceable calibration baseline before commercial production release"
-            operational_angle = "single-slot on-site execution to eliminate transit turnaround"
+            operational_angle = "single-slot on-site execution where technically feasible to reduce transport turnaround"
 
         elif persona == "Metrology Head":
             subject = f"Metrology Scope & Standards Traceability - {company} ({city})"
@@ -837,7 +937,7 @@ class DeterministicPersonalizationGenerator:
             value_prop = (
                 f"Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited metrology and calibration laboratory (Certificate CC-3963). "
                 f"Our technical scope covers high-precision calibration for {equipment_phrase}, "
-                f"providing documented CMC capabilities, clear uncertainty budgets, and practical onsite-versus-lab scoping."
+                f"providing documented CMC capabilities, clear uncertainty budgets, and practical onsite-versus-lab scoping subject to range feasibility."
             )
             cta = "Would you be open to a technical scope review of your equipment list to evaluate on-site calibration feasibility?"
             referral_ask = f"If another colleague in your standards lab directly manages this schedule for {facility}, could you point me to the right lead?"
@@ -880,7 +980,7 @@ class DeterministicPersonalizationGenerator:
             challenger = "The hidden cost is often not the calibration rate alone, but the coordination involved in managing multiple vendors and repeated equipment movement."
             value_prop = (
                 f"Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
-                f"We support commercial teams by consolidating calibration for {equipment_phrase} under a unified on-site agreement, "
+                f"We support commercial teams by consolidating calibration for {equipment_phrase} through a more consolidated execution approach, "
                 f"reducing vendor coordination effort and providing clear scope clarity."
             )
             cta = "Would it make sense to review your upcoming calibration scope to see where vendor consolidation can simplify execution?"
@@ -888,8 +988,8 @@ class DeterministicPersonalizationGenerator:
 
             day_5 = (
                 f"Dear {first_name},\n\n"
-                f"Managing calibration through four or five separate specialized vendors often creates hidden administrative costs in purchase order management, gate-pass tracking, and commercial follow-ups. "
-                f"Consolidating {equipment_phrase} under a single ISO/IEC 17025:2017 accredited agreement can simplify commercial coordination and reduce vendor management overhead.\n\n"
+                f"Managing calibration through multiple specialized vendors often creates hidden administrative costs in purchase order management, gate-pass tracking, and commercial follow-ups. "
+                f"Handling {equipment_phrase} through a more consolidated execution approach can simplify commercial coordination and reduce vendor management overhead.\n\n"
                 f"If you have a scope list for the upcoming cycle at {facility}, I can quickly provide a unified feasibility review.\n\n"
                 f"{STANDARD_SIGNATURE_TEXT}"
             )
@@ -907,8 +1007,8 @@ class DeterministicPersonalizationGenerator:
             challenger = "Instrument drift in process sensors often goes unnoticed until routine maintenance cycles, when uncoordinated dispatches can delay line restarts."
             value_prop = (
                 f"Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (Certificate CC-3963). "
-                f"We support engineering teams by performing on-site calibration for {equipment_phrase}, "
-                f"reducing equipment movement and supporting reliable field tolerances."
+                f"Where technically feasible, on-site calibration for {equipment_phrase} can reduce equipment movement "
+                f"and support reliable field tolerances, subject to scope feasibility."
             )
             cta = "Would it make sense to review your upcoming sensor and instrument calibration schedule for on-site feasibility?"
             referral_ask = f"If another colleague in Quality or Operations leads calibration planning for {facility}, could you kindly point me to the right person?"
@@ -916,7 +1016,7 @@ class DeterministicPersonalizationGenerator:
             day_5 = (
                 f"Dear {first_name},\n\n"
                 f"Coordinating sensor loop checks and instrument verification during short maintenance windows can be challenging when equipment must be dispatched off-site. "
-                f"Performing on-site calibration for {equipment_phrase} can reduce equipment movement and help keep critical instruments available for production.\n\n"
+                f"Where technically feasible, on-site calibration for {equipment_phrase} can reduce equipment movement and help keep critical instruments available for production.\n\n"
                 f"Happy to review your upcoming instrument schedule to explore on-site feasibility.\n\n"
                 f"{STANDARD_SIGNATURE_TEXT}"
             )
@@ -1041,6 +1141,22 @@ CRITICAL INSTRUCTIONS & PRINCIPLES:
    - NEVER invent unverified facts, numeric ROI (e.g. 'save 35% cost'), satellite centers (e.g. 'Pune & Dahej Regional Metrology Center'), unapproved turnaround SLAs (e.g. '48-hour turnaround'), or active audits unless verified.
    - AUDIT RESTRICTION: Do NOT say or imply an audit is upcoming or scheduled (NEVER 'ahead of your upcoming audit' or 'before quality audits') UNLESS the verified trigger evidence explicitly contains 'audit', 'surveillance', or 'inspection'. General phrasing like 'support measurement traceability', 'make calibration records easier to retrieve when required', or 'support audit readiness' is allowed only when context makes sense.
    - QUALITATIVE ROI ONLY: NEVER use absolute claims like 'significantly reduce', 'guarantee', 'eliminate', 'near zero', 'instant', 'fully automated', or 'zero downtime'. Use conservative qualitative phrasing: 'can help', 'can reduce equipment movement and vendor coordination', 'may simplify', 'where technically feasible'.
+   - INVENTED QUANTITY RESTRICTION: NEVER invent a quantity or vendor count (e.g. NEVER write 'four or five vendors' or '4-5 vendors'; use 'multiple vendors' or 'multiple external labs').
+   - UNSUPPORTED OPERATIONAL PHRASES FORBIDDEN:
+     * NEVER write 'keep equipment on the floor' -> use 'where technically feasible, on-site calibration can reduce equipment movement'.
+     * NEVER write 'avoid transit downtime' -> use 'can reduce transport-related handling and equipment movement'.
+     * NEVER write 'without moving critical masters offsite' -> use 'subject to scope and master feasibility'.
+     * NEVER write 'under a unified agreement' or 'single agreement' -> use 'through a more consolidated execution approach'.
+     * NEVER assert 'planned maintenance window' unless verified in trigger evidence -> use 'scheduled operating intervals' or 'scheduled maintenance intervals'.
+   - CAPABILITY SAFETY & ONSITE FEASIBILITY (CRITICAL):
+     * The opportunity (e.g. 'Dimensional CMM and furnace pyrometry calibration') represents a potential requirement, NOT confirmed Oorja on-site scope. Opportunity does NOT automatically prove capability.
+     * NEVER assume every instrument can be calibrated on-site.
+     * NEVER claim guaranteed on-site CMM calibration, furnace work, or masters.
+     * For every technical category, ALWAYS explicitly qualify on-site execution with:
+       'where technically feasible'
+       'subject to scope/range feasibility'
+       'we can review on-site versus lab feasibility'
+     * If mentioning on-site calibration, ALWAYS include a feasibility qualifier (e.g. 'where technically feasible', 'subject to scope/range feasibility', 'review on-site versus lab feasibility').
    - CALIBRATION OPPORTUNITY ALIGNMENT: Do NOT automatically insert a generic four-discipline list ('mechanical, thermal, pressure, and electrical') if the supplied opportunity is specific (e.g. dimensional CMM, furnace pyrometry, torque, pressure). Focus strictly on the 1-3 specific technical disciplines supplied in the opportunity.
    - Frame operational friction cautiously as an industry observation (e.g. 'Commissioning activity often increases...'), NEVER as an accusatory fact (NEVER 'You are struggling with...').
 

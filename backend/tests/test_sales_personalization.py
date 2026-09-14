@@ -844,6 +844,157 @@ class TestSalesPersonalizationPipeline(unittest.TestCase):
         self.assertNotIn("ahead of quality audits", body_rtn.lower())
         self.assertNotIn("upcoming audit", body_rtn.lower())
 
+    def test_validator_rejects_invented_vendor_count(self):
+        """Part 1: Quality validator strictly rejects invented vendor counts (e.g. 'four or five separate vendors')."""
+        context = build_personalization_context(_base_record())
+        bad_body = (
+            "Dear Krishna,\n\n"
+            "Managing calibration through four or five separate vendors creates unnecessary administrative friction. "
+            "Where technically feasible, Oorja Technical Services can help consolidate your calibration requirements.\n\n"
+            "Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?\n\n"
+            "If another colleague directly leads metrology or calibration planning for Plant V, could you kindly point me to the right person?\n\n"
+            f"{STANDARD_SIGNATURE_TEXT}"
+        )
+        report = self.validator.validate(
+            subject="Vendor Coordination",
+            body=bad_body,
+            followups={
+                "day_3": f"f3\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_5": f"f5\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_11": f"f11\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_21": f"f21\n\n{STANDARD_SIGNATURE_TEXT}",
+            },
+            context=context,
+        )
+        self.assertFalse(report.valid)
+        self.assertEqual(report.status, "PERSONALIZATION_REVIEW_REQUIRED")
+        self.assertTrue(any("INVENTED_VENDOR_COUNT" in v for v in report.violations))
+
+    def test_validator_rejects_unsupported_operational_promises(self):
+        """Part 1: Quality validator strictly rejects unsupported operational claims like 'keep equipment on the floor'."""
+        context = build_personalization_context(_base_record())
+        for bad_phrase in [
+            "keep equipment on the floor",
+            "avoid transit downtime",
+            "without moving critical masters offsite",
+            "under a unified agreement",
+        ]:
+            bad_body = (
+                f"Dear Krishna,\n\n"
+                f"With Bharat Precision Forgings Ltd commissioning Plant V, we help you {bad_phrase}. "
+                f"Where technically feasible, our NABL CC-3963 accredited laboratory supports equipment calibration.\n\n"
+                f"Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?\n\n"
+                f"If another colleague leads this planning for Plant V, could you kindly point me to the right person?\n\n"
+                f"{STANDARD_SIGNATURE_TEXT}"
+            )
+            report = self.validator.validate(
+                subject="Calibration Support",
+                body=bad_body,
+                followups={
+                    "day_3": f"f3\n\n{STANDARD_SIGNATURE_TEXT}",
+                    "day_5": f"f5\n\n{STANDARD_SIGNATURE_TEXT}",
+                    "day_11": f"f11\n\n{STANDARD_SIGNATURE_TEXT}",
+                    "day_21": f"f21\n\n{STANDARD_SIGNATURE_TEXT}",
+                },
+                context=context,
+            )
+            self.assertFalse(report.valid, f"Failed to reject bad phrase: {bad_phrase}")
+            self.assertEqual(report.status, "PERSONALIZATION_REVIEW_REQUIRED")
+            self.assertTrue(any("UNSUPPORTED_OPERATIONAL_CLAIM" in v for v in report.violations))
+
+    def test_validator_rejects_unsupported_maintenance_window(self):
+        """Part 1: Quality validator rejects 'planned maintenance window' unless evidence supports it."""
+        record = _base_record(
+            trigger="New precision machining and press line commissioning",
+            reasoning="Commissioning of new manufacturing machinery",
+        )
+        context = build_personalization_context(record)
+        bad_body = (
+            "Dear Krishna,\n\n"
+            "With Bharat Precision Forgings Ltd commissioning Plant V, "
+            "we coordinate on-site calibration during your planned maintenance window. "
+            "Where technically feasible, our NABL CC-3963 accredited laboratory supports measurement traceability.\n\n"
+            "Would it make sense to review your upcoming equipment calibration schedule to determine which items can be supported on-site?\n\n"
+            "If another colleague directly leads metrology or quality planning for Plant V, could you point me to the right lead?\n\n"
+            f"{STANDARD_SIGNATURE_TEXT}"
+        )
+        report = self.validator.validate(
+            subject="Maintenance Planning",
+            body=bad_body,
+            followups={
+                "day_3": f"f3\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_5": f"f5\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_11": f"f11\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_21": f"f21\n\n{STANDARD_SIGNATURE_TEXT}",
+            },
+            context=context,
+        )
+        self.assertFalse(report.valid)
+        self.assertEqual(report.status, "PERSONALIZATION_REVIEW_REQUIRED")
+        self.assertTrue(any("UNSUPPORTED_MAINTENANCE_WINDOW" in v for v in report.violations))
+
+    def test_capability_vs_opportunity_separation_and_onsite_qualification(self):
+        """Part 2: Opportunity does not prove capability; unhedged on-site promises are blocked."""
+        context = build_personalization_context(_base_record())
+        # Unhedged on-site promise without feasibility qualifier
+        bad_body = (
+            "Dear Krishna,\n\n"
+            "With Bharat Precision Forgings Ltd commissioning Plant V, "
+            "we execute on-site calibration for dimensional CMM and furnace pyrometry calibration. "
+            "Oorja Technical Services is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (CC-3963).\n\n"
+            "Would it make sense to review your schedule?\n\n"
+            "If another colleague leads this planning for Plant V, could you point me to the right person?\n\n"
+            f"{STANDARD_SIGNATURE_TEXT}"
+        )
+        report = self.validator.validate(
+            subject="CMM Support",
+            body=bad_body,
+            followups={
+                "day_3": f"f3\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_5": f"f5\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_11": f"f11\n\n{STANDARD_SIGNATURE_TEXT}",
+                "day_21": f"f21\n\n{STANDARD_SIGNATURE_TEXT}",
+            },
+            context=context,
+        )
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any("UNSUPPORTED_ONSITE_PROMISES" in v or "UNQUALIFIED_ONSITE_CLAIM" in v for v in report.violations)
+        )
+
+    def test_deterministic_output_fully_compliant_with_copy_rules(self):
+        """Deterministic generator produces 100% compliant copy with zero unsafe claims and exact signature."""
+        record = _base_record()
+        result = self.pipeline.personalize_record(record, force_provider="DETERMINISTIC")
+
+        self.assertEqual(result["status"], "VALIDATED")
+        self.assertGreaterEqual(result["quality_score"], 85)
+
+        full_copy = result["body"] + " " + " ".join(result["followups"].values())
+
+        # No invented quantities
+        self.assertNotIn("four or five", full_copy.lower())
+        self.assertNotIn("4 or 5", full_copy.lower())
+
+        # No unsupported operational promises
+        self.assertNotIn("keep equipment on the floor", full_copy.lower())
+        self.assertNotIn("avoid transit downtime", full_copy.lower())
+        self.assertNotIn("without moving critical masters offsite", full_copy.lower())
+        self.assertNotIn("under a unified agreement", full_copy.lower())
+        self.assertNotIn("planned maintenance window", full_copy.lower())
+
+        # Softened feasibility phrasing present
+        self.assertTrue(
+            "where technically feasible" in full_copy.lower()
+            or "feasibility" in full_copy.lower()
+        )
+
+        # Standard signature exact on initial and all followups
+        self.assertEqual(result["body"].count("Bablu Gurjar"), 1)
+        for stage in ["day_3", "day_5", "day_11", "day_21"]:
+            self.assertEqual(result["followups"][stage].count("Bablu Gurjar"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
+
