@@ -64,12 +64,19 @@ class WorkerStub:
         return SimpleNamespace(returncode=0 if self.status in {"READY", "SENT"} else 1, stdout="", stderr="")
 
 
-def _bridge(tmp_path: Path, worker: WorkerStub, *, enabled: bool = True) -> RediffTransportBridge:
+def _bridge(
+    tmp_path: Path,
+    worker: WorkerStub,
+    *,
+    enabled: bool = True,
+    production_enabled: bool = False,
+) -> RediffTransportBridge:
     return RediffTransportBridge(
         system_path=_system(tmp_path),
         run_dir=tmp_path / "runs",
         timeout_seconds=5,
         enabled=enabled,
+        production_enabled=production_enabled,
         process_runner=worker,
         now=lambda: NOW,
     )
@@ -187,3 +194,48 @@ def test_failed_transport_retry_is_bounded_across_receipts(tmp_path):
     assert third["transport_called"] is False
     assert third["error"] == "REDIFF_TRANSPORT_RETRY_LIMIT_REACHED"
     assert worker.calls == 2
+
+
+def test_production_preview_enforces_prospect_to_bablu_cc_and_no_bcc(tmp_path):
+    worker = WorkerStub("READY")
+    bridge = _bridge(tmp_path, worker, production_enabled=True)
+    mapped = {**_mapped_record(), "EMAIL": "asha.verma@precision.example", "CC": TEST_RECIPIENT}
+
+    receipt = bridge.execute_production_transport(
+        mapped_record=mapped,
+        run_id="operator-run-production",
+        company_reference=42,
+        person_reference=84,
+        dispatch=False,
+    )
+
+    assert receipt["transport_status"] == "READY"
+    assert receipt["actual_to"] == "asha.verma@precision.example"
+    assert receipt["cc"] == [TEST_RECIPIENT]
+    assert receipt["bcc"] == []
+    assert receipt["prospect_recipient_count"] == 1
+    assert receipt["smtp_sent"] is False
+    command = worker.commands[0][0]
+    assert command[command.index("--mode") + 1] == "production"
+    assert "--preview" in command
+
+
+def test_production_transport_rejects_any_extra_cc_before_worker(tmp_path):
+    worker = WorkerStub("READY")
+    bridge = _bridge(tmp_path, worker, production_enabled=True)
+    mapped = {
+        **_mapped_record(),
+        "EMAIL": "asha.verma@precision.example",
+        "CC": f"{TEST_RECIPIENT}, another@example.org",
+    }
+
+    with pytest.raises(PermissionError, match="PRODUCTION_CC_MUST_BE_BABLU_ONLY"):
+        bridge.execute_production_transport(
+            mapped_record=mapped,
+            run_id="operator-run-production",
+            company_reference=42,
+            person_reference=84,
+            dispatch=False,
+        )
+
+    assert worker.calls == 0

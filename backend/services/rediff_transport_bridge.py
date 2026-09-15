@@ -18,6 +18,7 @@ TEST_RECIPIENT = "Bablu@oorjatechnical.org"
 TEST_TRANSPORT_AUTHORIZATION = "SEND_ONE_REDIFF_TEST_TO_BABLU"
 SINGLE_LIVE_AUTHORIZATION = "SEND LIVE TEST"
 SINGLE_LIVE_TEST_TYPE = "SINGLE_LIVE_CUSTOMER_TEST"
+PRODUCTION_CAMPAIGN = "salesoorja-autonomous-outbound"
 SUPPRESSED_DUPLICATE_TRANSPORT = "SUPPRESSED_DUPLICATE_TRANSPORT"
 MAX_TRANSPORT_ATTEMPTS = 2
 
@@ -33,6 +34,7 @@ class RediffTransportBridge:
         timeout_seconds: Optional[int] = None,
         enabled: Optional[bool] = None,
         single_live_enabled: Optional[bool] = None,
+        production_enabled: Optional[bool] = None,
         process_runner: Callable[..., Any] = subprocess.run,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
@@ -44,6 +46,17 @@ class RediffTransportBridge:
             settings.SINGLE_LIVE_CUSTOMER_TEST_ENABLED
             if single_live_enabled is None
             else single_live_enabled
+        )
+        self.production_enabled = bool(
+            (
+                str(settings.SALESOORJA_MODE).upper() == "PRODUCTION"
+                and settings.REAL_OUTREACH_ENABLED
+                and not settings.OUTBOUND_TEST_MODE
+                and settings.REDIFF_SENDER_ENABLED
+                and not settings.REDIFF_TEST_MODE
+            )
+            if production_enabled is None
+            else production_enabled
         )
         self._process_runner = process_runner
         self._now = now
@@ -252,6 +265,81 @@ class RediffTransportBridge:
         recipient = str(mapped_record.get("EMAIL") or mapped_record.get("EMAIL_ID") or "").strip()
         campaign_reference = "salesoorja-single-live-customer-test"
         initial_or_followup = "INITIAL"
+        self._assert_single_live_authorization(
+            authorization=authorization,
+            recipient=recipient,
+            cc=(TEST_RECIPIENT,),
+            bcc=(),
+        )
+        return self._execute_live_transport(
+            mapped_record=mapped_record,
+            run_id=run_id,
+            company_reference=company_reference,
+            person_reference=person_reference,
+            campaign_reference=campaign_reference,
+            initial_or_followup=initial_or_followup,
+            touch="INITIAL",
+            existing_receipts=existing_receipts,
+            dispatch=dispatch,
+            enabled=self.single_live_enabled,
+            disabled_error="SINGLE_LIVE_CUSTOMER_TEST_DISABLED",
+            worker_mode="single-live",
+            test_type=SINGLE_LIVE_TEST_TYPE,
+        )
+
+    def execute_production_transport(
+        self,
+        *,
+        mapped_record: Mapping[str, Any],
+        run_id: str,
+        company_reference: Any,
+        person_reference: Any,
+        campaign_reference: str = PRODUCTION_CAMPAIGN,
+        initial_or_followup: str = "INITIAL",
+        existing_receipts: Sequence[Mapping[str, Any]] = (),
+        dispatch: bool = True,
+    ) -> dict[str, Any]:
+        recipient = str(mapped_record.get("EMAIL") or mapped_record.get("EMAIL_ID") or "").strip()
+        cc = tuple(
+            address.strip()
+            for address in str(mapped_record.get("CC") or "").replace(";", ",").split(",")
+            if address.strip()
+        )
+        self._assert_production_authorization(recipient=recipient, cc=cc, bcc=())
+        return self._execute_live_transport(
+            mapped_record=mapped_record,
+            run_id=run_id,
+            company_reference=company_reference,
+            person_reference=person_reference,
+            campaign_reference=campaign_reference,
+            initial_or_followup=initial_or_followup,
+            touch=initial_or_followup,
+            existing_receipts=existing_receipts,
+            dispatch=dispatch,
+            enabled=self.production_enabled,
+            disabled_error="PRODUCTION_OUTREACH_DISABLED",
+            worker_mode="production",
+            test_type=None,
+        )
+
+    def _execute_live_transport(
+        self,
+        *,
+        mapped_record: Mapping[str, Any],
+        run_id: str,
+        company_reference: Any,
+        person_reference: Any,
+        campaign_reference: str,
+        initial_or_followup: str,
+        touch: str,
+        existing_receipts: Sequence[Mapping[str, Any]],
+        dispatch: bool,
+        enabled: bool,
+        disabled_error: str,
+        worker_mode: str,
+        test_type: Optional[str],
+    ) -> dict[str, Any]:
+        recipient = str(mapped_record.get("EMAIL") or mapped_record.get("EMAIL_ID") or "").strip()
         duplicate_key = self.duplicate_key(
             person_reference=person_reference,
             original_prospect_email=recipient,
@@ -276,11 +364,11 @@ class RediffTransportBridge:
                 "cc": [TEST_RECIPIENT],
                 "bcc": [],
                 "test_mode": False,
-                "test_type": SINGLE_LIVE_TEST_TYPE,
                 "attempt_number": attempt_number,
                 "initial_or_followup": initial_or_followup,
-                "touch": "INITIAL",
+                "touch": touch,
                 "prospect_recipient_count": 1,
+                **({"test_type": test_type} if test_type else {}),
             }
         if attempt_number > MAX_TRANSPORT_ATTEMPTS:
             return self._live_failed_receipt(
@@ -292,14 +380,12 @@ class RediffTransportBridge:
                 duplicate_key=duplicate_key,
                 error="REDIFF_TRANSPORT_RETRY_LIMIT_REACHED",
                 transport_called=False,
+                campaign_reference=campaign_reference,
+                initial_or_followup=initial_or_followup,
+                touch=touch,
+                test_type=test_type,
             )
-        self._assert_single_live_authorization(
-            authorization=authorization,
-            recipient=recipient,
-            cc=(TEST_RECIPIENT,),
-            bcc=(),
-        )
-        if dispatch and not self.single_live_enabled:
+        if dispatch and not enabled:
             return self._live_failed_receipt(
                 run_id=run_id,
                 company_reference=company_reference,
@@ -307,8 +393,12 @@ class RediffTransportBridge:
                 recipient=recipient,
                 attempt_number=attempt_number,
                 duplicate_key=duplicate_key,
-                error="SINGLE_LIVE_CUSTOMER_TEST_DISABLED",
+                error=disabled_error,
                 transport_called=False,
+                campaign_reference=campaign_reference,
+                initial_or_followup=initial_or_followup,
+                touch=touch,
+                test_type=test_type,
             )
         if not self.available():
             return self._live_failed_receipt(
@@ -320,6 +410,10 @@ class RediffTransportBridge:
                 duplicate_key=duplicate_key,
                 error="REDIFF_SYSTEM_UNAVAILABLE",
                 transport_called=False,
+                campaign_reference=campaign_reference,
+                initial_or_followup=initial_or_followup,
+                touch=touch,
+                test_type=test_type,
             )
 
         execution_id = f"rediff-live-{uuid.uuid4().hex[:12]}"
@@ -345,7 +439,7 @@ class RediffTransportBridge:
             "--cc",
             TEST_RECIPIENT,
             "--mode",
-            "single-live",
+            worker_mode,
         ]
         if not dispatch:
             command.append("--preview")
@@ -383,14 +477,13 @@ class RediffTransportBridge:
             "cc": [TEST_RECIPIENT],
             "bcc": [],
             "test_mode": False,
-            "test_type": SINGLE_LIVE_TEST_TYPE,
             "sent_at": self._now().isoformat() if sent else None,
             "transport": "EXISTING_REDIFF_CAMPAIGN_RUNNER",
             "transport_status": transport_status,
             "message_id": worker_result.get("message_id"),
             "attempt_number": attempt_number,
             "initial_or_followup": initial_or_followup,
-            "touch": "INITIAL",
+            "touch": touch,
             "error": None if sent or transport_status == "READY" else str(worker_result.get("error") or "REDIFF_TRANSPORT_FAILED"),
             "duplicate_key": duplicate_key,
             "transport_called": dispatch,
@@ -398,7 +491,24 @@ class RediffTransportBridge:
             "prospect_recipient_count": 1,
             "state_history": state_history,
             "preview": worker_result.get("preview"),
+            **({"test_type": test_type} if test_type else {}),
         }
+
+    def _assert_production_authorization(
+        self,
+        *,
+        recipient: str,
+        cc: Sequence[str],
+        bcc: Sequence[str],
+    ) -> None:
+        if not self.production_enabled:
+            raise PermissionError("PRODUCTION_OUTREACH_DISABLED")
+        if not recipient or recipient.casefold() == TEST_RECIPIENT.casefold():
+            raise PermissionError("REAL_PROSPECT_RECIPIENT_REQUIRED")
+        if tuple(address.casefold() for address in cc) != (TEST_RECIPIENT.casefold(),):
+            raise PermissionError("PRODUCTION_CC_MUST_BE_BABLU_ONLY")
+        if bcc:
+            raise PermissionError("PRODUCTION_BCC_MUST_BE_EMPTY")
 
     @staticmethod
     def _assert_single_live_authorization(
@@ -428,27 +538,30 @@ class RediffTransportBridge:
         duplicate_key: str,
         error: str,
         transport_called: bool,
+        campaign_reference: str = "salesoorja-single-live-customer-test",
+        initial_or_followup: str = "INITIAL",
+        touch: str = "INITIAL",
+        test_type: Optional[str] = SINGLE_LIVE_TEST_TYPE,
     ) -> dict[str, Any]:
-        return {
+        receipt = {
             "receipt_id": f"receipt-{uuid.uuid4().hex[:12]}",
             "run_id": run_id,
             "company_reference": company_reference,
             "person_reference": person_reference,
-            "campaign_reference": "salesoorja-single-live-customer-test",
+            "campaign_reference": campaign_reference,
             "recipient": recipient,
             "original_prospect_email": recipient,
             "actual_to": recipient,
             "cc": [TEST_RECIPIENT],
             "bcc": [],
             "test_mode": False,
-            "test_type": SINGLE_LIVE_TEST_TYPE,
             "sent_at": None,
             "transport": "EXISTING_REDIFF_CAMPAIGN_RUNNER",
             "transport_status": "FAILED",
             "message_id": None,
             "attempt_number": attempt_number,
-            "initial_or_followup": "INITIAL",
-            "touch": "INITIAL",
+            "initial_or_followup": initial_or_followup,
+            "touch": touch,
             "error": error,
             "duplicate_key": duplicate_key,
             "transport_called": transport_called,
@@ -457,6 +570,9 @@ class RediffTransportBridge:
             "state_history": ["READY_FOR_EMAIL", "HANDOFF_CREATED", "FAILED"],
             "preview": None,
         }
+        if test_type:
+            receipt["test_type"] = test_type
+        return receipt
 
     @staticmethod
     def _assert_test_authorization(

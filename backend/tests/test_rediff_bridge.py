@@ -163,8 +163,7 @@ class TestRediffBridge(unittest.TestCase):
         self.assertTrue(preview["test_mode"])
         self.assertTrue(preview["no_send_enforced"])
         self.assertEqual(preview["to"], "abhijit.biswal@valeo.com")
-        self.assertIn("Bablu@oorjatechnical.org", preview["cc"])
-        self.assertIn("piyushk@oorjatechnical.com", preview["cc"])
+        self.assertEqual(preview["cc"], ["Bablu@oorjatechnical.org"])
 
         # Quality audit checks
         audit = preview["audit_checks"]
@@ -222,4 +221,3 @@ class TestRediffBridge(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

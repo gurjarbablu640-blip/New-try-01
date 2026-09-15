@@ -157,6 +157,46 @@ def test_test_mode_repeats_real_discovery_until_manual_stop(tmp_path):
     assert operator.get_status()["stop_reason"] == "MANUAL_STOP"
 
 
+def test_production_mode_retries_discovery_and_processes_followups_each_cycle(tmp_path):
+    database = SimpleNamespace(close=lambda: None)
+    operator = _operator(
+        tmp_path,
+        db_factory=lambda: database,
+        SALESOORJA_MODE="PRODUCTION",
+        REAL_OUTREACH_ENABLED=True,
+        OUTBOUND_TEST_MODE=False,
+    )
+    cycles = []
+    followup_cycles = []
+    waits = []
+    operator._poll_inbox = lambda: None
+
+    def run_cycle():
+        cycles.append(len(cycles) + 1)
+        if len(cycles) == 1:
+            raise RuntimeError("temporary provider failure")
+        return False
+
+    def wait_for_next_cycle(seconds):
+        waits.append(seconds)
+        if len(waits) == 2:
+            operator._set_stop_signal()
+            return True
+        return False
+
+    operator._run_discovery_cycle = run_cycle
+    operator._process_due_followups = lambda db: followup_cycles.append(db) or 0
+    operator._interruptible_wait = wait_for_next_cycle
+    operator._state["status"] = "RUNNING"
+
+    operator._run_production_loop()
+
+    assert cycles == [1, 2]
+    assert followup_cycles == [database, database]
+    assert operator.get_status()["counters"]["failed"] == 1
+    assert operator.get_status()["stop_reason"] == "MANUAL_STOP"
+
+
 def test_test_discovery_bypasses_cache_and_processes_account(tmp_path):
     database = SimpleNamespace(close=lambda: None)
     calls = []

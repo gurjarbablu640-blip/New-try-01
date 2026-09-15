@@ -187,23 +187,34 @@ def test_ai_provider_connection(provider: str) -> Dict[str, Any]:
 
 
 def test_apollo_connection() -> Dict[str, Any]:
-    """Tests Apollo API key connection with live authentication."""
-    api_key = str(get_setting_value("APOLLO_API_KEY", "")).strip()
-    if not api_key or api_key.startswith("mock_") or api_key.startswith("YOUR_") or "test" in api_key:
-        return {
-            "status": "NOT_CONFIGURED",
-            "message": "APOLLO_API_KEY is not configured with a live key. Apollo contact enrichment is safely disabled.",
-        }
+    """Test Apollo through the identity-only People Search used by the operator."""
     try:
-        import requests
-        headers = {"Content-Type": "application/json", "Cache-Control": "no-cache", "X-Api-Key": api_key}
-        res = requests.get("https://api.apollo.io/api/v1/auth/health", headers=headers, timeout=10)
-        if res.status_code == 200:
-            data = res.json() if res.content else {}
-            if data.get("is_logged_in") is True:
-                return {"status": "CONNECTED", "message": "Apollo API connection verified. Pilot safety limit (<= 6 contacts) enforced."}
-            return {"status": "AUTHENTICATION_FAILED", "message": "Apollo API key rejected (is_logged_in=false)."}
-        return {"status": "AUTHENTICATION_FAILED", "message": f"Apollo returned HTTP {res.status_code}: {res.text[:150]}"}
+        from services.apollo_adapter import search_apollo_people_candidates
+
+        result = search_apollo_people_candidates(
+            "Apollo.io",
+            locations=["India"],
+            max_results=1,
+        )
+        telemetry = result.get("telemetry") or {}
+        if (
+            result.get("status") in {"READY", "NO_MATCH"}
+            and int(telemetry.get("APOLLO_SEARCH_CALLS") or 0) == 1
+            and int(telemetry.get("CONTACT_REVEAL_CALLS") or 0) == 0
+        ):
+            return {
+                "status": "CONNECTED",
+                "message": "Apollo identity-only People Search authenticated successfully with zero contact reveals.",
+            }
+        if result.get("status") == "CONFIG_REQUIRED":
+            return {
+                "status": "NOT_CONFIGURED",
+                "message": "APOLLO_API_KEY is not configured with a live key. Apollo contact enrichment is safely disabled.",
+            }
+        return {
+            "status": "AUTHENTICATION_FAILED",
+            "message": str(result.get("error") or "Apollo identity-only People Search authentication failed."),
+        }
     except Exception as err:
         return {"status": "SERVER_ERROR", "message": str(err)}
 

@@ -661,7 +661,7 @@ class SalesoorjaOperator:
                 except Exception:
                     pass
 
-        return {"started": True, "status": self.get_status()}
+        return {"started": True, "status": self._status_payload()}
 
     def execute_worker_run(self, task_id: Optional[str] = None) -> dict[str, Any]:
         """Dedicated execution entrypoint for Celery worker or worker thread."""
@@ -797,6 +797,9 @@ class SalesoorjaOperator:
     def get_status(self) -> dict[str, Any]:
         self._sync_state()
         self._reconcile_runtime_state()
+        return self._status_payload()
+
+    def _status_payload(self) -> dict[str, Any]:
         with self._lock:
             state = deepcopy(self._state)
         state.pop("records", None)
@@ -1167,9 +1170,32 @@ class SalesoorjaOperator:
             if now_monotonic - last_inbox_poll >= int(getattr(self.settings, "SALESOORJA_INBOX_INTERVAL_SECONDS", 1800)):
                 self._poll_inbox()
                 last_inbox_poll = now_monotonic
-            processed = self._run_discovery_cycle()
+            try:
+                processed = self._run_discovery_cycle()
+            except Exception as exc:
+                logger.warning("Production discovery cycle failed; continuing after controlled delay: %s", exc)
+                self._increment("failed")
+                self._append_record(
+                    "ERRORS",
+                    {"stage": "production_discovery", "error": type(exc).__name__, "detail": str(exc)},
+                )
+                self._update(last_error=f"{type(exc).__name__}: {exc}")
+                processed = False
+            if self._db_factory is not None and not self._is_stop_requested():
+                db = self._db_factory()
+                try:
+                    self._process_due_followups(db)
+                except Exception as exc:
+                    logger.warning("Production follow-up cycle failed; next cycle will continue: %s", exc)
+                    self._increment("failed")
+                    self._append_record(
+                        "ERRORS",
+                        {"stage": "production_followups", "error": type(exc).__name__, "detail": str(exc)},
+                    )
+                finally:
+                    db.close()
             if not processed:
-                self._update(last_action="No new qualifying accounts; waiting for next cycle")
+                self._update(current_company=None, last_action="No new qualifying accounts; next discovery cycle is automatic")
             if self._interruptible_wait(int(getattr(self.settings, "SALESOORJA_CYCLE_INTERVAL_SECONDS", 300))):
                 continue
 
@@ -1312,13 +1338,44 @@ class SalesoorjaOperator:
                 "reason": handoff.get("reason"),
             }
             receipt = None
-            if handoff.get("status") == SENT and handoff.get("smtp_sent"):
+            if self._mode() == "PRODUCTION" and handoff.get("status") == QUEUED:
+                with self._lock:
+                    existing_receipts = deepcopy(self._state.get("transport_receipts") or [])
+                receipt = self._transport_bridge.execute_production_transport(
+                    mapped_record=handoff["mapped_record"],
+                    run_id=str(self._state.get("run_id") or ""),
+                    company_reference=account.get("company_id") or company_name,
+                    person_reference=getattr(candidate, "id", None) or record.get("person"),
+                    existing_receipts=existing_receipts,
+                    dispatch=True,
+                )
+                if receipt.get("transport_status") != SUPPRESSED_DUPLICATE_TRANSPORT:
+                    with self._lock:
+                        self._state["transport_receipts"].append(dict(receipt))
+                        self._save_state()
+                if receipt.get("transport_status") == SENT and receipt.get("smtp_sent") is True:
+                    handoff = {**handoff, "status": SENT, "smtp_sent": True, "transport_called": True}
+                else:
+                    handoff = {
+                        **handoff,
+                        "status": str(receipt.get("transport_status") or "FAILED"),
+                        "smtp_sent": False,
+                        "reason": receipt.get("error") or receipt.get("transport_status"),
+                    }
+                row["status"] = handoff.get("status")
+                row["reason"] = handoff.get("reason")
+
+            if handoff.get("status") == SENT and handoff.get("smtp_sent") and receipt and receipt.get("smtp_sent"):
                 self._increment("emails_sent")
+                self._increment("production_emails_sent")
+                self._increment("real_prospect_emails_sent")
                 self._append_record("SENT", row)
             elif handoff.get("status") == QUEUED:
                 self._increment("rediff_handoffs")
                 self._append_record("QUALIFIED_NOT_SENT", row)
             else:
+                if self._mode() == "PRODUCTION":
+                    self._increment("held")
                 self._append_record("QUALIFIED_NOT_SENT", row)
 
             self._persist_pipeline_account(
@@ -1328,6 +1385,7 @@ class SalesoorjaOperator:
                 personalized=personalized,
                 handoff=handoff,
                 receipt=receipt,
+                source_record=record,
             )
         except Exception as exc:
             logger.exception("Production account failed: %s", company_name)
@@ -1485,6 +1543,7 @@ class SalesoorjaOperator:
         personalized: Mapping[str, Any],
         handoff: Mapping[str, Any],
         receipt: Optional[Mapping[str, Any]] = None,
+        source_record: Optional[Mapping[str, Any]] = None,
     ) -> dict[str, Any]:
         from models.campaign import Campaign, CampaignEvent, CampaignRecipient, CampaignStep
         from models.company import Company
@@ -1652,9 +1711,16 @@ class SalesoorjaOperator:
             next_send_at = sched["followup_1_due"]
             current_step = 0
             cadence_state_dict = cadence.to_dict()
-        else:
+        elif self._mode() != "PRODUCTION":
             recipient_status = "TEST_PREVIEW"
             email_status = "NOT_SENT_TEST_MODE"
+            last_sent_at = None
+            next_send_at = None
+            current_step = 0
+            cadence_state_dict = None
+        else:
+            recipient_status = "HOLD"
+            email_status = str(handoff.get("status") or "NOT_SENT")
             last_sent_at = None
             next_send_at = None
             current_step = 0
@@ -1667,6 +1733,16 @@ class SalesoorjaOperator:
             "followups": personalized.get("followups"),
             "quality_score": personalized.get("quality_score"),
             "message_id": message_id,
+            "message_ids": [message_id] if message_id else [],
+            "references": message_id,
+            "in_reply_to": "",
+            "sent_at": receipt.get("sent_at") if receipt else None,
+            "email": cand_email,
+            "lead_id": str((handoff.get("mapped_record") or {}).get("LEAD_ID") or ""),
+            "person_reference": getattr(candidate, "id", None) or cand_name,
+            "campaign_reference": "salesoorja-autonomous-outbound",
+            "rediff_mapped_record": dict(handoff.get("mapped_record") or {}),
+            "source_record": dict(source_record or {}),
             "cadence_state": cadence_state_dict,
             "test_mode": self._mode() != "PRODUCTION",
         }
@@ -1711,6 +1787,7 @@ class SalesoorjaOperator:
     def _process_due_followups(self, db: Any) -> int:
         from models.campaign import CampaignEvent, CampaignRecipient
         from models.company import Company
+        from models.person import Person
         from services.follow_up_engine import calculate_cadence_schedule
 
         now = self._now()
@@ -1826,6 +1903,126 @@ class SalesoorjaOperator:
             if not getattr(self.settings, "REAL_OUTREACH_ENABLED", False):
                 logger.warning("Production follow-up skipped: REAL_OUTREACH_ENABLED is False")
                 continue
+
+            source_record = dict(meta.get("source_record") or {})
+            mapped_record = dict(meta.get("rediff_mapped_record") or {})
+            if not source_record or not mapped_record:
+                rec.status = "HOLD"
+                rec.pause_reason = "MISSING_QUALIFIED_SOURCE_RECORD"
+                rec.next_send_at = None
+                db.add(rec)
+                db.commit()
+                self._increment("held")
+                self._append_record("HOLD", {
+                    "company": company_name,
+                    "reason": "Follow-up held: persisted qualification evidence is missing",
+                })
+                continue
+
+            person = db.query(Person).filter(Person.id == rec.person_id).first() if rec.person_id else None
+            recipient_email = str(meta.get("email") or mapped_record.get("EMAIL") or getattr(person, "email", "") or "").strip()
+            source_record.update({
+                "email": recipient_email,
+                "subject": subject,
+                "body_html": touch_body,
+                "body_text": touch_body,
+                "followup_stage": touch_key.upper(),
+                "is_followup": True,
+            })
+            message_ids = [value for value in meta.get("message_ids", []) if value]
+            prior_message_id = str(meta.get("message_id") or (message_ids[-1] if message_ids else ""))
+            references = " ".join(dict.fromkeys([*message_ids, prior_message_id]))
+            handoff = self._rediff.prepare_handoff(
+                source_record,
+                outreach_state={**outreach_state, "is_followup": True},
+                campaign=str(meta.get("campaign_reference") or "salesoorja-autonomous-outbound"),
+                followup_stage=touch_key.upper(),
+                in_reply_to=prior_message_id,
+                references=references,
+            )
+            if handoff.get("status") != QUEUED:
+                self._increment("held")
+                self._append_record("HOLD", {
+                    "company": company_name,
+                    "reason": f"Follow-up held: {handoff.get('reason')}",
+                })
+                continue
+
+            with self._lock:
+                existing_receipts = deepcopy(self._state.get("transport_receipts") or [])
+            receipt = self._transport_bridge.execute_production_transport(
+                mapped_record=handoff["mapped_record"],
+                run_id=str(self._state.get("run_id") or ""),
+                company_reference=rec_company_id or company_name,
+                person_reference=rec.person_id or meta.get("person_reference") or recipient_email,
+                campaign_reference=str(meta.get("campaign_reference") or "salesoorja-autonomous-outbound"),
+                initial_or_followup=touch_key.upper(),
+                existing_receipts=existing_receipts,
+                dispatch=True,
+            )
+            if receipt.get("transport_status") != SUPPRESSED_DUPLICATE_TRANSPORT:
+                with self._lock:
+                    self._state["transport_receipts"].append(dict(receipt))
+                    self._save_state()
+            if receipt.get("transport_status") != SENT or receipt.get("smtp_sent") is not True:
+                self._increment("failed")
+                self._append_record("ERRORS", {
+                    "company": company_name,
+                    "stage": touch_key.upper(),
+                    "error": receipt.get("error") or receipt.get("transport_status"),
+                })
+                continue
+
+            sent_at = self._now()
+            new_message_id = str(receipt.get("message_id") or "")
+            if new_message_id:
+                message_ids.append(new_message_id)
+            cadence_state = dict(meta.get("cadence_state") or {})
+            next_due_fields = {1: "followup_2_due_at", 2: "followup_3_due_at", 3: "final_followup_due_at"}
+            next_due = cadence_state.get(next_due_fields.get(next_step, ""))
+            try:
+                rec.next_send_at = datetime.fromisoformat(str(next_due)) if next_step < 4 and next_due else None
+            except ValueError:
+                sched = calculate_cadence_schedule(sent_at)
+                rec.next_send_at = sched.get(step_due_keys.get(next_step)) if next_step < 4 else None
+            rec.current_step = next_step
+            rec.last_sent_at = sent_at
+            rec.email_status = "SENT"
+            if next_step >= 4:
+                rec.status = "COMPLETED"
+                rec.next_send_at = None
+            meta.update({
+                "message_id": new_message_id or prior_message_id,
+                "message_ids": message_ids,
+                "references": " ".join(dict.fromkeys(message_ids)),
+                "in_reply_to": prior_message_id,
+                "sent_at": receipt.get("sent_at") or sent_at.isoformat(),
+                "rediff_mapped_record": dict(handoff.get("mapped_record") or mapped_record),
+                "source_record": source_record,
+            })
+            rec.metadata_json = meta
+            db.add(rec)
+            db.add(CampaignEvent(
+                campaign_id=rec.campaign_id,
+                recipient_id=rec.id,
+                event_type=f"{touch_key.upper()}_SENT",
+                channel="email",
+                provider_message_id=new_message_id,
+                payload={"receipt": receipt, "test_mode": False},
+            ))
+            db.commit()
+            self._increment("followups_sent")
+            self._increment("emails_sent")
+            self._increment("production_emails_sent")
+            self._increment("real_prospect_emails_sent")
+            self._append_record("SENT", {
+                "company": company_name,
+                "person": getattr(person, "full_name", "") if person else "",
+                "email": recipient_email,
+                "status": SENT,
+                "touch": touch_key.upper(),
+            })
+            processed += 1
 
         return processed
 

@@ -236,7 +236,7 @@ export default function OperatorPage() {
           <div className="mt-3">
             <div className="text-xs text-zinc-500 uppercase">Target Account</div>
             <div className="text-lg font-semibold text-white">
-              {status?.current_company || "Idle — awaiting cycle trigger"}
+              {status?.current_company || (isRunning ? "Between discovery cycles — next cycle automatic" : "Operator stopped")}
             </div>
           </div>
           <div className="mt-3">

@@ -30,7 +30,7 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--html", required=True)
     parser.add_argument("--result", required=True)
     parser.add_argument("--recipient", required=True)
-    parser.add_argument("--mode", choices=("test", "single-live"), default="test")
+    parser.add_argument("--mode", choices=("test", "single-live", "production"), default="test")
     parser.add_argument("--cc", default="")
     parser.add_argument("--preview", action="store_true")
     return parser.parse_args(argv)
@@ -70,7 +70,7 @@ def main() -> int:
         if not final_body and html_path.is_file():
             final_body = html_path.read_text(encoding="utf-8").strip()
 
-        if args.mode == "single-live":
+        if args.mode in {"single-live", "production"}:
             row_recipient = str(row.get("EMAIL") or row.get("EMAIL_ID") or "").strip()
             if not row_recipient or row_recipient.casefold() != args.recipient.casefold():
                 raise PermissionError("LIVE_RECIPIENT_ASSERTION_FAILED")
@@ -203,7 +203,7 @@ def main() -> int:
             lead_results = summary.get("lead_results") or []
             lead_result = lead_results[0] if len(lead_results) == 1 else {}
             personalization = lead_result.get("personalization") or {}
-            if args.mode == "single-live" and lead_result:
+            if args.mode in {"single-live", "production"} and lead_result:
                 template = html_path.read_text(encoding="utf-8")
                 rendered_html = send_email.personalize(
                     template,

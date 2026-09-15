@@ -104,10 +104,10 @@ export default function TopBar({ onOpenCompany, collapsed }) {
 
       {/* Action Controls & Indicators */}
       <div className="flex items-center gap-3">
-        {/* Outbound Test Mode Badge */}
+        {/* Qualification and suppression controls remain active in every mode. */}
         <div className="flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-400">
           <ShieldCheck className="h-3.5 w-3.5" />
-          <span>Outbound Safe Mode</span>
+          <span>Outbound Gates Active</span>
         </div>
 
         {/* Ask Oorja Quick AI button */}

@@ -137,8 +137,13 @@ services:
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY}
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: ${DEBUG}
+      REDIFF_SYSTEM_PATH: /rediff-system
     volumes:
       - ./backend:/app
+      - type: bind
+        source: ${REDIFF_SYSTEM_PATH}
+        target: /rediff-system
+        read_only: true
     depends_on:
       db:
         condition: service_healthy

@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from services.apollo_adapter import search_apollo_people_candidates
 from services.brightdata_linkedin_provider import normalize_linkedin_record
@@ -12,6 +12,7 @@ from services.person_intelligence_service import (
     verify_apollo_candidates_with_brightdata,
 )
 from services.decision_maker_discovery import is_apollo_eligible_lead
+from services.settings_manager import test_apollo_connection as verify_apollo_connection
 
 
 TARGET_COMPANY = "Ramkrishna Forgings Limited"
@@ -159,6 +160,21 @@ def test_apollo_discovery_excludes_contact_fields(monkeypatch):
     assert captured["json"]["q_organization_names"] == [TARGET_COMPANY]
     assert len(captured["json"]["person_titles"]) > 1
     assert "reveal_personal_emails" not in captured["json"]
+
+
+def test_apollo_readiness_uses_identity_only_people_search():
+    with patch(
+        "services.apollo_adapter.search_apollo_people_candidates",
+        return_value={
+            "status": "NO_MATCH",
+            "candidates": [],
+            "telemetry": {"APOLLO_SEARCH_CALLS": 1, "CONTACT_REVEAL_CALLS": 0},
+        },
+    ) as search:
+        result = verify_apollo_connection()
+
+    assert result["status"] == "CONNECTED"
+    search.assert_called_once_with("Apollo.io", locations=["India"], max_results=1)
 
 
 def test_apollo_discovery_candidates_are_not_automatically_verified():

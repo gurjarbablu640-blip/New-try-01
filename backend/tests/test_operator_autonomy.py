@@ -455,6 +455,158 @@ def test_followup_advances_cadence_steps_cleanly(tmp_path, sqlite_session):
     assert recipient.next_send_at is None
 
 
+def test_production_followup_uses_thread_headers_and_persists_receipt(tmp_path, sqlite_session):
+    company = Company(name="Precision Components Ltd", domain="precision-components.in")
+    sqlite_session.add(company)
+    sqlite_session.flush()
+    person = Person(
+        company_id=company.id,
+        full_name="Asha Verma",
+        email="asha.verma@precision-components.in",
+    )
+    sqlite_session.add(person)
+    sqlite_session.flush()
+    campaign = Campaign(name="Salesoorja Autonomous Outbound", status="Active", channel="email")
+    sqlite_session.add(campaign)
+    sqlite_session.flush()
+
+    system_path = tmp_path / "Rediff_Email_System"
+    system_path.mkdir()
+    for filename in ("campaign_runner.py", "send_email.py"):
+        (system_path / filename).write_text("# transport marker\n", encoding="utf-8")
+    adapter = RediffSenderAdapter(
+        config=RediffAdapterConfig(
+            enabled=True,
+            test_mode=False,
+            system_path=system_path,
+            handoff_dir=tmp_path / "handoff",
+            cc_addresses=("Bablu@oorjatechnical.org",),
+            duplicate_window_days=14,
+        ),
+        now=lambda: NOW,
+    )
+    source_record = {
+        "record_id": "operator-production-001",
+        "READY_FOR_EMAIL": "YES",
+        "company": company.name,
+        "facility": "Nashik Plant",
+        "city": "Nashik",
+        "state": "Maharashtra",
+        "person": person.full_name,
+        "designation": "Plant Quality Head",
+        "persona": "Quality Head",
+        "email": person.email,
+        "trigger": "New production line commissioning",
+        "trigger_date": "2026-09-01",
+        "calibration_opportunity": "Source-backed dimensional calibration requirement",
+        "reasoning": "Current facility expansion requires calibration planning",
+        "icp_score": 92,
+        "PERSONALIZATION_STATUS": "VALIDATED",
+        "PERSONALIZATION_SCORE": 91,
+        "provenance": "REAL",
+        "evidence": {
+            "trigger_current": {"verified": True},
+            "exact_facility": {"verified": True, "address": "Nashik Plant", "linkage_strength": "DIRECT"},
+            "technical_capability": {"status": "IN_SCOPE"},
+            "correct_person": {
+                "name": person.full_name,
+                "employment_verified": True,
+                "duties_verified": True,
+                "company_evidence_status": "CURRENT_COMPANY",
+            },
+            "reachable_email": {
+                "email": person.email,
+                "status": "VERIFIED",
+                "mailbox_verified": True,
+                "contact_confidence": "HIGH",
+            },
+        },
+    }
+    initial_handoff = adapter.prepare_handoff(source_record, campaign="salesoorja-autonomous-outbound")
+    assert initial_handoff["status"] == "QUEUED"
+
+    recipient = CampaignRecipient(
+        campaign_id=campaign.id,
+        company_id=company.id,
+        person_id=person.id,
+        status="ACTIVE",
+        email_status="SENT",
+        current_step=0,
+        last_sent_at=NOW - timedelta(days=3),
+        next_send_at=NOW - timedelta(hours=1),
+        metadata_json={
+            "email": person.email,
+            "message_id": "<initial@oorjatechnical.org>",
+            "message_ids": ["<initial@oorjatechnical.org>"],
+            "subject": "Nashik calibration planning",
+            "followups": {"day_3": "Checking whether this is relevant for your Nashik plant."},
+            "source_record": source_record,
+            "rediff_mapped_record": initial_handoff["mapped_record"],
+            "campaign_reference": "salesoorja-autonomous-outbound",
+            "person_reference": person.id,
+            "cadence_state": {
+                "followup_2_due_at": (NOW + timedelta(days=2)).isoformat(),
+                "followup_3_due_at": (NOW + timedelta(days=8)).isoformat(),
+                "final_followup_due_at": (NOW + timedelta(days=18)).isoformat(),
+            },
+        },
+    )
+    sqlite_session.add(recipient)
+    sqlite_session.commit()
+
+    class ProductionTransportStub:
+        def __init__(self):
+            self.calls = []
+
+        def execute_production_transport(self, **kwargs):
+            self.calls.append(kwargs)
+            return {
+                "receipt_id": "receipt-followup-day3",
+                "transport_status": "SENT",
+                "smtp_sent": True,
+                "test_mode": False,
+                "message_id": "<day3@oorjatechnical.org>",
+                "sent_at": NOW.isoformat(),
+                "recipient": person.email,
+                "cc": ["Bablu@oorjatechnical.org"],
+                "bcc": [],
+            }
+
+    bridge = ProductionTransportStub()
+    op = SalesoorjaOperator(
+        settings_obj=_settings(
+            SALESOORJA_MODE="PRODUCTION",
+            REAL_OUTREACH_ENABLED=True,
+            OUTBOUND_TEST_MODE=False,
+            REDIFF_SENDER_ENABLED=True,
+            REDIFF_TEST_MODE=False,
+        ),
+        state_path=tmp_path / "runtime" / "operator_state.json",
+        report_dir=tmp_path / "reports",
+        now=lambda: NOW,
+        db_factory=lambda: sqlite_session,
+        rediff_adapter=adapter,
+        transport_bridge=bridge,
+    )
+
+    assert op._process_due_followups(sqlite_session) == 1
+
+    sqlite_session.refresh(recipient)
+    assert recipient.current_step == 1
+    assert recipient.status == "ACTIVE"
+    assert recipient.metadata_json["message_id"] == "<day3@oorjatechnical.org>"
+    assert recipient.metadata_json["in_reply_to"] == "<initial@oorjatechnical.org>"
+    assert recipient.metadata_json["references"] == "<initial@oorjatechnical.org> <day3@oorjatechnical.org>"
+    mapped = bridge.calls[0]["mapped_record"]
+    assert mapped["IN_REPLY_TO"] == "<initial@oorjatechnical.org>"
+    assert mapped["REFERENCES"] == "<initial@oorjatechnical.org>"
+    assert mapped["CC"] == "Bablu@oorjatechnical.org"
+    assert op.get_status()["counters"]["followups_sent"] == 1
+    assert op.get_status()["counters"]["real_prospect_emails_sent"] == 1
+    event = sqlite_session.query(CampaignEvent).filter(CampaignEvent.event_type == "DAY_3_SENT").one()
+    assert event.provider_message_id == "<day3@oorjatechnical.org>"
+
+
 # =========================================================================
 # 5. Rediff Transport-Only Decoupling & Threading Headers
 # =========================================================================
