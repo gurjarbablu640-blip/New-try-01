@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import json
 import logging
 import os
 import smtplib
 import ssl
-import sys
 import threading
 import time
 import uuid
@@ -404,7 +404,7 @@ class SalesoorjaOperator:
                 if (now - datetime.fromisoformat(stop_req_iso)).total_seconds() > 15.0:
                     return False
             except Exception:
-                return False
+                pass
 
         if heartbeat_iso:
             try:
@@ -479,14 +479,21 @@ class SalesoorjaOperator:
         # 1. Bounded stop timeout: never remain STOPPING forever
         if status == "STOPPING":
             stop_requested_at = self._state.get("stop_requested_at")
-            elapsed = 999.0
-            if stop_requested_at:
-                try:
-                    elapsed = (now - datetime.fromisoformat(stop_requested_at)).total_seconds()
-                except Exception:
-                    elapsed = 999.0
-            if elapsed > 15.0 or not self._is_worker_alive():
-                logger.warning("Reconciliation: STOPPING exceeded 15s timeout (%.1fs) or worker dead; forcing STOPPED", elapsed)
+            if not stop_requested_at:
+                with self._lock:
+                    self._state["stop_requested_at"] = _iso(now)
+                    self._save_state()
+                return
+            try:
+                elapsed = max(0.0, (now - datetime.fromisoformat(stop_requested_at)).total_seconds())
+            except (TypeError, ValueError):
+                with self._lock:
+                    self._state["stop_requested_at"] = _iso(now)
+                    self._save_state()
+                logger.warning("Reconciliation: repaired invalid STOPPING timestamp")
+                return
+            if elapsed > 15.0:
+                logger.warning("Reconciliation: STOPPING exceeded 15s timeout (%.1fs); forcing STOPPED", elapsed)
                 self._force_stopped(reason="STOP_TIMEOUT")
             return
 
@@ -792,7 +799,7 @@ class SalesoorjaOperator:
                 logger.warning("Stop did not complete within bounded timeout %.1fs; forcing STOPPED", timeout)
                 self._force_stopped(reason="STOP_TIMEOUT")
 
-        return {"stopped": True, "status": self.get_status()}
+        return {"stopped": True, "status": self._status_payload()}
 
     def get_status(self) -> dict[str, Any]:
         self._sync_state()
@@ -1194,9 +1201,12 @@ class SalesoorjaOperator:
                     )
                 finally:
                     db.close()
+            wait_seconds = int(getattr(self.settings, "SALESOORJA_CYCLE_INTERVAL_SECONDS", 300))
             if not processed:
-                self._update(current_company=None, last_action="No new qualifying accounts; next discovery cycle is automatic")
-            if self._interruptible_wait(int(getattr(self.settings, "SALESOORJA_CYCLE_INTERVAL_SECONDS", 300))):
+                self._update(current_company=None, last_action=f"No new qualifying accounts; waiting {wait_seconds}s for next discovery cycle")
+            else:
+                self._update(current_company=None, last_action=f"Waiting {wait_seconds}s for next discovery cycle")
+            if self._interruptible_wait(wait_seconds):
                 continue
 
     def _resolve_runtime_functions(self) -> tuple[Callable[..., dict[str, Any]], Callable[..., dict[str, Any]]]:
@@ -1233,17 +1243,21 @@ class SalesoorjaOperator:
                     db=db,
                     geography="PAN INDIA",
                     limit=10,
-                    use_cache=self._mode() == "PRODUCTION",
+                    use_cache=False,
                 )
             finally:
                 serper_after = self._serper_live_request_count()
                 if serper_before is not None and serper_after is not None and serper_after > serper_before:
                     self._provider_call("Serper", serper_after - serper_before)
             self._heartbeat("Serper live discovery search completed")
+            source_status = discovery.get("source_status") or {}
+            current_run_live = bool(source_status.get("current_run_live"))
             candidates = [
                 item
                 for item in discovery.get("candidates", [])
-                if item.get("data_provenance") == "LIVE_SEARCH_DISCOVERED"
+                if current_run_live
+                and item.get("current_run_live") is True
+                and item.get("data_provenance") == "LIVE_SEARCH_DISCOVERED"
             ]
             if smoke_mode:
                 discovered_count = len(candidates)
@@ -1281,9 +1295,21 @@ class SalesoorjaOperator:
 
     def _process_production_account(self, db: Any, account: Mapping[str, Any], account_key: str) -> None:
         company_name = str(account.get("company_name") or "Unknown company")
-        self._update(current_company=company_name, last_action=f"Qualifying {company_name}")
+        self._update(current_company=company_name, last_action=f"Validating trigger and facility for {company_name}")
         self._increment("companies_researched")
         try:
+            if account.get("trigger_valid") is not True:
+                recency = str((account.get("trigger_recency") or {}).get("recency_tier") or "UNKNOWN")
+                self._hold_account(account, f"Current trigger validation failed ({recency})")
+                return
+            facility_evidence = account.get("facility_evidence") or {}
+            if (
+                account.get("facility_verified") is not True
+                or facility_evidence.get("linkage_confidence") not in {"DIRECT", "STRONG"}
+            ):
+                reason = facility_evidence.get("linkage_evidence") or "Trigger is not bound to an exact facility"
+                self._hold_account(account, f"Facility validation failed: {reason}")
+                return
             if float(account.get("icp_score") or 0) < 85:
                 self._hold_account(account, "ICP score below 85")
                 return
@@ -1299,6 +1325,7 @@ class SalesoorjaOperator:
                     not self._after_end()
                     and self._outbound_total() < int(getattr(self.settings, "DAILY_SEND_MAX", 250))
                 ),
+                progress_callback=lambda stage, detail="": self._pipeline_activity(company_name, stage, detail),
             )
             summary = result.get("summary", {})
             self._increment("people_researched", int(summary.get("candidates_found") or 0))
@@ -1313,6 +1340,7 @@ class SalesoorjaOperator:
                 self._hold_account(account, "No candidate passed current-employment, facility, authority, and verified-email gates")
                 return
             record = self._build_production_record(account, candidate, result)
+            self._update(last_action=f"Generating outreach for {company_name} with DeepSeek")
             personalized = self._personalization.personalize_record(record, force_provider="AUTO")
             provider = str(personalized.get("llm_provider_used") or "")
             if provider.startswith("DEEPSEEK"):
@@ -1320,13 +1348,13 @@ class SalesoorjaOperator:
             elif provider.startswith("GEMINI"):
                 self._provider_call("Gemini")
             quality_score = float(personalized.get("quality_score") or 0)
+            self._update(last_action=f"Claim validation completed for {company_name}: {personalized.get('status', 'UNKNOWN')}")
             if personalized.get("status") != "VALIDATED" or quality_score < 85:
                 self._hold_account(account, f"Personalization quality {quality_score:.1f} below 85")
                 return
             record = self._personalization.enrich_record_for_rediff(record, personalized)
             record["PERSONALIZATION_STATUS"] = personalized["status"]
             record["PERSONALIZATION_SCORE"] = quality_score
-            self._provider_call("Rediff")
             handoff = self._rediff.prepare_handoff(record, outreach_state=self._outreach_state(db, int(account["company_id"])))
             row = {
                 "company": company_name,
@@ -1339,6 +1367,8 @@ class SalesoorjaOperator:
             }
             receipt = None
             if self._mode() == "PRODUCTION" and handoff.get("status") == QUEUED:
+                self._update(last_action=f"Sending {company_name} via Rediff")
+                self._provider_call("Rediff")
                 with self._lock:
                     existing_receipts = deepcopy(self._state.get("transport_receipts") or [])
                 receipt = self._transport_bridge.execute_production_transport(
@@ -1400,6 +1430,16 @@ class SalesoorjaOperator:
                 self._state["last_action"] = f"Finished {company_name}"
                 self._save_state()
 
+    def _pipeline_activity(self, company_name: str, stage: str, detail: str = "") -> None:
+        messages = {
+            "apollo_search": f"Searching Apollo candidates for {company_name}",
+            "bright_verification": f"Verifying candidates for {company_name} with Bright",
+            "apollo_enrichment": f"Enriching qualified contact for {company_name} with Apollo",
+        }
+        message = messages.get(stage, detail or f"Processing {company_name}: {stage}")
+        logger.info("Production pipeline stage: %s", message)
+        self._update(current_company=company_name, last_action=message)
+
     def _select_send_candidate(self, db: Any, result: Mapping[str, Any]) -> Any:
         from models.decision_maker_candidate import DecisionMakerCandidate
 
@@ -1432,7 +1472,15 @@ class SalesoorjaOperator:
     def _build_production_record(self, account: Mapping[str, Any], candidate: Any, result: Mapping[str, Any]) -> dict[str, Any]:
         raw = next((item for item in result.get("candidates", []) if item.get("id") == candidate.id), {})
         causality = account.get("causality_chain") or {}
-        facility = candidate.candidate_facility or raw.get("location") or account.get("city") or ""
+        facility_evidence = account.get("facility_evidence") or {}
+        trigger_recency = account.get("trigger_recency") or {}
+        facility = (
+            candidate.candidate_facility
+            or facility_evidence.get("facility_name")
+            or raw.get("location")
+            or account.get("city")
+            or ""
+        )
         opportunity = causality.get("calibration_impact") or "Source-backed calibration requirement"
         return {
             "record_id": f"operator-{account['company_id']}-{candidate.id}",
@@ -1448,16 +1496,28 @@ class SalesoorjaOperator:
             "email": candidate.apollo_email,
             "phone": candidate.apollo_phone,
             "trigger": account.get("event_title"),
-            "trigger_date": self._state["business_date"],
+            "trigger_date": trigger_recency.get("trigger_date") or trigger_recency.get("event_date") or "",
+            "trigger_source": account.get("evidence_url"),
+            "facility_activity": account.get("event_title"),
             "calibration_opportunity": opportunity,
             "reasoning": opportunity,
             "icp_score": float(account.get("icp_score") or 0),
-            "facility_verified": True,
+            "facility_verified": account.get("facility_verified") is True,
             "contact_verified": True,
             "provenance": "REAL",
             "evidence": {
-                "trigger_current": {"verified": True},
-                "exact_facility": {"verified": True, "address": facility, "linkage_strength": "DIRECT"},
+                "trigger_current": {
+                    "verified": account.get("trigger_valid") is True,
+                    "source_url": account.get("evidence_url"),
+                    "event_date": trigger_recency.get("event_date"),
+                    "recency_tier": trigger_recency.get("recency_tier"),
+                },
+                "exact_facility": {
+                    "verified": account.get("facility_verified") is True,
+                    "address": facility_evidence.get("facility_address") or facility,
+                    "linkage_strength": facility_evidence.get("linkage_confidence"),
+                    "evidence": facility_evidence.get("linkage_evidence"),
+                },
                 "technical_capability": {"status": "IN_SCOPE"},
                 "correct_person": {
                     "name": candidate.candidate_name,
@@ -2040,10 +2100,12 @@ class SalesoorjaOperator:
             return {"status": "NOT_READY", "reason": "REDIFF_SYSTEM_UNAVAILABLE"}
 
         try:
-            sys_path = Path(self.settings.REDIFF_SYSTEM_PATH)
-            if str(sys_path) not in sys.path:
-                sys.path.insert(0, str(sys_path))
-            import config as rediff_cfg
+            config_path = Path(self.settings.REDIFF_SYSTEM_PATH) / "config.py"
+            spec = importlib.util.spec_from_file_location("salesoorja_rediff_external_config", config_path)
+            if spec is None or spec.loader is None:
+                return {"status": "NOT_READY", "reason": "REDIFF_CONFIG_LOAD_FAILED"}
+            rediff_cfg = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(rediff_cfg)
 
             smtp_server = getattr(rediff_cfg, "SMTP_SERVER", None)
             smtp_port = getattr(rediff_cfg, "SMTP_PORT", 465)

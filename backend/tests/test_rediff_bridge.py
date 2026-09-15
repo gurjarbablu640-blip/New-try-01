@@ -13,8 +13,13 @@ class TestRediffBridge(unittest.TestCase):
     def setUp(self):
         self.test_dir = tempfile.mkdtemp()
         self.bridge = RediffBridge(staging_dir=self.test_dir)
+        from unittest.mock import patch
+        from config import settings
+        self._test_mode_patch = patch.object(settings, "OUTBOUND_TEST_MODE", True)
+        self._test_mode_patch.start()
 
     def tearDown(self):
+        self._test_mode_patch.stop()
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def _valid_candidate(self):

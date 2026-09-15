@@ -15,7 +15,17 @@ class TestAutonomousScheduler(unittest.TestCase):
         self.test_dir = tempfile.mkdtemp()
         self.report_dir = os.path.join(self.test_dir, "reports")
         self.state_dir = os.path.join(self.test_dir, "state")
-        self.scheduler = AutonomousScheduler(report_dir=self.report_dir, state_dir=self.state_dir)
+        self.operator_starts = []
+
+        def start_operator(**kwargs):
+            self.operator_starts.append(kwargs)
+            return {"started": True, "status": {"status": "QUEUED"}}
+
+        self.scheduler = AutonomousScheduler(
+            report_dir=self.report_dir,
+            state_dir=self.state_dir,
+            operator_start_fn=start_operator,
+        )
 
     def tearDown(self):
         shutil.rmtree(self.test_dir, ignore_errors=True)
@@ -53,6 +63,7 @@ class TestAutonomousScheduler(unittest.TestCase):
         res = self.scheduler.execute_morning_discovery()
         self.assertEqual(res["status"], "started")
         self.assertEqual(res["cycle"], "MORNING_DISCOVERY")
+        self.assertEqual(self.operator_starts, [{"background": True, "use_celery": True}])
         state = self.scheduler._load_state()
         self.assertIn("last_discovery_start", state)
 
@@ -168,5 +179,4 @@ class TestAutonomousScheduler(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
 

@@ -367,7 +367,13 @@ class AskOorjaOrchestrator:
                     messages=[{"role": "user", "content": json.dumps(user_content)}],
                 )
                 if resp.text and all(f"### {i}." in resp.text for i in range(1, 9)):
-                    return resp.text
+                    normalized_text = re.sub(
+                        r"###\s*5\.\s*WHAT\s+(?:WE\s+)?INFER",
+                        "### 5. WHAT WE INFER",
+                        resp.text,
+                        flags=re.IGNORECASE,
+                    )
+                    return normalized_text
             except Exception as e:
                 logger.warning(f"Final synthesis LLM call error: {e}")
 

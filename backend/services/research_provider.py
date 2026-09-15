@@ -380,6 +380,7 @@ class ResearchProviderRouter:
         results: List[ResearchResult] = []
         status = PROVIDER_NOT_CONFIGURED
         error: Optional[str] = None
+        cache_hit = False
         used_provider = "none"
 
         serper_key = str(
@@ -393,7 +394,7 @@ class ResearchProviderRouter:
         )
         if not free_only and serper_configured:
             used_provider = "serper"
-            results, status, error = self._search_serper(
+            results, status, error, cache_hit = self._search_serper(
                 query, num_results, **kwargs
             )
             if status == PROVIDER_BUDGET_EXHAUSTED:
@@ -403,6 +404,7 @@ class ResearchProviderRouter:
                     "results": [],
                     "query": query,
                     "error": error or "SERPER_DAILY_BUDGET_EXHAUSTED",
+                    "cache_hit": cache_hit,
                 }
 
         if not results and db and not free_only:
@@ -448,11 +450,12 @@ class ResearchProviderRouter:
             "results": [result.to_dict() for result in results],
             "query": query,
             "error": error,
+            "cache_hit": cache_hit,
         }
 
     def _search_serper(
         self, query: str, num_results: int, **kwargs: Any
-    ) -> tuple[list[ResearchResult], str, Optional[str]]:
+    ) -> tuple[list[ResearchResult], str, Optional[str], bool]:
         provider = SerperSearchProvider()
         response = provider.search(query, num_results=num_results, **kwargs)
         results = [
@@ -471,6 +474,7 @@ class ResearchProviderRouter:
             results,
             response.get("provider_status", PROVIDER_ERROR),
             response.get("error"),
+            bool(response.get("cache_hit")),
         )
 
     def _search_database_cache(

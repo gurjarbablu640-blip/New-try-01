@@ -205,11 +205,13 @@ def test_test_discovery_bypasses_cache_and_processes_account(tmp_path):
     def discover(**kwargs):
         calls.append(kwargs)
         return {
+            "source_status": {"current_run_live": True},
             "candidates": [
                 {
                     "company_id": 44,
                     "company_name": "Real Precision Ltd",
                     "data_provenance": "LIVE_SEARCH_DISCOVERED",
+                    "current_run_live": True,
                 }
             ]
         }
@@ -224,6 +226,87 @@ def test_test_discovery_bypasses_cache_and_processes_account(tmp_path):
     assert calls[0]["use_cache"] is False
     assert processed[0][0]["company_name"] == "Real Precision Ltd"
     assert operator.get_status()["provider_usage"]["Serper"] == 1
+
+
+def test_production_discovery_also_bypasses_cache(tmp_path):
+    database = SimpleNamespace(close=lambda: None)
+    calls = []
+
+    def discover(**kwargs):
+        calls.append(kwargs)
+        return {"source_status": {"current_run_live": True}, "candidates": []}
+
+    operator = _operator(
+        tmp_path,
+        db_factory=lambda: database,
+        SALESOORJA_MODE="PRODUCTION",
+        REAL_OUTREACH_ENABLED=True,
+        OUTBOUND_TEST_MODE=False,
+    )
+    operator._discovery_fn = discover
+    operator._serper_live_request_count = lambda: 10
+
+    assert operator._run_discovery_cycle() is False
+    assert calls[0]["use_cache"] is False
+
+
+def test_production_account_requires_current_trigger_and_facility_before_qualification(tmp_path):
+    database = SimpleNamespace(close=lambda: None)
+    operator = _operator(tmp_path, db_factory=lambda: database)
+    operator._person_pipeline_fn = lambda **kwargs: (_ for _ in ()).throw(AssertionError("Apollo must not be called"))
+    account = {
+        "company_id": 44,
+        "company_name": "Unbound Precision Ltd",
+        "icp_score": 98,
+        "trigger_valid": False,
+        "trigger_recency": {"recency_tier": "DATE_UNKNOWN"},
+        "facility_verified": False,
+        "facility_evidence": {},
+    }
+
+    operator._process_production_account(database, account, "44")
+
+    status = operator.get_status()
+    assert status["counters"]["companies_researched"] == 1
+    assert status["counters"]["qualified_opportunities"] == 0
+    assert status["counters"]["held"] == 1
+
+
+def test_qualified_account_reports_real_person_pipeline_stages(tmp_path):
+    database = SimpleNamespace(close=lambda: None)
+    stages = []
+
+    def pipeline(**kwargs):
+        kwargs["progress_callback"]("apollo_search", "")
+        kwargs["progress_callback"]("bright_verification", "")
+        return {
+            "summary": {"candidates_found": 0, "candidates_verified": 0, "apollo_enriched": 0},
+            "stages": {
+                "person_search": {"queries_executed": 1, "verification_attempts": []},
+                "apollo": {"attempts": []},
+            },
+            "candidates": [],
+        }
+
+    operator = _operator(tmp_path, db_factory=lambda: database)
+    operator._person_pipeline_fn = pipeline
+    operator._select_send_candidate = lambda db, result: None
+    operator._pipeline_activity = lambda company, stage, detail="": stages.append(stage)
+    account = {
+        "company_id": 45,
+        "company_name": "Bound Precision Ltd",
+        "icp_score": 95,
+        "trigger_valid": True,
+        "trigger_recency": {"recency_tier": "CURRENT"},
+        "facility_verified": True,
+        "facility_evidence": {"linkage_confidence": "DIRECT"},
+    }
+
+    operator._process_production_account(database, account, "45")
+
+    assert stages == ["apollo_search", "bright_verification"]
+    assert operator.get_status()["counters"]["qualified_opportunities"] == 1
+    assert operator.get_status()["provider_usage"]["Apollo Search"] == 1
 
 
 def test_manual_stop_finishes_current_safe_work_and_finalizes(tmp_path):

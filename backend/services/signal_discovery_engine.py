@@ -9,14 +9,17 @@ Translates every signal into the mandatory 5-Question commercial framework.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import logging
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 from models.company import Company
 from models.company_brain import CompanyIntelligenceFact, CompanyTimelineEvent
+from models.facility import Facility
+from models.intent_signal import CompanyIntentSignal
 from services.company_brain import record_intelligence_fact, record_timeline_event
 from services.calibration_inference_engine import infer_calibration_need, estimate_instrument_population
 
@@ -221,6 +224,8 @@ def ingest_discovered_signal_lead(
     event_description: str,
     evidence_url: Optional[str] = None,
     source: str = "signal_discovery_engine",
+    trigger_evidence: Optional[Dict[str, Any]] = None,
+    facility_evidence: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Ingests or updates a company based on a verified business trigger signal."""
     # 1. Deduplicate or fetch company
@@ -236,6 +241,7 @@ def ingest_discovered_signal_lead(
             icp_score=75,
             lead_status="Discovered",
             buying_window="30_days",
+            source=source,
         )
         db.add(company)
         db.commit()
@@ -253,7 +259,13 @@ def ingest_discovered_signal_lead(
 
     # 3. Update company score & buying window
     company.buying_window = causality["buying_window"]
-    company.icp_score = min(98, max(50, int(company.icp_score or 75) + causality["icp_boost"]))
+    company.source = source
+    company.icp_score = max(
+        int(company.icp_score or 0),
+        min(98, max(50, 75 + causality["icp_boost"])),
+    )
+    if evidence_url and not company.domain:
+        company.domain = urlparse(evidence_url).netloc.casefold().removeprefix("www.") or None
     db.commit()
 
     # 4. Record fact in Company Brain
@@ -287,6 +299,54 @@ def ingest_discovered_signal_lead(
         source_ref=evidence_url,
     )
 
+    structured_signal = None
+    if trigger_evidence:
+        structured_signal = (
+            db.query(CompanyIntentSignal)
+            .filter(
+                CompanyIntentSignal.company_id == company.id,
+                CompanyIntentSignal.signal_type == signal_type,
+                CompanyIntentSignal.source_url == evidence_url,
+            )
+            .first()
+        )
+        if not structured_signal:
+            structured_signal = CompanyIntentSignal(
+                company_id=company.id,
+                signal_type=signal_type,
+                source_url=evidence_url,
+            )
+            db.add(structured_signal)
+        structured_signal.weight_applied = float(company.icp_score or 0)
+        structured_signal.source_snippet = str(
+            trigger_evidence.get("source_snippet") or f"{event_title}. {event_description}"
+        )[:2000]
+        structured_signal.urgency_reason = str(trigger_evidence.get("urgency_reason") or "Current industrial event")
+        structured_signal.opportunity_note = causality["five_question_reasoning"]["q3_calibration_impact"]
+        utc_now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        structured_signal.detected_at = utc_now_naive
+        structured_signal.expires_at = utc_now_naive + timedelta(days=180)
+        structured_signal.is_active = 1
+
+    structured_facility = None
+    if facility_evidence and facility_evidence.get("facility_verified"):
+        facility_name = str(facility_evidence.get("facility_name") or "").strip()
+        if facility_name:
+            structured_facility = (
+                db.query(Facility)
+                .filter(Facility.company_id == company.id, Facility.name == facility_name)
+                .first()
+            )
+            if not structured_facility:
+                structured_facility = Facility(company_id=company.id, name=facility_name)
+                db.add(structured_facility)
+            structured_facility.address = str(facility_evidence.get("facility_address") or "") or None
+            structured_facility.city = str(facility_evidence.get("city") or city or "") or None
+            structured_facility.state = str(facility_evidence.get("state") or state or "") or None
+            structured_facility.industrial_estate = str(facility_evidence.get("industrial_cluster") or "") or None
+
+    db.commit()
+
     return {
         "status": "lead_discovered" if is_new else "signal_attached",
         "company_id": company.id,
@@ -294,6 +354,103 @@ def ingest_discovered_signal_lead(
         "icp_score": company.icp_score,
         "buying_window": company.buying_window,
         "causality": causality,
+        "intent_signal_id": structured_signal.id if structured_signal else None,
+        "facility_id": structured_facility.id if structured_facility else None,
+    }
+
+
+def _extract_company_name_from_title(title: str) -> str:
+    raw_chunk = title.split("-")[0].split("—")[0].split("|")[0].split(":")[0].strip()
+    extracted_name = raw_chunk
+    if " at " in raw_chunk.lower():
+        parts = re.split(r"\s+at\s+", raw_chunk, flags=re.IGNORECASE)
+        if len(parts) > 1 and len(parts[1].strip()) > 2:
+            extracted_name = parts[1].strip()
+    elif " hiring " in raw_chunk.lower():
+        extracted_name = re.split(r"\s+hiring\s+", raw_chunk, flags=re.IGNORECASE)[0].strip()
+    else:
+        for pattern in (
+            r"\bexpands\b",
+            r"\binaugurates\b",
+            r"\bcommissions\b",
+            r"\bto set up\b",
+            r"\bsets up\b",
+            r"\bopens\b",
+            r"\binvests\b",
+            r"\bannounces\b",
+        ):
+            if re.search(pattern, raw_chunk, re.IGNORECASE):
+                lead_chunk = re.split(pattern, raw_chunk, flags=re.IGNORECASE)[0].strip()
+                if len(lead_chunk) >= 3:
+                    extracted_name = lead_chunk
+                break
+    extracted_name = re.sub(r"[^a-zA-Z0-9\s&.,-]", "", extracted_name).strip(" ,.-")
+    rejected_terms = {
+        "news", "report", "home", "market", "overview", "hiring", "jobs", "factory",
+        "facility", "manufacturing", "expansion", "commissioning", "inauguration", "plant",
+    }
+    lowered = extracted_name.casefold()
+    if (
+        len(extracted_name) < 3
+        or len(extracted_name.split()) > 8
+        or any(term in lowered.split() for term in rejected_terms)
+        or lowered.startswith(("why ", "how ", "indias ", "india ", "top ", "what ", "new "))
+    ):
+        return ""
+    return extracted_name[:100]
+
+
+def _resolve_live_facility(company_name: str, evidence_text: str) -> Dict[str, Any]:
+    from services.deep_facility_resolver import deep_facility_resolver
+    from services.trigger_discovery_service import (
+        TRIGGER_FACILITY_DIRECT,
+        TRIGGER_FACILITY_STRONG,
+        bind_trigger_to_facility,
+        extract_trigger_facility_link,
+    )
+
+    extracted = extract_trigger_facility_link(evidence_text)
+    known_city = str(extracted.get("facility_city_from_trigger") or "")
+    resolved = deep_facility_resolver.resolve_facility(
+        company_name=company_name,
+        trigger_text=evidence_text,
+        known_city=known_city or None,
+    )
+    if resolved.get("facility_verified") and resolved.get("linkage_confidence") in {"DIRECT", "STRONG"}:
+        return resolved
+
+    specificity = str(extracted.get("trigger_facility_specificity") or "")
+    area = str(extracted.get("facility_area_from_trigger") or "")
+    exact_name = str(extracted.get("facility_name_from_trigger") or "")
+    meaningful_facility_words = [
+        word
+        for word in re.findall(r"[a-z0-9]+", exact_name.casefold())
+        if len(word) > 2 and word not in {"new", "plant", "facility", "factory", "unit", "works"}
+    ]
+    if exact_name and not meaningful_facility_words:
+        exact_name = ""
+        if specificity == "EXACT_FACILITY":
+            specificity = "CITY" if known_city else "COMPANY_ONLY"
+    if not known_city or specificity not in {"EXACT_FACILITY", "INDUSTRIAL_AREA", "CITY"}:
+        return resolved
+    facility_name = exact_name or area or f"{company_name} {known_city} Manufacturing Facility"
+    binding = bind_trigger_to_facility(
+        evidence_text,
+        target_facility=facility_name,
+        target_city=known_city,
+    )
+    if binding.get("linkage") not in {TRIGGER_FACILITY_DIRECT, TRIGGER_FACILITY_STRONG}:
+        return resolved
+    return {
+        "facility_name": facility_name,
+        "facility_address": ", ".join(value for value in (area, known_city, "India") if value),
+        "city": known_city,
+        "state": "",
+        "industrial_cluster": area or None,
+        "linkage_confidence": "DIRECT" if binding.get("linkage") == TRIGGER_FACILITY_DIRECT else "STRONG",
+        "linkage_evidence": binding.get("reason"),
+        "facility_verified": True,
+        "trigger_facility": facility_name,
     }
 
 
@@ -425,6 +582,12 @@ def discover_new_calibration_opportunities(
     from services.research_provider import ResearchProviderRouter
     router = ResearchProviderRouter()
     live_search_candidates = []
+    search_res: Dict[str, Any] = {
+        "provider": "none",
+        "provider_status": "NOT_CALLED",
+        "cache_hit": False,
+        "results": [],
+    }
     try:
         geo_query = f"{geography} " if geography and geography != "PAN INDIA" and geography != "All" else "India "
         search_res = router.search(
@@ -433,7 +596,13 @@ def discover_new_calibration_opportunities(
             db=db,
             use_cache=use_cache,
         )
-        if search_res.get("results"):
+        if (
+            search_res.get("provider") == "serper"
+            and search_res.get("provider_status") == "LIVE"
+            and not search_res.get("cache_hit")
+            and not use_cache
+            and search_res.get("results")
+        ):
             for item in search_res["results"]:
                 title = item.get("title", "")
                 snippet = item.get("snippet", "")
@@ -457,7 +626,7 @@ def discover_new_calibration_opportunities(
                             if len(lead_chunk) >= 3:
                                 extracted_name = lead_chunk
                                 break
-                extracted_name = re.sub(r"[^a-zA-Z0-9\s&.,-]", "", extracted_name).strip()
+                extracted_name = _extract_company_name_from_title(title)
 
                 if (
                     len(extracted_name) > 2
@@ -479,8 +648,53 @@ def discover_new_calibration_opportunities(
     except Exception as e:
         logger.warning("Live search discovery note: %s", e)
 
-    # Combine live search candidates with catalog candidates, prioritizing live discovered leads
-    candidate_pool = live_search_candidates + [dict(c, data_provenance="PILOT_CATALOG_CANDIDATE") for c in filtered]
+    if live_search_candidates:
+        from services.trigger_discovery_service import evaluate_event_semantics, extract_event_date
+
+        for candidate in live_search_candidates:
+            title = str(candidate.get("event_title") or "")
+            snippet = str(candidate.get("event_description") or "")
+            url = str(candidate.get("evidence_url") or "")
+            source_item = next(
+                (item for item in search_res.get("results", []) if str(item.get("url") or "") == url),
+                {},
+            )
+            result_date = str((source_item.get("metadata") or {}).get("date") or "")
+            evidence_text = ". ".join(value for value in (title, snippet, result_date) if value)
+            semantics = evaluate_event_semantics(snippet, title=title)
+            recency = extract_event_date(
+                f"{snippet} {result_date}",
+                title=title,
+                now_dt=datetime.now(timezone.utc),
+                url=url,
+            )
+            facility = _resolve_live_facility(str(candidate.get("company_name") or ""), evidence_text)
+            trigger_valid = bool(
+                semantics.get("is_valid")
+                and recency.get("recency_tier") in {"CURRENT", "RECENT"}
+                and not recency.get("is_future_planned_milestone")
+            )
+            facility_verified = bool(
+                facility.get("facility_verified")
+                and facility.get("linkage_confidence") in {"DIRECT", "STRONG"}
+            )
+            candidate.update(
+                city=facility.get("city") or "",
+                state=facility.get("state") or "",
+                current_run_live=True,
+                trigger_valid=trigger_valid,
+                trigger_semantics=semantics,
+                trigger_recency=recency,
+                facility_verified=facility_verified,
+                facility=facility.get("facility_name") or "",
+                facility_evidence=facility,
+                opportunity_qualified=trigger_valid and facility_verified,
+            )
+
+    # Production no-cache discovery must never persist pilot catalog rows as current work.
+    candidate_pool = live_search_candidates
+    if use_cache:
+        candidate_pool += [dict(c, data_provenance="PILOT_CATALOG_CANDIDATE") for c in filtered]
     discovered_candidates = []
     for candidate in candidate_pool[:limit]:
         ingested = ingest_discovered_signal_lead(
@@ -494,6 +708,19 @@ def discover_new_calibration_opportunities(
             event_description=candidate["event_description"],
             evidence_url=candidate["evidence_url"],
             source=f"autonomous_discovery_{candidate['source_classification'].lower()}",
+            trigger_evidence=(
+                {
+                    "source_snippet": f"{candidate['event_title']}. {candidate['event_description']}",
+                    "urgency_reason": candidate.get("trigger_semantics", {}).get("description"),
+                }
+                if candidate.get("current_run_live") and candidate.get("trigger_valid")
+                else None
+            ),
+            facility_evidence=(
+                candidate.get("facility_evidence")
+                if candidate.get("current_run_live") and candidate.get("facility_verified")
+                else None
+            ),
         )
 
         discovered_candidates.append({
@@ -509,6 +736,14 @@ def discover_new_calibration_opportunities(
             "source_classification": candidate["source_classification"],
             "evidence_url": candidate["evidence_url"],
             "data_provenance": candidate.get("data_provenance", "PILOT_CATALOG_CANDIDATE"),
+            "current_run_live": bool(candidate.get("current_run_live")),
+            "trigger_valid": bool(candidate.get("trigger_valid")),
+            "trigger_semantics": candidate.get("trigger_semantics") or {},
+            "trigger_recency": candidate.get("trigger_recency") or {},
+            "facility_verified": bool(candidate.get("facility_verified")),
+            "facility": candidate.get("facility") or "",
+            "facility_evidence": candidate.get("facility_evidence") or {},
+            "opportunity_qualified": bool(candidate.get("opportunity_qualified")),
             "causality_chain": {
                 "event": candidate["event_title"],
                 "business_change": ingested["causality"]["five_question_reasoning"]["q1_what_changed"],
@@ -527,10 +762,15 @@ def discover_new_calibration_opportunities(
         "geography_scope": geography,
         "total_discovered": len(discovered_candidates),
         "source_status": {
-            "search_router": "LIVE",
-            "regulatory_radar": "LIVE",
-            "job_portals": "LIVE",
-            "apollo_enrichment": "CONNECTED",
+            "search_router": search_res.get("provider_status"),
+            "provider": search_res.get("provider"),
+            "cache_hit": bool(search_res.get("cache_hit")),
+            "current_run_live": bool(
+                search_res.get("provider") == "serper"
+                and search_res.get("provider_status") == "LIVE"
+                and not search_res.get("cache_hit")
+                and not use_cache
+            ),
         },
         "candidates": discovered_candidates,
     }

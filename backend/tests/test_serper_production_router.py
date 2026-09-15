@@ -214,7 +214,7 @@ class TestSerperOnlyRouting:
         with patch.object(
             router,
             "_search_serper",
-            return_value=([result], PROVIDER_LIVE, None),
+            return_value=([result], PROVIDER_LIVE, None, False),
         ):
             with patch(
                 "services.research_provider.get_setting_value",
@@ -227,6 +227,7 @@ class TestSerperOnlyRouting:
                 response = router.search("Example Ltd quality head")
 
         assert response["provider"] == "serper"
+        assert response["cache_hit"] is False
 
     def test_serper_empty_does_not_switch_live_provider(self):
         router = ResearchProviderRouter()
@@ -234,7 +235,7 @@ class TestSerperOnlyRouting:
         with patch.object(
             router,
             "_search_serper",
-            return_value=([], PROVIDER_EMPTY, "No results"),
+            return_value=([], PROVIDER_EMPTY, "No results", False),
         ):
             with patch(
                 "services.research_provider.get_setting_value",
@@ -259,6 +260,7 @@ class TestSerperOnlyRouting:
                 [],
                 PROVIDER_BUDGET_EXHAUSTED,
                 "SERPER_DAILY_BUDGET_EXHAUSTED",
+                False,
             ),
         ):
             with patch(

@@ -461,8 +461,9 @@ class TestSalesPersonalizationPipeline(unittest.TestCase):
         self.assertIn("subject", enriched_record["NOTES"])
 
         # Pass through RediffSenderAdapter in test mode
-        adapter = RediffSenderAdapter()
-        with patch("smtplib.SMTP") as mock_smtp, patch("smtplib.SMTP_SSL") as mock_smtp_ssl:
+        from config import settings
+        with patch.object(settings, "OUTBOUND_TEST_MODE", True), patch("smtplib.SMTP") as mock_smtp, patch("smtplib.SMTP_SSL") as mock_smtp_ssl:
+            adapter = RediffSenderAdapter()
             handoff_result = adapter.prepare_handoff(enriched_record, campaign="personalized-production-test")
 
             self.assertEqual(handoff_result["status"], DRY_RUN_READY)

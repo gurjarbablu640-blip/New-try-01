@@ -19,7 +19,7 @@ import logging
 import re
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -1240,6 +1240,7 @@ def run_full_discovery_pipeline(
     free_only: bool = False,
     additional_evidence: Optional[List[Dict[str, Any]]] = None,
     before_apollo=None,
+    progress_callback: Optional[Callable[[str, str], None]] = None,
 ) -> Dict[str, Any]:
     """Orchestrate the complete decision-maker discovery pipeline.
 
@@ -1255,6 +1256,14 @@ def run_full_discovery_pipeline(
     """
     pipeline_start = time.time()
     stages = {}
+
+    def report_progress(stage: str, detail: str = "") -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(stage, detail)
+        except Exception as exc:
+            logger.debug("Pipeline progress callback failed at %s: %s", stage, exc)
 
     # ── 1. Company Lookup ──────────────────────────────────────────────
     company = db.query(Company).filter(Company.id == company_id).first()
@@ -1322,6 +1331,7 @@ def run_full_discovery_pipeline(
         "role_families": APOLLO_PERSON_ROLE_FAMILIES,
     }
 
+    report_progress("apollo_search", f"Searching Apollo candidates for {company.name}")
     discovery = discover_people_with_apollo(
         company_name=company.name,
         facility_name=target_facility,
@@ -1330,6 +1340,7 @@ def run_full_discovery_pipeline(
         role_families=APOLLO_PERSON_ROLE_FAMILIES,
         max_candidates=5,
     )
+    report_progress("bright_verification", f"Verifying Apollo candidates for {company.name} with Bright")
     verification = verify_apollo_candidates_with_brightdata(
         discovery.get("candidates") or [],
         company_name=company.name,
@@ -1658,6 +1669,8 @@ def run_full_discovery_pipeline(
             candidate_record.verification_status = "PERSON_VERIFIED_CONTACT_MISSING"
         return result
 
+    if apollo_eligible:
+        report_progress("apollo_enrichment", f"Enriching {len(apollo_eligible)} qualified contact candidates")
     contact_ladder = run_contact_fallback_ladder(
         ladder_candidates,
         enrich_fn=enrich_ladder_candidate,

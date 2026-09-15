@@ -654,6 +654,64 @@ def test_final_report_xlsx_created_and_email_status_safe(tmp_path):
     assert email_status.get("status") in {"DRY_RUN_READY", "NOT_READY", "FAILED"}
 
 
+def test_final_report_loads_rediff_config_without_backend_config_collision(tmp_path, monkeypatch):
+    system = tmp_path / "rediff-system"
+    system.mkdir()
+    (system / "campaign_runner.py").write_text("# marker\n", encoding="utf-8")
+    (system / "send_email.py").write_text("# marker\n", encoding="utf-8")
+    (system / "config.py").write_text(
+        "SMTP_SERVER='smtp.example.test'\nSMTP_PORT=465\nEMAIL_ADDRESS='sender@example.test'\nEMAIL_PASSWORD='secret'\n",
+        encoding="utf-8",
+    )
+    rediff = RediffSenderAdapter(
+        config=RediffAdapterConfig(
+            enabled=True,
+            test_mode=False,
+            system_path=system,
+            handoff_dir=tmp_path / "handoff",
+            cc_addresses=("Bablu@oorjatechnical.org",),
+            duplicate_window_days=14,
+        ),
+        now=lambda: NOW,
+    )
+    op = SalesoorjaOperator(
+        settings_obj=_settings(
+            SALESOORJA_MODE="PRODUCTION",
+            REAL_OUTREACH_ENABLED=True,
+            OUTBOUND_TEST_MODE=False,
+            REDIFF_SENDER_ENABLED=True,
+            REDIFF_TEST_MODE=False,
+            REDIFF_SYSTEM_PATH=str(system),
+        ),
+        state_path=tmp_path / "runtime" / "operator_state.json",
+        report_dir=tmp_path / "reports",
+        now=lambda: NOW,
+        rediff_adapter=rediff,
+    )
+    calls = []
+
+    class FakeSMTP:
+        def __init__(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+        def login(self, user, password):
+            calls.append(("login", user, password))
+
+        def sendmail(self, sender, recipients, message):
+            calls.append(("sendmail", sender, recipients, message))
+
+        def quit(self):
+            return None
+
+    monkeypatch.setattr("smtplib.SMTP_SSL", FakeSMTP)
+    report_path = Path(op._write_report())
+
+    result = op._send_final_report_email(report_path)
+
+    assert result["status"] == "SENT"
+    assert any(call[0] == "login" for call in calls if isinstance(call, tuple))
+
+
 # =========================================================================
 # 7. Non-Blocking Error Handling
 # =========================================================================
@@ -719,6 +777,19 @@ def test_bounded_stop_timeout_forces_stopped(tmp_path):
     status = op.get_status()
     assert status["status"] == "STOPPED"
     assert status["stop_reason"] == "STOP_TIMEOUT"
+
+
+def test_missing_stop_timestamp_is_repaired_without_fake_timeout(tmp_path):
+    op = _operator(tmp_path)
+    with op._lock:
+        op._state["status"] = "STOPPING"
+        op._state["stop_requested_at"] = None
+
+    status = op.get_status()
+
+    assert status["status"] == "STOPPING"
+    assert status["stop_requested_at"] == NOW.isoformat()
+    assert status["stop_reason"] is None
 
 
 def test_stale_heartbeat_reconciles_to_error(tmp_path):

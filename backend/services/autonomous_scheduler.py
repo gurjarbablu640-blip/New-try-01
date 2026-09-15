@@ -19,7 +19,7 @@ import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, time, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from config import settings
@@ -91,6 +91,7 @@ class AutonomousScheduler:
         report_dir: str = REPORT_DIR,
         state_dir: str = STATE_DIR,
         idempotency_guard_instance: Optional[Any] = None,
+        operator_start_fn: Optional[Callable[..., Dict[str, Any]]] = None,
     ):
         self.report_dir = report_dir
         self.state_dir = state_dir
@@ -104,6 +105,7 @@ class AutonomousScheduler:
             self.idempotency_guard = IdempotencyGuard(os.path.join(self.state_dir, "idempotency_state.json"))
         else:
             self.idempotency_guard = idempotency_guard
+        self._operator_start_fn = operator_start_fn
 
     def _load_state(self) -> Dict[str, Any]:
         if not os.path.exists(self.state_file):
@@ -181,11 +183,28 @@ class AutonomousScheduler:
         state["last_discovery_start"] = datetime.now(timezone.utc).isoformat()
         state["last_discovery_date"] = today
         self._save_state(state)
+        start_fn = self._operator_start_fn
+        if start_fn is None:
+            from services.salesoorja_operator import start_run
+
+            start_fn = start_run
+        operator_result = start_fn(background=True, use_celery=True)
+        started = bool(operator_result.get("started"))
+        reason = str(operator_result.get("reason") or "")
+        if not started and reason != "ALREADY_RUNNING":
+            return {
+                "cycle": "MORNING_DISCOVERY",
+                "time": "10:00 AM",
+                "status": "error",
+                "message": f"Operator discovery start failed: {reason or 'UNKNOWN'}",
+                "operator": operator_result,
+            }
         return {
             "cycle": "MORNING_DISCOVERY",
             "time": "10:00 AM",
-            "status": "started",
-            "message": "Prospect discovery initiated across priority sectors.",
+            "status": "started" if started else "already_running",
+            "message": "Production operator dispatched for live provider discovery." if started else "Production operator is already running.",
+            "operator": operator_result,
         }
 
     def execute_inbox_check(self, slot: str = "MORNING_1030", force: bool = False) -> Dict[str, Any]:
