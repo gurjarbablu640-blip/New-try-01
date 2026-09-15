@@ -10,6 +10,7 @@ from sqlalchemy import (
     Text,
     JSON,
     Numeric,
+    ForeignKey,
     func,
 )
 
@@ -278,8 +279,35 @@ class Company(Base):
     )
 
     # ============================================================
+    # STRATEGIC SEARCH ATTRIBUTION (PHASE 3)
+    # ============================================================
+    discovery_query_log_id = Column(
+        Integer,
+        ForeignKey("discovery_query_logs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    analyst_decision_id = Column(
+        Integer,
+        ForeignKey("business_analyst_decisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # ============================================================
     # RELATIONSHIPS
     # ============================================================
+
+    discovery_query_log = relationship(
+        "DiscoveryQueryLog",
+        foreign_keys=[discovery_query_log_id],
+    )
+
+    analyst_decision = relationship(
+        "BusinessAnalystDecision",
+        foreign_keys=[analyst_decision_id],
+    )
 
     persons = relationship(
         "Person",

@@ -297,8 +297,13 @@ class DiscoveryQueryPlanner:
         db: Optional[Session] = None,
         preferred_sector: Optional[str] = None,
         preferred_geo: Optional[str] = None,
+        preferred_trigger: Optional[str] = None,
+        strategy_decision_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Select the highest-priority non-cooldown query using adaptive weighting.
+
+        If a preferred strategic angle (from Business Analyst) is in 24h cooldown,
+        authoritatively substitutes nearest available angle and records substitution telemetry.
 
         Returns:
             {
@@ -310,11 +315,99 @@ class DiscoveryQueryPlanner:
                 "geography": str,
                 "weight": float,
                 "rationale": str,
+                "analyst_decision_id": Optional[int],
+                "was_substituted": bool,
+                "substitution_reason": Optional[str],
+                "actual_sector": str,
+                "actual_trigger": str,
+                "actual_geography": str,
             }
         """
         weights = self.compute_angle_weights(db)
 
-        # Determine starting sector from recent DB history for natural cross-sector rotation
+        # 1. Check if specific preferred angle was requested by Business Analyst
+        if preferred_sector and preferred_sector in MANUFACTURING_SECTORS:
+            req_trigger = preferred_trigger or MANUFACTURING_SECTORS[preferred_sector].get("default_trigger", "plant_expansion")
+            req_geo = preferred_geo or "Pan-India"
+
+            req_query = self.build_search_query(preferred_sector, req_trigger, req_geo, page=1)
+            req_normalized = normalize_discovery_query(req_query)
+
+            if not self.memory.is_query_in_cooldown(req_normalized, page=1, db=db):
+                # Preferred strategy is directly available!
+                return {
+                    "query": req_query,
+                    "normalized_query": req_normalized,
+                    "page": 1,
+                    "sector": preferred_sector,
+                    "trigger": req_trigger,
+                    "geography": req_geo,
+                    "weight": weights.get((preferred_sector, req_trigger), 1.0),
+                    "rationale": f"Business Analyst strategy: {preferred_sector} in {req_geo} ({req_trigger})",
+                    "analyst_decision_id": strategy_decision_id,
+                    "was_substituted": False,
+                    "substitution_reason": None,
+                    "actual_sector": preferred_sector,
+                    "actual_trigger": req_trigger,
+                    "actual_geography": req_geo,
+                }
+            else:
+                # Preferred angle is in 24h cooldown -> Query Planner performs authoritative substitution
+                sub_reason = f"Requested strategy ({preferred_sector} | {req_geo} | {req_trigger}) in 24h cooldown"
+                logger.info("Query Planner substitution triggered: %s", sub_reason)
+
+                # Try other corridors for the same sector & trigger first
+                other_geos = [g for g in INDUSTRIAL_CORRIDORS if g != req_geo]
+                for alt_geo in other_geos:
+                    alt_query = self.build_search_query(preferred_sector, req_trigger, alt_geo, page=1)
+                    alt_normalized = normalize_discovery_query(alt_query)
+                    if not self.memory.is_query_in_cooldown(alt_normalized, page=1, db=db):
+                        full_reason = f"{sub_reason}; substituted geography with {alt_geo}"
+                        self._update_decision_substitution(db, strategy_decision_id, preferred_sector, req_trigger, alt_geo, full_reason)
+                        return {
+                            "query": alt_query,
+                            "normalized_query": alt_normalized,
+                            "page": 1,
+                            "sector": preferred_sector,
+                            "trigger": req_trigger,
+                            "geography": alt_geo,
+                            "weight": weights.get((preferred_sector, req_trigger), 1.0),
+                            "rationale": f"Planner substitution: {preferred_sector} in {alt_geo}",
+                            "analyst_decision_id": strategy_decision_id,
+                            "was_substituted": True,
+                            "substitution_reason": full_reason,
+                            "actual_sector": preferred_sector,
+                            "actual_trigger": req_trigger,
+                            "actual_geography": alt_geo,
+                        }
+
+                # Try alternative triggers for the same sector
+                other_triggers = [t for t in TRIGGER_FAMILIES.keys() if t != req_trigger]
+                for alt_trig in other_triggers:
+                    for g in [req_geo] + other_geos:
+                        alt_query = self.build_search_query(preferred_sector, alt_trig, g, page=1)
+                        alt_normalized = normalize_discovery_query(alt_query)
+                        if not self.memory.is_query_in_cooldown(alt_normalized, page=1, db=db):
+                            full_reason = f"{sub_reason}; substituted trigger with {alt_trig} in {g}"
+                            self._update_decision_substitution(db, strategy_decision_id, preferred_sector, alt_trig, g, full_reason)
+                            return {
+                                "query": alt_query,
+                                "normalized_query": alt_normalized,
+                                "page": 1,
+                                "sector": preferred_sector,
+                                "trigger": alt_trig,
+                                "geography": g,
+                                "weight": weights.get((preferred_sector, alt_trig), 1.0),
+                                "rationale": f"Planner substitution: {preferred_sector} in {g} ({alt_trig})",
+                                "analyst_decision_id": strategy_decision_id,
+                                "was_substituted": True,
+                                "substitution_reason": full_reason,
+                                "actual_sector": preferred_sector,
+                                "actual_trigger": alt_trig,
+                                "actual_geography": g,
+                            }
+
+        # 2. General non-preferred search or cross-sector fallback
         sectors = list(MANUFACTURING_SECTORS.keys())
         start_idx = 0
         if db is not None and not preferred_sector:
@@ -337,7 +430,6 @@ class DiscoveryQueryPlanner:
             else (sectors[start_idx:] + sectors[:start_idx])
         )
 
-        # For each sector in rotating order, order its triggers by adaptive weight descending
         candidate_angles: List[Tuple[str, str]] = []
         for sector in active_sectors:
             sec_angles = [(sector, trig) for trig in TRIGGER_FAMILIES.keys()]
@@ -352,13 +444,17 @@ class DiscoveryQueryPlanner:
                 query_str = self.build_search_query(sector, trigger, geo, page=1)
                 normalized = normalize_discovery_query(query_str)
 
-                # Check 24h cooldown
                 if not self.memory.is_query_in_cooldown(normalized, page=1, db=db):
                     rationale = (
                         f"Exploration angle (never searched)"
                         if weight >= 2.0
                         else f"Adaptive yield score: {weight:.2f}"
                     )
+                    was_sub = bool(preferred_sector and sector != preferred_sector)
+                    sub_r = f"Preferred sector {preferred_sector} cooled down; substituted with {sector}" if was_sub else None
+                    if was_sub:
+                        self._update_decision_substitution(db, strategy_decision_id, sector, trigger, geo, sub_r)
+
                     return {
                         "query": query_str,
                         "normalized_query": normalized,
@@ -368,9 +464,15 @@ class DiscoveryQueryPlanner:
                         "geography": geo,
                         "weight": weight,
                         "rationale": rationale,
+                        "analyst_decision_id": strategy_decision_id,
+                        "was_substituted": was_sub,
+                        "substitution_reason": sub_r,
+                        "actual_sector": sector,
+                        "actual_trigger": trigger,
+                        "actual_geography": geo,
                     }
 
-        # If all candidates in current corridor are on cooldown, fall back to default rotating query
+        # Fallback angle if entire corridor is cooled down
         fallback_sec = preferred_sector or "Automotive & Auto Components"
         fallback_trig = "plant_expansion"
         fallback_geo = preferred_geo or "Pan-India"
@@ -385,7 +487,39 @@ class DiscoveryQueryPlanner:
             "geography": fallback_geo,
             "weight": 0.5,
             "rationale": "Fallback angle (cooldown rotation exhausted)",
+            "analyst_decision_id": strategy_decision_id,
+            "was_substituted": bool(strategy_decision_id is not None),
+            "substitution_reason": "Full rotation cooldown fallback",
+            "actual_sector": fallback_sec,
+            "actual_trigger": fallback_trig,
+            "actual_geography": fallback_geo,
         }
+
+    def _update_decision_substitution(
+        self,
+        db: Optional[Session],
+        decision_id: Optional[int],
+        actual_sec: str,
+        actual_trig: str,
+        actual_geo: str,
+        reason: Optional[str],
+    ) -> None:
+        """Update BusinessAnalystDecision record in DB when Query Planner performs substitution."""
+        if not db or not decision_id:
+            return
+        try:
+            from models.business_analyst_decision import BusinessAnalystDecision
+            dec = db.query(BusinessAnalystDecision).filter(BusinessAnalystDecision.id == decision_id).first()
+            if dec:
+                dec.was_substituted = True
+                dec.substitution_reason = reason
+                dec.actual_sector = actual_sec
+                dec.actual_trigger = actual_trig
+                dec.actual_geography = actual_geo
+                db.commit()
+        except Exception as exc:
+            logger.debug("Could not record decision substitution in DB: %s", exc)
+
 
     def get_page_2_query(self, previous_query_info: Dict[str, Any]) -> Dict[str, Any]:
         """Generate page 2 query for an opportunity-productive search."""

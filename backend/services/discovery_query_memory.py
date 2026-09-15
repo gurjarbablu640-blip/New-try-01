@@ -227,6 +227,7 @@ class DiscoveryQueryMemory:
         yield_score: float = 0.0,
         exhaustion_score: float = 0.0,
         metadata_json: Optional[Dict[str, Any]] = None,
+        analyst_decision_id: Optional[int] = None,
         db: Optional[Session] = None,
         now: Optional[datetime] = None,
     ) -> DiscoveryQueryLog:
@@ -244,6 +245,7 @@ class DiscoveryQueryMemory:
 
         try:
             log_record = DiscoveryQueryLog(
+                analyst_decision_id=analyst_decision_id,
                 query=query,
                 normalized_query=normalized,
                 page=page,
@@ -262,6 +264,7 @@ class DiscoveryQueryMemory:
                 exhaustion_score=exhaustion_score,
                 metadata_json=meta,
             )
+
             db.add(log_record)
             db.commit()
             db.refresh(log_record)

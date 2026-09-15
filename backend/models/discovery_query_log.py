@@ -1,5 +1,6 @@
 """Discovery query audit log and memory model for Salesoorja Discovery Intelligence."""
-from sqlalchemy import Column, DateTime, Float, Index, Integer, JSON, String, Text, func
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, func
+from sqlalchemy.orm import relationship
 from database import Base
 
 
@@ -7,6 +8,14 @@ class DiscoveryQueryLog(Base):
     __tablename__ = "discovery_query_logs"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Authoritative link to Pre-Serper Business Analyst Strategy Decision (Phase 3)
+    analyst_decision_id = Column(
+        Integer,
+        ForeignKey("business_analyst_decisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     query = Column(Text, nullable=False)
     normalized_query = Column(String(500), nullable=False, index=True)
     page = Column(Integer, default=1, nullable=False)
@@ -25,6 +34,10 @@ class DiscoveryQueryLog(Base):
     exhaustion_score = Column(Float, default=0.0, nullable=False)
     metadata_json = Column(JSON, nullable=True)
 
+    # Authoritative 1-to-many relationship
+    analyst_decision = relationship("BusinessAnalystDecision", back_populates="query_logs")
+
     __table_args__ = (
         Index("ix_discovery_query_page_time", "normalized_query", "page", "executed_at"),
     )
+

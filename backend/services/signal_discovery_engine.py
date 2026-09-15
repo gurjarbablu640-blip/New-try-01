@@ -226,6 +226,8 @@ def ingest_discovered_signal_lead(
     source: str = "signal_discovery_engine",
     trigger_evidence: Optional[Dict[str, Any]] = None,
     facility_evidence: Optional[Dict[str, Any]] = None,
+    discovery_query_log_id: Optional[int] = None,
+    analyst_decision_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Ingests or updates a company based on a verified business trigger signal."""
     # 1. Deduplicate or fetch company
@@ -242,10 +244,19 @@ def ingest_discovered_signal_lead(
             lead_status="Discovered",
             buying_window="30_days",
             source=source,
+            discovery_query_log_id=discovery_query_log_id,
+            analyst_decision_id=analyst_decision_id,
         )
         db.add(company)
         db.commit()
         db.refresh(company)
+    else:
+        # Preserve downstream attribution links if not already set
+        if discovery_query_log_id and not company.discovery_query_log_id:
+            company.discovery_query_log_id = discovery_query_log_id
+        if analyst_decision_id and not company.analyst_decision_id:
+            company.analyst_decision_id = analyst_decision_id
+
 
     # 2. Reason through 5-Question Framework
     causality = reason_signal_causality(
@@ -593,24 +604,36 @@ def discover_new_calibration_opportunities(
         "weight": 1.0,
         "rationale": "Default catalog mode",
     }
+    strategy_decision = None
+    executed_query_log = None
     execution_state = STATE_SUCCESS_PRODUCTIVE
     yield_score = 0.0
     exhaustion_score = 0.0
     score_components: Dict[str, Any] = {}
 
     if not use_cache:
-        # 1. Stateful Adaptive Query Planning (Amendment 7)
-        planned_query = discovery_query_planner.get_next_planned_query(
+        # Phase 3: Pre-Serper Business Analyst Evaluation
+        from services.business_analyst_service import business_analyst_service
+        strategy_decision = business_analyst_service.evaluate_next_strategy(
             db=db,
             preferred_sector=industry_filter if industry_filter and industry_filter != "All" else None,
             preferred_geo=geography if geography and geography != "PAN INDIA" and geography != "All" else None,
         )
 
+        # 1. Stateful Adaptive Query Planning under Business Analyst Guidance
+        planned_query = discovery_query_planner.get_next_planned_query(
+            db=db,
+            preferred_sector=strategy_decision.sector,
+            preferred_geo=strategy_decision.geography,
+            preferred_trigger=strategy_decision.trigger_family,
+            strategy_decision_id=strategy_decision.id,
+        )
+
         query_to_execute = planned_query["query"]
         page_to_execute = planned_query.get("page", 1)
-        sector_to_execute = planned_query.get("sector", "Automotive & Auto Components")
-        trigger_to_execute = planned_query.get("trigger", "plant_expansion")
-        geo_to_execute = planned_query.get("geography", geography)
+        sector_to_execute = planned_query.get("actual_sector") or planned_query.get("sector", "Automotive & Auto Components")
+        trigger_to_execute = planned_query.get("actual_trigger") or planned_query.get("trigger", "plant_expansion")
+        geo_to_execute = planned_query.get("actual_geography") or planned_query.get("geography", geography)
 
         try:
             search_res = router.search(
@@ -627,7 +650,7 @@ def discover_new_calibration_opportunities(
             # 2. Check Execution States & Provider Errors (Amendment 4)
             if p_status in {PROVIDER_BUDGET_EXHAUSTED, PROVIDER_QUOTA_EXHAUSTED} or "429" in err_msg:
                 execution_state = STATE_RATE_LIMITED
-                discovery_query_memory.record_query_execution(
+                executed_query_log = discovery_query_memory.record_query_execution(
                     query=query_to_execute,
                     page=page_to_execute,
                     sector=sector_to_execute,
@@ -635,6 +658,7 @@ def discover_new_calibration_opportunities(
                     geography=geo_to_execute,
                     execution_state=execution_state,
                     metadata_json={"error": err_msg},
+                    analyst_decision_id=strategy_decision.id if strategy_decision else None,
                     db=db,
                 )
             elif p_status == PROVIDER_ERROR or (err_msg and "no organic results" not in err_msg.lower()):
@@ -643,7 +667,7 @@ def discover_new_calibration_opportunities(
                     if ("timed out" in err_msg.lower() or "timeout" in err_msg.lower())
                     else STATE_PROVIDER_ERROR
                 )
-                discovery_query_memory.record_query_execution(
+                executed_query_log = discovery_query_memory.record_query_execution(
                     query=query_to_execute,
                     page=page_to_execute,
                     sector=sector_to_execute,
@@ -651,6 +675,7 @@ def discover_new_calibration_opportunities(
                     geography=geo_to_execute,
                     execution_state=execution_state,
                     metadata_json={"error": err_msg},
+                    analyst_decision_id=strategy_decision.id if strategy_decision else None,
                     db=db,
                 )
             elif (
@@ -775,7 +800,7 @@ def discover_new_calibration_opportunities(
                 )
 
                 # Persist execution in PostgreSQL + 24h Redis cooldown for success (Amendment 5)
-                discovery_query_memory.record_query_execution(
+                executed_query_log = discovery_query_memory.record_query_execution(
                     query=query_to_execute,
                     page=page_to_execute,
                     sector=sector_to_execute,
@@ -791,6 +816,7 @@ def discover_new_calibration_opportunities(
                     yield_score=yield_score,
                     exhaustion_score=exhaustion_score,
                     metadata_json=score_components,
+                    analyst_decision_id=strategy_decision.id if strategy_decision else None,
                     db=db,
                 )
 
@@ -812,7 +838,7 @@ def discover_new_calibration_opportunities(
                         invalid_entities=0,
                     )
                 )
-                discovery_query_memory.record_query_execution(
+                executed_query_log = discovery_query_memory.record_query_execution(
                     query=query_to_execute,
                     page=page_to_execute,
                     sector=sector_to_execute,
@@ -828,6 +854,7 @@ def discover_new_calibration_opportunities(
                     yield_score=yield_score,
                     exhaustion_score=exhaustion_score,
                     metadata_json=score_components,
+                    analyst_decision_id=strategy_decision.id if strategy_decision else None,
                     db=db,
                 )
         except Exception as e:
@@ -863,6 +890,8 @@ def discover_new_calibration_opportunities(
                 if candidate.get("current_run_live") and candidate.get("facility_verified")
                 else None
             ),
+            discovery_query_log_id=executed_query_log.id if executed_query_log else None,
+            analyst_decision_id=strategy_decision.id if strategy_decision else None,
         )
 
         discovered_candidates.append({
@@ -920,6 +949,8 @@ def discover_new_calibration_opportunities(
         },
         "candidates": discovered_candidates,
         "planned_query": planned_query,
+        "strategy_decision": strategy_decision.to_dict() if strategy_decision else None,
+        "discovery_query_log_id": executed_query_log.id if executed_query_log else None,
         "execution_state": execution_state,
         "yield_score": yield_score,
         "exhaustion_score": exhaustion_score,

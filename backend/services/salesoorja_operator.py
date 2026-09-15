@@ -1287,12 +1287,26 @@ class SalesoorjaOperator:
             geo_name = planned.get("geography") or target_geo
             y_score = float(discovery.get("yield_score") or 0.0)
 
-            if exec_state == "SUCCESS_EXHAUSTED":
-                self._update(last_action=f"Discovery query exhausted ({sec_name} | {trig_name}) — rotating to next angle")
-            elif exec_state == "SUCCESS_PRODUCTIVE":
-                self._update(last_action=f"Productive discovery ({sec_name} in {geo_name}) — yield: {y_score:.1f}")
+            strat = discovery.get("strategy_decision") or {}
+            strat_mode = strat.get("mode", "EXPLOIT")
+            strat_sec = strat.get("sector") or sec_name
+            strat_geo = strat.get("geography") or geo_name
+            strat_trig = strat.get("trigger_family") or trig_name
+            was_sub = planned.get("was_substituted", False)
+            sub_reason = planned.get("substitution_reason")
+
+            if was_sub and sub_reason:
+                logger.info("[STRATEGY] Substitution: %s", sub_reason)
+                self._update(last_action=f"Planner substitution: {strat_sec} in {geo_name} ({trig_name})")
             else:
-                self._update(last_action=f"Discovering: {sec_name} | {trig_name} | {geo_name}")
+                logger.info("[STRATEGY] %s | %s | %s | %s", strat_mode, strat_sec, strat_geo, strat_trig)
+                if exec_state == "SUCCESS_EXHAUSTED":
+                    self._update(last_action=f"{strat_mode} | {sec_name} | {trig_name} exhausted — rotating")
+                elif exec_state == "SUCCESS_PRODUCTIVE":
+                    self._update(last_action=f"{strat_mode} | {sec_name} in {geo_name} — yield: {y_score:.1f}")
+                else:
+                    self._update(last_action=f"{strat_mode} | {sec_name} | {geo_name} | {trig_name}")
+
 
             source_status = discovery.get("source_status") or {}
             current_run_live = bool(source_status.get("current_run_live"))
