@@ -491,3 +491,80 @@ def test_productivity_scoring_components():
     assert state == STATE_SUCCESS_PRODUCTIVE
     assert comp["new_companies"] == 3
     assert comp["strong_opps"] == 2
+
+
+# ============================================================
+# 7. Provider Execution State Classification (Amendment 4)
+# ============================================================
+
+def test_provider_execution_state_classification(in_memory_db):
+    from services.signal_discovery_engine import discover_new_calibration_opportunities
+    from services.research_provider import PROVIDER_ERROR, PROVIDER_BUDGET_EXHAUSTED
+
+    # 1. Valid Serper response + zero organic results => SUCCESS_EXHAUSTED
+    with patch("services.research_provider.ResearchProviderRouter.search") as mock_search:
+        mock_search.return_value = {
+            "provider": "serper",
+            "provider_status": "EMPTY",
+            "cache_hit": False,
+            "results": [],
+            "error": "Serper returned no organic results",
+        }
+        res = discover_new_calibration_opportunities(
+            db=in_memory_db,
+            geography="TestGeo1",
+            limit=5,
+            use_cache=False,
+        )
+        assert res["execution_state"] == STATE_SUCCESS_EXHAUSTED
+
+    # 2. Genuine HTTP/API/provider failure => PROVIDER_ERROR
+    with patch("services.research_provider.ResearchProviderRouter.search") as mock_search:
+        mock_search.return_value = {
+            "provider": "serper",
+            "provider_status": PROVIDER_ERROR,
+            "cache_hit": False,
+            "results": [],
+            "error": "HTTP 500 Server Error: Internal error connecting to search endpoint",
+        }
+        res = discover_new_calibration_opportunities(
+            db=in_memory_db,
+            geography="TestGeo2",
+            limit=5,
+            use_cache=False,
+        )
+        assert res["execution_state"] == STATE_PROVIDER_ERROR
+
+    # 3. Rate limit => RATE_LIMITED
+    with patch("services.research_provider.ResearchProviderRouter.search") as mock_search:
+        mock_search.return_value = {
+            "provider": "serper",
+            "provider_status": PROVIDER_BUDGET_EXHAUSTED,
+            "cache_hit": False,
+            "results": [],
+            "error": "HTTP 429 Too Many Requests: Rate limit exceeded",
+        }
+        res = discover_new_calibration_opportunities(
+            db=in_memory_db,
+            geography="TestGeo3",
+            limit=5,
+            use_cache=False,
+        )
+        assert res["execution_state"] == STATE_RATE_LIMITED
+
+    # 4. Timeout => TIMEOUT
+    with patch("services.research_provider.ResearchProviderRouter.search") as mock_search:
+        mock_search.return_value = {
+            "provider": "serper",
+            "provider_status": PROVIDER_ERROR,
+            "cache_hit": False,
+            "results": [],
+            "error": "Connection timed out while waiting for upstream response",
+        }
+        res = discover_new_calibration_opportunities(
+            db=in_memory_db,
+            geography="TestGeo4",
+            limit=5,
+            use_cache=False,
+        )
+        assert res["execution_state"] == STATE_TIMEOUT

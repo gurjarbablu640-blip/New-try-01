@@ -194,10 +194,10 @@ class DiscoveryQueryPlanner:
         self.memory = memory or discovery_query_memory
 
     def get_all_angles(self) -> List[Tuple[str, str]]:
-        """Return all sector x trigger combinations (15 x 15 = 225 angles)."""
+        """Return all sector x trigger combinations (15 x 15 = 225 angles), interleaved across sectors."""
         angles = []
-        for sector in MANUFACTURING_SECTORS.keys():
-            for trigger in TRIGGER_FAMILIES.keys():
+        for trigger in TRIGGER_FAMILIES.keys():
+            for sector in MANUFACTURING_SECTORS.keys():
                 angles.append((sector, trigger))
         return angles
 
@@ -314,13 +314,35 @@ class DiscoveryQueryPlanner:
         """
         weights = self.compute_angle_weights(db)
 
-        # Filter by preferred sector if specified
-        candidate_angles = list(weights.keys())
-        if preferred_sector and preferred_sector in MANUFACTURING_SECTORS:
-            candidate_angles = [a for a in candidate_angles if a[0] == preferred_sector]
+        # Determine starting sector from recent DB history for natural cross-sector rotation
+        sectors = list(MANUFACTURING_SECTORS.keys())
+        start_idx = 0
+        if db is not None and not preferred_sector:
+            try:
+                last_log = (
+                    db.query(DiscoveryQueryLog.sector)
+                    .filter(DiscoveryQueryLog.sector.isnot(None))
+                    .order_by(DiscoveryQueryLog.id.desc())
+                    .first()
+                )
+                if last_log and last_log[0] in sectors:
+                    last_idx = sectors.index(last_log[0])
+                    start_idx = (last_idx + 1) % len(sectors)
+            except Exception as e:
+                logger.debug("Could not inspect last sector from DB: %s", e)
 
-        # Sort candidate angles by weight descending (highest adaptive yield / exploration first)
-        candidate_angles.sort(key=lambda a: weights.get(a, 1.0), reverse=True)
+        active_sectors = (
+            [preferred_sector]
+            if (preferred_sector and preferred_sector in MANUFACTURING_SECTORS)
+            else (sectors[start_idx:] + sectors[:start_idx])
+        )
+
+        # For each sector in rotating order, order its triggers by adaptive weight descending
+        candidate_angles: List[Tuple[str, str]] = []
+        for sector in active_sectors:
+            sec_angles = [(sector, trig) for trig in TRIGGER_FAMILIES.keys()]
+            sec_angles.sort(key=lambda a: weights.get(a, 1.0), reverse=True)
+            candidate_angles.extend(sec_angles)
 
         geos = [preferred_geo] if preferred_geo else INDUSTRIAL_CORRIDORS
 
