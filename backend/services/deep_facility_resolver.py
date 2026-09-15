@@ -106,18 +106,19 @@ class DeepFacilityResolver:
                 aliases = [a.lower() for a in cluster_meta.get("aliases", [cluster_meta["city"].lower()])]
                 city_matches = target_city in aliases or target_city == cluster_meta["city"].lower()
                 if not target_city or city_matches or (target_state and target_state in cluster_meta["state"].lower()):
-                    is_trigger_linked = trigger_mentions_city or trigger_mentions_cluster
+                    is_trigger_linked = trigger_mentions_city or trigger_mentions_cluster or bool(evidence_snippets)
+                    facility_name = f"{company_name} Manufacturing Unit, {cluster_key.title()}"
                     return {
-                        "facility_name": f"{company_name} Manufacturing Unit, {cluster_key.title()}",
-                        "facility_address": f"{cluster_key.title()} {cluster_meta['type']}, {cluster_meta['city']}, {cluster_meta['state']}",
+                        "facility_name": facility_name if is_trigger_linked else None,
+                        "facility_address": f"{cluster_key.title()} {cluster_meta['type']}, {cluster_meta['city']}, {cluster_meta['state']}" if is_trigger_linked else None,
                         "city": cluster_meta["city"],
                         "state": cluster_meta["state"],
-                        "industrial_cluster": cluster_key.title(),
-                        "linkage_confidence": "STRONG",
+                        "industrial_cluster": cluster_key.title() if is_trigger_linked else None,
+                        "linkage_confidence": "STRONG" if is_trigger_linked else "WEAK",
                         "linkage_evidence": f"Documentation corroborates active manufacturing at {cluster_key.title()} in {cluster_meta['city']}",
-                        "facility_verified": True,
-                        "trigger_facility": f"{company_name} Manufacturing Unit, {cluster_key.title()}" if is_trigger_linked else None,
-                        "known_company_facility": f"{company_name} Manufacturing Unit, {cluster_key.title()}",
+                        "facility_verified": bool(is_trigger_linked),
+                        "trigger_facility": facility_name if is_trigger_linked else None,
+                        "known_company_facility": facility_name,
                     }
 
         if trigger_mentions_city or trigger_mentions_cluster:

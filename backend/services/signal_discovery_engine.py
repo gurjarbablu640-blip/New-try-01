@@ -360,44 +360,8 @@ def ingest_discovered_signal_lead(
 
 
 def _extract_company_name_from_title(title: str) -> str:
-    raw_chunk = title.split("-")[0].split("—")[0].split("|")[0].split(":")[0].strip()
-    extracted_name = raw_chunk
-    if " at " in raw_chunk.lower():
-        parts = re.split(r"\s+at\s+", raw_chunk, flags=re.IGNORECASE)
-        if len(parts) > 1 and len(parts[1].strip()) > 2:
-            extracted_name = parts[1].strip()
-    elif " hiring " in raw_chunk.lower():
-        extracted_name = re.split(r"\s+hiring\s+", raw_chunk, flags=re.IGNORECASE)[0].strip()
-    else:
-        for pattern in (
-            r"\bexpands\b",
-            r"\binaugurates\b",
-            r"\bcommissions\b",
-            r"\bto set up\b",
-            r"\bsets up\b",
-            r"\bopens\b",
-            r"\binvests\b",
-            r"\bannounces\b",
-        ):
-            if re.search(pattern, raw_chunk, re.IGNORECASE):
-                lead_chunk = re.split(pattern, raw_chunk, flags=re.IGNORECASE)[0].strip()
-                if len(lead_chunk) >= 3:
-                    extracted_name = lead_chunk
-                break
-    extracted_name = re.sub(r"[^a-zA-Z0-9\s&.,-]", "", extracted_name).strip(" ,.-")
-    rejected_terms = {
-        "news", "report", "home", "market", "overview", "hiring", "jobs", "factory",
-        "facility", "manufacturing", "expansion", "commissioning", "inauguration", "plant",
-    }
-    lowered = extracted_name.casefold()
-    if (
-        len(extracted_name) < 3
-        or len(extracted_name.split()) > 8
-        or any(term in lowered.split() for term in rejected_terms)
-        or lowered.startswith(("why ", "how ", "indias ", "india ", "top ", "what ", "new "))
-    ):
-        return ""
-    return extracted_name[:100]
+    from services.entity_truth_gate import extract_clean_company_name_from_title
+    return extract_clean_company_name_from_title(title)
 
 
 def _resolve_live_facility(company_name: str, evidence_text: str) -> Dict[str, Any]:
@@ -416,7 +380,11 @@ def _resolve_live_facility(company_name: str, evidence_text: str) -> Dict[str, A
         trigger_text=evidence_text,
         known_city=known_city or None,
     )
-    if resolved.get("facility_verified") and resolved.get("linkage_confidence") in {"DIRECT", "STRONG"}:
+    if (
+        resolved.get("facility_verified")
+        and resolved.get("linkage_confidence") in {"DIRECT", "STRONG"}
+        and resolved.get("facility_name")
+    ):
         return resolved
 
     specificity = str(extracted.get("trigger_facility_specificity") or "")
@@ -431,9 +399,12 @@ def _resolve_live_facility(company_name: str, evidence_text: str) -> Dict[str, A
         exact_name = ""
         if specificity == "EXACT_FACILITY":
             specificity = "CITY" if known_city else "COMPANY_ONLY"
-    if not known_city or specificity not in {"EXACT_FACILITY", "INDUSTRIAL_AREA", "CITY"}:
+
+    # A facility cannot be validated without an identified city or industrial corridor
+    if not known_city and not area:
         return resolved
-    facility_name = exact_name or area or f"{company_name} {known_city} Manufacturing Facility"
+
+    facility_name = exact_name or (f"{company_name} Manufacturing Unit, {area}" if area else f"{company_name} {known_city} Facility")
     binding = bind_trigger_to_facility(
         evidence_text,
         target_facility=facility_name,
@@ -451,6 +422,7 @@ def _resolve_live_facility(company_name: str, evidence_text: str) -> Dict[str, A
         "linkage_evidence": binding.get("reason"),
         "facility_verified": True,
         "trigger_facility": facility_name,
+        "target_facility": facility_name,
     }
 
 
@@ -592,7 +564,7 @@ def discover_new_calibration_opportunities(
         geo_query = f"{geography} " if geography and geography != "PAN INDIA" and geography != "All" else "India "
         search_res = router.search(
             f"{geo_query}manufacturing plant expansion inaugurates commissioned 2026",
-            num_results=5,
+            num_results=min(max(int(limit), 5), 10),
             db=db,
             use_cache=use_cache,
         )
@@ -607,44 +579,28 @@ def discover_new_calibration_opportunities(
                 title = item.get("title", "")
                 snippet = item.get("snippet", "")
                 url = item.get("url", "")
-                # Extract plausible company name from title
-                raw_chunk = title.split("-")[0].split("—")[0].split("|")[0].split(":")[0].strip()
-                extracted_name = raw_chunk
-                if " at " in raw_chunk.lower():
-                    parts = re.split(r"\s+at\s+", raw_chunk, flags=re.IGNORECASE)
-                    if len(parts) > 1 and len(parts[1].strip()) > 2:
-                        extracted_name = parts[1].strip()
-                elif " hiring " in raw_chunk.lower():
-                    parts = re.split(r"\s+hiring\s+", raw_chunk, flags=re.IGNORECASE)
-                    if len(parts) > 0 and len(parts[0].strip()) > 2:
-                        extracted_name = parts[0].strip()
-                else:
-                    action_verbs = [r"\bexpands\b", r"\binaugurates\b", r"\bcommissions\b", r"\bto set up\b", r"\bsets up\b", r"\bopens\b", r"\binvests\b"]
-                    for pat in action_verbs:
-                        if re.search(pat, raw_chunk, re.IGNORECASE):
-                            lead_chunk = re.split(pat, raw_chunk, flags=re.IGNORECASE)[0].strip()
-                            if len(lead_chunk) >= 3:
-                                extracted_name = lead_chunk
-                                break
                 extracted_name = _extract_company_name_from_title(title)
+                if not extracted_name:
+                    continue
 
-                if (
-                    len(extracted_name) > 2
-                    and not any(k in extracted_name.lower() for k in ["news", "report", "home", "market", "overview", "hiring", "jobs"])
-                    and not extracted_name.lower().startswith(("why ", "how ", "indias ", "india ", "top ", "what "))
-                ):
-                    live_search_candidates.append({
-                        "company_name": extracted_name[:100],
-                        "city": geography if geography and geography != "PAN INDIA" else "Industrial Corridor",
-                        "state": geography if geography and geography != "PAN INDIA" else "Pan-India",
-                        "industry": "Precision Manufacturing",
-                        "signal_type": "plant_expansion",
-                        "event_title": title[:200],
-                        "event_description": snippet[:500],
-                        "evidence_url": url,
-                        "source_classification": f"LIVE_SEARCH_{search_res.get('provider', 'WEB').upper()}",
-                        "data_provenance": "LIVE_SEARCH_DISCOVERED",
-                    })
+                from services.entity_truth_gate import validate_company_entity
+                is_valid_entity, entity_reason = validate_company_entity(extracted_name, title)
+                if not is_valid_entity:
+                    logger.info("Discovery Entity Gate: Blocked non-company '%s' (%s)", extracted_name, entity_reason)
+                    continue
+
+                live_search_candidates.append({
+                    "company_name": extracted_name[:100],
+                    "city": geography if geography and geography != "PAN INDIA" else "Industrial Corridor",
+                    "state": geography if geography and geography != "PAN INDIA" else "Pan-India",
+                    "industry": "Precision Manufacturing",
+                    "signal_type": "plant_expansion",
+                    "event_title": title[:200],
+                    "event_description": snippet[:500],
+                    "evidence_url": url,
+                    "source_classification": f"LIVE_SEARCH_{search_res.get('provider', 'WEB').upper()}",
+                    "data_provenance": "LIVE_SEARCH_DISCOVERED",
+                })
     except Exception as e:
         logger.warning("Live search discovery note: %s", e)
 
@@ -741,7 +697,8 @@ def discover_new_calibration_opportunities(
             "trigger_semantics": candidate.get("trigger_semantics") or {},
             "trigger_recency": candidate.get("trigger_recency") or {},
             "facility_verified": bool(candidate.get("facility_verified")),
-            "facility": candidate.get("facility") or "",
+            "facility": candidate.get("facility") or (candidate.get("facility_evidence") or {}).get("facility_name") or "",
+            "target_facility": candidate.get("facility") or (candidate.get("facility_evidence") or {}).get("facility_name") or "",
             "facility_evidence": candidate.get("facility_evidence") or {},
             "opportunity_qualified": bool(candidate.get("opportunity_qualified")),
             "causality_chain": {

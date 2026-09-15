@@ -323,7 +323,7 @@ class BrightDataLinkedInProvider:
         self.base_url = _clean_text(
             getattr(settings_obj, "BRIGHTDATA_API_BASE_URL", "https://api.brightdata.com")
         ).rstrip("/")
-        self.timeout_seconds = max(1, int(getattr(settings_obj, "BRIGHTDATA_TIMEOUT_SECONDS", 30)))
+        self.timeout_seconds = max(1, int(getattr(settings_obj, "BRIGHTDATA_TIMEOUT_SECONDS", 60)))
         self.poll_timeout_seconds = max(
             1, int(getattr(settings_obj, "BRIGHTDATA_POLL_TIMEOUT_SECONDS", 75))
         )

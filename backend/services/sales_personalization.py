@@ -1482,6 +1482,14 @@ class SalesPersonalizationPipeline:
         body = outreach_result.get("body", "")
         followups = outreach_result.get("followups", {})
 
+        enriched["FINAL_SUBJECT"] = subject
+        enriched["SUBJECT"] = subject
+        enriched["subject"] = subject
+        enriched["FINAL_BODY_HTML"] = body
+        enriched["BODY_HTML"] = body
+        enriched["body_html"] = body
+        enriched["FINAL_BODY_TEXT"] = body
+        enriched["BODY_TEXT"] = body
         enriched["body_text"] = body
         enriched["WHY_CALIBRATION_NOW"] = body
         enriched["REASON_FOR_OUTREACH"] = body
@@ -1494,6 +1502,7 @@ class SalesPersonalizationPipeline:
             }
         )
         return enriched
+
 
 
 sales_personalization_pipeline = SalesPersonalizationPipeline()

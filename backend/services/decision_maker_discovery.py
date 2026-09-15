@@ -1332,6 +1332,7 @@ def run_full_discovery_pipeline(
     }
 
     report_progress("apollo_search", f"Searching Apollo candidates for {company.name}")
+    logger.info("[APOLLO_SEARCH_STARTED] Company: %s | City: %s | State: %s", company.name, target_city, target_state)
     discovery = discover_people_with_apollo(
         company_name=company.name,
         facility_name=target_facility,
@@ -1340,7 +1341,9 @@ def run_full_discovery_pipeline(
         role_families=APOLLO_PERSON_ROLE_FAMILIES,
         max_candidates=5,
     )
+    logger.info("[APOLLO_SEARCH_RESULT] Company: %s | Candidates found: %d", company.name, len(discovery.get("candidates") or []))
     report_progress("bright_verification", f"Verifying Apollo candidates for {company.name} with Bright")
+    logger.info("[BRIGHT_VERIFY_STARTED] Company: %s | Candidates to verify: %d", company.name, len(discovery.get("candidates") or []))
     verification = verify_apollo_candidates_with_brightdata(
         discovery.get("candidates") or [],
         company_name=company.name,
@@ -1351,6 +1354,7 @@ def run_full_discovery_pipeline(
         max_attempts=3,
     )
     raw_candidates = verification.get("candidates") or []
+    logger.info("[BRIGHT_VERIFY_RESULT] Company: %s | Status: %s | Verified candidates: %d", company.name, verification.get("status"), len(raw_candidates))
 
     # ── 4. Web/Public Research ────────────────────────────────────────
     public_person_evidence = [
@@ -1658,12 +1662,48 @@ def run_full_discovery_pipeline(
         candidate_record = raw_candidate["_candidate_record"]
         if before_apollo is not None and not before_apollo():
             return {"status": "BLOCKED", "email": None, "phone": None}
+        logger.info("[APOLLO_ENRICH_STARTED] Candidate: %s | Company: %s", candidate_record.candidate_name, company.name)
         result = enrich_candidate_via_apollo(candidate_record, company.name, db)
+
+        raw_status = str(result.get("status") or "ERROR")
+        email = result.get("email")
+        error_msg = result.get("error")
+
+        if raw_status == "SKIPPED_DEDUPLICATED":
+            diagnosis = "SKIPPED_DEDUPLICATED"
+            reason = result.get("reason") or "Enrichment deduplicated within 30-day window"
+        elif raw_status in ("ERROR", "APOLLO_BLOCKED") or error_msg:
+            diagnosis = "API_ERROR"
+            reason = str(error_msg or raw_status)
+        elif raw_status == "NO_RESULT":
+            diagnosis = "NO_RESULT"
+            reason = "No person record matched in Apollo"
+        elif email:
+            if "@" in email and "." in email.split("@")[-1] and len(email) >= 6:
+                diagnosis = "ACCEPTED"
+                reason = f"Verified email acquired (confidence: {result.get('email_confidence')})"
+            else:
+                diagnosis = "INVALID_EMAIL"
+                reason = f"Malformed email syntax: {email}"
+        else:
+            diagnosis = "EMAIL_NOT_FOUND"
+            reason = "Apollo matched person but email is unavailable"
+
+        logger.info(
+            "[APOLLO_ENRICH_RESULT] Candidate: %s | Diagnosis: %s | Email: %s | Status: %s | Reason: %s",
+            candidate_record.candidate_name,
+            diagnosis,
+            email or "None",
+            raw_status,
+            reason,
+        )
         apollo_results.append({
             "name": candidate_record.candidate_name,
-            "status": result.get("status", "ERROR"),
-            "email": result.get("email", "NOT FOUND"),
+            "status": raw_status,
+            "diagnosis": diagnosis,
+            "email": email or "NOT FOUND",
             "email_confidence": result.get("email_confidence"),
+            "reason": reason,
         })
         if not result.get("email") and not result.get("phone"):
             candidate_record.verification_status = "PERSON_VERIFIED_CONTACT_MISSING"

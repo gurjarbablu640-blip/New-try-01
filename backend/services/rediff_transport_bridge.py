@@ -422,6 +422,8 @@ class RediffTransportBridge:
         csv_path = execution_dir / "prepared_record.csv"
         result_path = execution_dir / "transport_result.json"
         self._write_csv(csv_path, mapped_record)
+        body_content = str(mapped_record.get("FINAL_BODY_HTML") or mapped_record.get("BODY_HTML") or mapped_record.get("BODY_TEXT") or "").strip()
+        (execution_dir / "unused.html").write_text(body_content, encoding="utf-8")
         worker = BACKEND_ROOT / "scripts" / "rediff_transport_worker.py"
         command = [
             sys.executable,

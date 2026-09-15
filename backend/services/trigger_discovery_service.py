@@ -1061,7 +1061,10 @@ def extract_trigger_facility_link(
                 "mother", "new", "existing", "proposed", "mega", "upcoming",
                 "second", "third", "first", "the", "a", "an", "its", "our",
                 "this", "each", "every", "that", "their", "current", "assembly",
-                "integrated", "dedicated", "advanced", "modern", "latest"
+                "integrated", "dedicated", "advanced", "modern", "latest",
+                "without", "with", "for", "from", "at", "in", "on", "by", "of",
+                "physical", "no", "not", "any", "all", "entire", "general",
+                "news", "article", "mention", "mentioned", "commercial",
             }
             valid_words = [
                 w for w in candidate_plant.split()
@@ -1307,19 +1310,19 @@ def bind_trigger_to_facility(
             }
         elif not conflicting_cities:
             return {
-                "linkage": TRIGGER_FACILITY_STRONG,
-                "is_bound": True,
-                "confidence": "MEDIUM",
-                "reason": f"Target city '{target_city}' present in trigger text without conflicting facilities",
+                "linkage": TRIGGER_FACILITY_WEAK,
+                "is_bound": False,
+                "confidence": "LOW",
+                "reason": f"Target city '{target_city}' present in text, but contains zero manufacturing facility evidence",
                 "matched_location": target_city,
                 "conflicting_locations": [],
             }
         else:
             return {
-                "linkage": TRIGGER_FACILITY_STRONG,
-                "is_bound": True,
-                "confidence": "MEDIUM",
-                "reason": f"Target city '{target_city}' mentioned alongside other locations ({', '.join(conflicting_cities)})",
+                "linkage": TRIGGER_FACILITY_WEAK,
+                "is_bound": False,
+                "confidence": "LOW",
+                "reason": f"Target city '{target_city}' mentioned without facility evidence alongside other locations ({', '.join(conflicting_cities)})",
                 "matched_location": target_city,
                 "conflicting_locations": conflicting_cities,
             }

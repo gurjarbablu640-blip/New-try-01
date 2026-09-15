@@ -55,6 +55,8 @@ def main() -> int:
         if not (system_path / "campaign_runner.py").is_file():
             raise FileNotFoundError("REDIFF_CAMPAIGN_RUNNER_NOT_FOUND")
         sys.path.insert(0, str(system_path))
+        if "config" in sys.modules and not hasattr(sys.modules["config"], "EMAIL_ADDRESS"):
+            del sys.modules["config"]
         import config
         import send_email
         import reporter
@@ -76,6 +78,16 @@ def main() -> int:
                 raise PermissionError("LIVE_RECIPIENT_ASSERTION_FAILED")
             if args.cc.casefold() != expected_recipient.casefold():
                 raise PermissionError("LIVE_CC_ASSERTION_FAILED")
+            if not final_subject or not final_body:
+                result["transport_status"] = "FAILED"
+                result["error"] = "TRANSPORT_PAYLOAD_INVALID"
+                result["detail"] = (
+                    f"Production transport requires non-empty approved copy: "
+                    f"subject={'PRESENT' if final_subject else 'MISSING'}, "
+                    f"body={'PRESENT' if final_body else 'MISSING'}"
+                )
+                result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+                return 1
             test_mode = False
             to_addr = args.recipient
             cc_addr = expected_recipient
@@ -187,6 +199,12 @@ def main() -> int:
                     "Notes": "Delivered via Salesoorja transport-only Rediff bridge",
                     "Error": "",
                 })
+        elif args.mode in {"single-live", "production"}:
+            result["transport_status"] = "FAILED"
+            result["error"] = "TRANSPORT_PAYLOAD_INVALID"
+            result["detail"] = "Production transport must never invoke legacy campaign runner fallback"
+            result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+            return 1
         else:
             # Fallback for legacy records without final copy: run campaign runner
             import campaign_runner
@@ -233,7 +251,9 @@ def main() -> int:
                 result["error"] = None
 
     except Exception as exc:
+        result["transport_status"] = "FAILED"
         result["error"] = type(exc).__name__
+        result["detail"] = str(exc)
     result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
     return 0 if result["transport_status"] in {"READY", "SENT"} else 1
 

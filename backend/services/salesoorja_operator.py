@@ -79,6 +79,17 @@ REPORT_SHEETS = (
     "ENQUIRIES",
     "ERRORS",
 )
+DISCOVERY_REGIONS = (
+    "PAN INDIA",
+    "Maharashtra",
+    "Gujarat",
+    "Tamil Nadu",
+    "Karnataka",
+    "Haryana",
+    "Telangana",
+    "Uttar Pradesh",
+    "Rajasthan",
+)
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -169,6 +180,7 @@ class SalesoorjaOperator:
         loaded.setdefault("provider_usage", {key: 0 for key in PROVIDER_KEYS})
         loaded.setdefault("historical_provider_usage", {key: 0 for key in PROVIDER_KEYS})
         loaded.setdefault("processed_accounts", [])
+        loaded.setdefault("discovery_region_index", 0)
         loaded.setdefault("records", {sheet: [] for sheet in REPORT_SHEETS})
         loaded.setdefault("transport_receipts", [])
         for k in ("task_id", "queued_at", "worker_started_at", "heartbeat_at", "stop_requested_at", "stopped_at"):
@@ -227,6 +239,7 @@ class SalesoorjaOperator:
             "provider_usage": {key: 0 for key in PROVIDER_KEYS},  # CURRENT RUN PROVIDER USAGE RESET
             "historical_provider_usage": historical_provider_usage,
             "processed_accounts": [],
+            "discovery_region_index": previous.get("discovery_region_index", 0) if preserve_history else 0,
             "records": {sheet: [] for sheet in REPORT_SHEETS},
             "transport_receipts": deepcopy(previous.get("transport_receipts")) if same_day else [],
         }
@@ -369,6 +382,12 @@ class SalesoorjaOperator:
                 self._state["last_action"] = action
             self._save_state()
 
+    def _heartbeat_timeout_seconds(self) -> float:
+        configured = getattr(self.settings, "SALESOORJA_HEARTBEAT_TIMEOUT_SECONDS", None)
+        if configured is not None:
+            return float(configured)
+        return 180.0 if self._mode() == "PRODUCTION" else 45.0
+
     def _is_worker_alive(self) -> bool:
         """Check whether the active execution worker/task is genuinely alive."""
         if self._thread is not None:
@@ -409,7 +428,7 @@ class SalesoorjaOperator:
         if heartbeat_iso:
             try:
                 hb_time = datetime.fromisoformat(heartbeat_iso)
-                return (now - hb_time).total_seconds() < 45.0
+                return (now - hb_time).total_seconds() < self._heartbeat_timeout_seconds()
             except Exception:
                 return False
         elif queued_iso:
@@ -504,9 +523,10 @@ class SalesoorjaOperator:
                 try:
                     hb_time = datetime.fromisoformat(heartbeat_at)
                     elapsed_hb = (now - hb_time).total_seconds()
-                    if elapsed_hb > 45.0 and not self._is_worker_alive():
+                    hb_timeout = self._heartbeat_timeout_seconds()
+                    if elapsed_hb > hb_timeout and not self._is_worker_alive():
                         logger.warning("Reconciliation: Heartbeat stale (%.1fs) and worker dead; setting ERROR", elapsed_hb)
-                        self._force_error(reason="HEARTBEAT_TIMEOUT", message="Worker heartbeat timed out after 45s")
+                        self._force_error(reason="HEARTBEAT_TIMEOUT", message=f"Worker heartbeat timed out after {int(hb_timeout)}s")
                         return
                 except Exception:
                     pass
@@ -530,7 +550,10 @@ class SalesoorjaOperator:
     def _update(self, **values: Any) -> None:
         with self._lock:
             self._state.update(values)
-            self._state["last_checkpoint"] = _iso(self._now())
+            now_iso = _iso(self._now())
+            self._state["last_checkpoint"] = now_iso
+            if "heartbeat_at" not in values and self._state.get("status") in {"STARTING", "RUNNING"}:
+                self._state["heartbeat_at"] = now_iso
             self._save_state()
 
     def _increment(self, counter: str, amount: int = 1) -> None:
@@ -1235,13 +1258,19 @@ class SalesoorjaOperator:
         db = self._db_factory()
         processed = False
         try:
-            self._update(last_action="Discovering fresh opportunities via Serper")
-            self._heartbeat("Serper live discovery search initiated")
+            region_idx = int(self._state.get("discovery_region_index", 0) or 0)
+            target_geo = DISCOVERY_REGIONS[region_idx % len(DISCOVERY_REGIONS)]
+            with self._lock:
+                self._state["discovery_region_index"] = (region_idx + 1) % len(DISCOVERY_REGIONS)
+                self._save_state()
+
+            self._update(last_action=f"Discovering fresh opportunities via Serper ({target_geo})")
+            self._heartbeat(f"Serper live discovery search initiated ({target_geo})")
             serper_before = self._serper_live_request_count()
             try:
                 discovery = discovery_fn(
                     db=db,
-                    geography="PAN INDIA",
+                    geography=target_geo,
                     limit=10,
                     use_cache=False,
                 )
@@ -1249,7 +1278,7 @@ class SalesoorjaOperator:
                 serper_after = self._serper_live_request_count()
                 if serper_before is not None and serper_after is not None and serper_after > serper_before:
                     self._provider_call("Serper", serper_after - serper_before)
-            self._heartbeat("Serper live discovery search completed")
+            self._heartbeat(f"Serper live discovery search completed ({target_geo})")
             source_status = discovery.get("source_status") or {}
             current_run_live = bool(source_status.get("current_run_live"))
             candidates = [
@@ -1259,6 +1288,14 @@ class SalesoorjaOperator:
                 and item.get("current_run_live") is True
                 and item.get("data_provenance") == "LIVE_SEARCH_DISCOVERED"
             ]
+            for item in candidates:
+                logger.info(
+                    "[DISCOVERED] Company: %s | Source: %s | ICP: %s | Geo: %s",
+                    item.get("company_name"),
+                    item.get("data_provenance"),
+                    item.get("icp_score"),
+                    target_geo,
+                )
             if smoke_mode:
                 discovered_count = len(candidates)
                 if candidates:
@@ -1298,22 +1335,57 @@ class SalesoorjaOperator:
         self._update(current_company=company_name, last_action=f"Validating trigger and facility for {company_name}")
         self._increment("companies_researched")
         try:
+            # 1. Entity Truth Gate: Discovered entity must be an actual organization/company
+            from services.entity_truth_gate import validate_company_entity
+            is_valid_entity, entity_reason = validate_company_entity(company_name, str(account.get("event_title") or ""))
+            if not is_valid_entity:
+                logger.info("[ENTITY_GATE_HOLD] Company: %s | Reason: %s", company_name, entity_reason)
+                self._hold_account(account, f"Entity validation failed: {entity_reason}")
+                return
+            logger.info("[ENTITY_GATE_PASS] Company: %s", company_name)
+
+            # 2. Trigger Validation Gate
             if account.get("trigger_valid") is not True:
                 recency = str((account.get("trigger_recency") or {}).get("recency_tier") or "UNKNOWN")
+                logger.info("[TRIGGER_HOLD] Company: %s | Valid: False | Recency: %s", company_name, recency)
                 self._hold_account(account, f"Current trigger validation failed ({recency})")
                 return
+            logger.info("[TRIGGER_VALIDATED] Company: %s | Valid: True | Recency: %s", company_name, (account.get("trigger_recency") or {}).get("recency_tier"))
+
+            # 3. Facility Truth Gate: Physical manufacturing or operational facility
             facility_evidence = account.get("facility_evidence") or {}
+            target_facility = (
+                account.get("target_facility")
+                or account.get("facility")
+                or facility_evidence.get("facility_name")
+                or facility_evidence.get("trigger_facility")
+                or facility_evidence.get("target_facility")
+            )
+            if not target_facility and account.get("facility_verified") is True and facility_evidence.get("linkage_confidence") in {"DIRECT", "STRONG"}:
+                target_facility = f"{company_name} Facility"
             if (
                 account.get("facility_verified") is not True
                 or facility_evidence.get("linkage_confidence") not in {"DIRECT", "STRONG"}
+                or not target_facility
+                or str(target_facility).strip().casefold() in {"", "none", "unknown", "null"}
             ):
-                reason = facility_evidence.get("linkage_evidence") or "Trigger is not bound to an exact facility"
+                reason = facility_evidence.get("linkage_evidence") or "Trigger is not bound to an exact physical facility"
+                if not target_facility or str(target_facility).strip().casefold() in {"", "none", "unknown", "null"}:
+                    reason = "Facility name is unresolved or None"
+                logger.info("[FACILITY_HOLD] Company: %s | Verified: %s | Linkage: %s | Reason: %s", company_name, account.get("facility_verified"), facility_evidence.get("linkage_confidence"), reason)
+                logger.info("[FACILITY_GATE_HOLD] Company: %s | Reason: %s", company_name, reason)
                 self._hold_account(account, f"Facility validation failed: {reason}")
                 return
+            logger.info("[FACILITY_VALIDATED] Company: %s | Verified: True | Linkage: %s | Facility: %s", company_name, facility_evidence.get("linkage_confidence"), target_facility)
+            logger.info("[FACILITY_GATE_PASS] Company: %s | Facility: %s | Linkage: %s", company_name, target_facility, facility_evidence.get("linkage_confidence"))
+
             if float(account.get("icp_score") or 0) < 85:
+                logger.info("[OPPORTUNITY_HOLD] Company: %s | ICP: %s below 85", company_name, account.get("icp_score"))
                 self._hold_account(account, "ICP score below 85")
                 return
+            logger.info("[OPPORTUNITY_QUALIFIED] Company: %s | ICP Score: %s | Signal: %s", company_name, account.get("icp_score"), account.get("signal_type"))
             self._increment("qualified_opportunities")
+
             _, pipeline_fn = self._resolve_runtime_functions()
             result = pipeline_fn(
                 company_id=int(account["company_id"]),
@@ -1337,10 +1409,14 @@ class SalesoorjaOperator:
             self._provider_call("Apollo Enrich", len(stages.get("apollo", {}).get("attempts") or []))
             candidate = self._select_send_candidate(db, result)
             if candidate is None:
+                logger.info("[PERSON_GATE_HOLD] Company: %s | Reason: No candidate passed current-employment, facility, authority, and verified-email gates", company_name)
                 self._hold_account(account, "No candidate passed current-employment, facility, authority, and verified-email gates")
                 return
+            logger.info("[PERSON_GATE_PASS] Company: %s | Candidate: %s | Title: %s | Score: %s", company_name, candidate.candidate_name, candidate.candidate_title, candidate.score_composite)
+
             record = self._build_production_record(account, candidate, result)
             self._update(last_action=f"Generating outreach for {company_name} with DeepSeek")
+            logger.info("[PERSONALIZATION_STARTED] Company: %s | Candidate: %s | Role: %s", company_name, record.get("person"), record.get("title"))
             personalized = self._personalization.personalize_record(record, force_provider="AUTO")
             provider = str(personalized.get("llm_provider_used") or "")
             if provider.startswith("DEEPSEEK"):
@@ -1348,13 +1424,28 @@ class SalesoorjaOperator:
             elif provider.startswith("GEMINI"):
                 self._provider_call("Gemini")
             quality_score = float(personalized.get("quality_score") or 0)
+            logger.info("[PERSONALIZATION_RESULT] Company: %s | Provider: %s | Quality Score: %s", company_name, provider, quality_score)
             self._update(last_action=f"Claim validation completed for {company_name}: {personalized.get('status', 'UNKNOWN')}")
             if personalized.get("status") != "VALIDATED" or quality_score < 85:
+                logger.info("[CLAIM_VALIDATION_HOLD] Company: %s | Status: %s | Quality: %s", company_name, personalized.get("status"), quality_score)
                 self._hold_account(account, f"Personalization quality {quality_score:.1f} below 85")
                 return
+            logger.info("[CLAIM_VALIDATION_PASS] Company: %s | Status: %s | Quality: %s", company_name, personalized.get("status"), quality_score)
+
             record = self._personalization.enrich_record_for_rediff(record, personalized)
             record["PERSONALIZATION_STATUS"] = personalized["status"]
             record["PERSONALIZATION_SCORE"] = quality_score
+            approved_subject = str(personalized.get("subject") or "").strip()
+            approved_body = str(personalized.get("body") or "").strip()
+            record["FINAL_SUBJECT"] = approved_subject
+            record["SUBJECT"] = approved_subject
+            record["subject"] = approved_subject
+            record["FINAL_BODY_HTML"] = approved_body
+            record["BODY_HTML"] = approved_body
+            record["body_html"] = approved_body
+            record["FINAL_BODY_TEXT"] = approved_body
+            record["BODY_TEXT"] = approved_body
+            record["body_text"] = approved_body
             handoff = self._rediff.prepare_handoff(record, outreach_state=self._outreach_state(db, int(account["company_id"])))
             row = {
                 "company": company_name,
@@ -1368,6 +1459,7 @@ class SalesoorjaOperator:
             receipt = None
             if self._mode() == "PRODUCTION" and handoff.get("status") == QUEUED:
                 self._update(last_action=f"Sending {company_name} via Rediff")
+                logger.info("[REDIFF_SEND_STARTED] Company: %s | Recipient: %s", company_name, record["person"])
                 self._provider_call("Rediff")
                 with self._lock:
                     existing_receipts = deepcopy(self._state.get("transport_receipts") or [])
@@ -1384,8 +1476,10 @@ class SalesoorjaOperator:
                         self._state["transport_receipts"].append(dict(receipt))
                         self._save_state()
                 if receipt.get("transport_status") == SENT and receipt.get("smtp_sent") is True:
+                    logger.info("[REDIFF_SENT] Company: %s | MessageId: %s", company_name, receipt.get("message_id"))
                     handoff = {**handoff, "status": SENT, "smtp_sent": True, "transport_called": True}
                 else:
+                    logger.info("[REDIFF_FAILED] Company: %s | Status: %s | Reason: %s", company_name, receipt.get("transport_status"), receipt.get("error"))
                     handoff = {
                         **handoff,
                         "status": str(receipt.get("transport_status") or "FAILED"),
@@ -1439,6 +1533,7 @@ class SalesoorjaOperator:
         message = messages.get(stage, detail or f"Processing {company_name}: {stage}")
         logger.info("Production pipeline stage: %s", message)
         self._update(current_company=company_name, last_action=message)
+        self._heartbeat(message)
 
     def _select_send_candidate(self, db: Any, result: Mapping[str, Any]) -> Any:
         from models.decision_maker_candidate import DecisionMakerCandidate

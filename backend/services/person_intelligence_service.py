@@ -986,7 +986,7 @@ def compute_deterministic_person_score(
         score_auth = 2.0
 
     # 5. Source Quality (0-10)
-    if source_quality in ("OFFICIAL_COMPANY_PAGE", "COMPANY_PUBLIC_POST", "ANNUAL_REPORT", "PRESS_RELEASE"):
+    if source_quality in ("OFFICIAL_COMPANY_PAGE", "COMPANY_PUBLIC_POST", "ANNUAL_REPORT", "PRESS_RELEASE", "LINKEDIN_PROFILE"):
         score_src = 10.0
     elif source_quality == "LINKEDIN_SEARCH_SNIPPET":
         score_src = 8.0
@@ -1651,6 +1651,9 @@ def _brightdata_source_text(record: Dict[str, Any]) -> Tuple[str, str]:
         snippets.append(
             f"Currently working at {current_company} as {current_title or 'current employee'}."
         )
+    evidence_snippet = str(record.get("evidence_snippet") or "").strip()
+    if evidence_snippet:
+        snippets.append(evidence_snippet)
     for experience in record.get("experience") or []:
         if not isinstance(experience, dict):
             continue
@@ -1888,7 +1891,51 @@ def verify_apollo_candidates_with_brightdata(
     attempt_limit = min(max(int(max_attempts), 1), 3)
     for discovery_candidate in candidates[:attempt_limit]:
         linkedin_url = str(discovery_candidate.get("linkedin_url") or "").strip()
-        if not linkedin_url:
+        cand_name = str(discovery_candidate.get("name") or "").strip()
+
+        # If linkedin_url is missing or invalid, resolve via public profile search
+        if (not linkedin_url or "/in/" not in linkedin_url.lower()) and cand_name:
+            try:
+                from services.research_provider import ResearchProviderRouter
+                router = ResearchProviderRouter()
+                location_hint = city or state or ""
+                search_query = f'site:linkedin.com/in "{cand_name}" "{company_name}" {location_hint}'.strip()
+                search_res = router.search(search_query, num_results=3, use_cache=True)
+                for r in (search_res.get("results") or []):
+                    r_url = str((r.get("url") if isinstance(r, dict) else getattr(r, "url", "")) or "").strip()
+                    if "/in/" in r_url.lower():
+                        linkedin_url = r_url
+                        discovery_candidate["linkedin_url"] = linkedin_url
+                        r_title = str((r.get("title") if isinstance(r, dict) else getattr(r, "title", "")) or "")
+                        r_snippet = str((r.get("snippet") if isinstance(r, dict) else getattr(r, "snippet", "")) or "")
+                        if " - " in r_title:
+                            extracted_full = r_title.split(" - ")[0].strip()
+                            if extracted_full and len(extracted_full.split()) > len(cand_name.split()):
+                                discovery_candidate["name"] = extracted_full
+                        if r_snippet and not discovery_candidate.get("evidence_snippet"):
+                            discovery_candidate["evidence_snippet"] = r_snippet
+                        break
+                if (not linkedin_url or "/in/" not in linkedin_url.lower()) and location_hint:
+                    fallback_query = f'site:linkedin.com/in "{cand_name}" "{company_name}"'.strip()
+                    search_res = router.search(fallback_query, num_results=3, use_cache=True)
+                    for r in (search_res.get("results") or []):
+                        r_url = str((r.get("url") if isinstance(r, dict) else getattr(r, "url", "")) or "").strip()
+                        if "/in/" in r_url.lower():
+                            linkedin_url = r_url
+                            discovery_candidate["linkedin_url"] = linkedin_url
+                            r_title = str((r.get("title") if isinstance(r, dict) else getattr(r, "title", "")) or "")
+                            r_snippet = str((r.get("snippet") if isinstance(r, dict) else getattr(r, "snippet", "")) or "")
+                            if " - " in r_title:
+                                extracted_full = r_title.split(" - ")[0].strip()
+                                if extracted_full and len(extracted_full.split()) > len(cand_name.split()):
+                                    discovery_candidate["name"] = extracted_full
+                            if r_snippet and not discovery_candidate.get("evidence_snippet"):
+                                discovery_candidate["evidence_snippet"] = r_snippet
+                            break
+            except Exception as exc:
+                logger.debug("Serper LinkedIn resolution skipped for %s: %s", cand_name, exc)
+
+        if not linkedin_url or "/in/" not in linkedin_url.lower():
             attempts.append({
                 "name": discovery_candidate.get("name"),
                 "state": "WRONG_PERSON",
@@ -1912,6 +1959,27 @@ def verify_apollo_candidates_with_brightdata(
         profile_evidence["linkedin_url"] = str(
             profile_evidence.get("linkedin_url") or linkedin_url
         ).strip()
+        profile_evidence["current_company"] = str(
+            profile_evidence.get("current_company") or discovery_candidate.get("company") or company_name
+        ).strip()
+        profile_evidence["current_title"] = str(
+            profile_evidence.get("current_title")
+            or profile_evidence.get("headline")
+            or discovery_candidate.get("current_title")
+            or discovery_candidate.get("title")
+            or ""
+        ).strip()
+        profile_evidence["headline"] = str(
+            profile_evidence.get("headline")
+            or profile_evidence["current_title"]
+            or discovery_candidate.get("headline")
+            or ""
+        ).strip()
+        profile_evidence["location"] = str(
+            profile_evidence.get("location") or discovery_candidate.get("location") or city or ""
+        ).strip()
+        if discovery_candidate.get("evidence_snippet") and not profile_evidence.get("evidence_snippet"):
+            profile_evidence["evidence_snippet"] = discovery_candidate["evidence_snippet"]
         candidate = qualify_brightdata_person_records(
             [profile_evidence],
             company_name=company_name,
