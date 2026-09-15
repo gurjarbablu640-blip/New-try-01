@@ -133,7 +133,7 @@ class SerperSearchProvider(ResearchProvider):
     def get_status(self) -> str:
         return PROVIDER_LIVE if self.is_available() else PROVIDER_NOT_CONFIGURED
 
-    def search(self, query: str, num_results: int = 5, **kwargs: Any) -> Dict[str, Any]:
+    def search(self, query: str, num_results: int = 5, page: int = 1, **kwargs: Any) -> Dict[str, Any]:
         start_time = time.time()
         key = self._get_api_key()
         if not self.is_available():
@@ -211,9 +211,13 @@ class SerperSearchProvider(ResearchProvider):
 
             try:
                 req_start = time.time()
+                payload = {"q": query, "num": min(max(int(num_results), 1), 10)}
+                page_val = int(kwargs.get("page", page) or 1)
+                if page_val > 1:
+                    payload["page"] = page_val
                 resp = requests.post(
                     "https://google.serper.dev/search",
-                    json={"q": query, "num": min(max(int(num_results), 1), 10)},
+                    json=payload,
                     headers={
                         "X-API-KEY": key,
                         "Content-Type": "application/json",

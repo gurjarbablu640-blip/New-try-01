@@ -550,8 +550,31 @@ def discover_new_calibration_opportunities(
     if industry_filter and industry_filter != "All":
         filtered = [c for c in filtered if industry_filter.lower() in c["industry"].lower()]
 
-    # Attempt live search discovery via ResearchProviderRouter
-    from services.research_provider import ResearchProviderRouter
+    # Phase 2 Adaptive Discovery Integration
+    from services.discovery_query_planner import discovery_query_planner
+    from services.discovery_query_memory import (
+        discovery_query_memory,
+        STATE_SUCCESS_PRODUCTIVE,
+        STATE_SUCCESS_EXHAUSTED,
+        STATE_PROVIDER_ERROR,
+        STATE_RATE_LIMITED,
+        STATE_TIMEOUT,
+    )
+    from services.opportunity_reasoner import (
+        opportunity_reasoner,
+        CLASSIFICATION_STRONG,
+        CLASSIFICATION_INCOMPLETE,
+        CLASSIFICATION_WEAK,
+        CLASSIFICATION_UNAVAILABLE,
+    )
+    from services.adaptive_research_service import adaptive_research_service
+    from services.research_provider import (
+        ResearchProviderRouter,
+        PROVIDER_BUDGET_EXHAUSTED,
+        PROVIDER_QUOTA_EXHAUSTED,
+        PROVIDER_ERROR,
+    )
+
     router = ResearchProviderRouter()
     live_search_candidates = []
     search_res: Dict[str, Any] = {
@@ -560,92 +583,255 @@ def discover_new_calibration_opportunities(
         "cache_hit": False,
         "results": [],
     }
-    try:
-        geo_query = f"{geography} " if geography and geography != "PAN INDIA" and geography != "All" else "India "
-        search_res = router.search(
-            f"{geo_query}manufacturing plant expansion inaugurates commissioned 2026",
-            num_results=min(max(int(limit), 5), 10),
+
+    planned_query: Dict[str, Any] = {
+        "query": "catalog_fallback",
+        "page": 1,
+        "sector": "Precision Manufacturing",
+        "trigger": "plant_expansion",
+        "geography": geography,
+        "weight": 1.0,
+        "rationale": "Default catalog mode",
+    }
+    execution_state = STATE_SUCCESS_PRODUCTIVE
+    yield_score = 0.0
+    exhaustion_score = 0.0
+    score_components: Dict[str, Any] = {}
+
+    if not use_cache:
+        # 1. Stateful Adaptive Query Planning (Amendment 7)
+        planned_query = discovery_query_planner.get_next_planned_query(
             db=db,
-            use_cache=use_cache,
+            preferred_sector=industry_filter if industry_filter and industry_filter != "All" else None,
+            preferred_geo=geography if geography and geography != "PAN INDIA" and geography != "All" else None,
         )
-        if (
-            search_res.get("provider") == "serper"
-            and search_res.get("provider_status") == "LIVE"
-            and not search_res.get("cache_hit")
-            and not use_cache
-            and search_res.get("results")
-        ):
-            for item in search_res["results"]:
-                title = item.get("title", "")
-                snippet = item.get("snippet", "")
-                url = item.get("url", "")
-                extracted_name = _extract_company_name_from_title(title)
-                if not extracted_name:
-                    continue
 
-                from services.entity_truth_gate import validate_company_entity
-                is_valid_entity, entity_reason = validate_company_entity(extracted_name, title)
-                if not is_valid_entity:
-                    logger.info("Discovery Entity Gate: Blocked non-company '%s' (%s)", extracted_name, entity_reason)
-                    continue
+        query_to_execute = planned_query["query"]
+        page_to_execute = planned_query.get("page", 1)
+        sector_to_execute = planned_query.get("sector", "Automotive & Auto Components")
+        trigger_to_execute = planned_query.get("trigger", "plant_expansion")
+        geo_to_execute = planned_query.get("geography", geography)
 
-                live_search_candidates.append({
-                    "company_name": extracted_name[:100],
-                    "city": geography if geography and geography != "PAN INDIA" else "Industrial Corridor",
-                    "state": geography if geography and geography != "PAN INDIA" else "Pan-India",
-                    "industry": "Precision Manufacturing",
-                    "signal_type": "plant_expansion",
-                    "event_title": title[:200],
-                    "event_description": snippet[:500],
-                    "evidence_url": url,
-                    "source_classification": f"LIVE_SEARCH_{search_res.get('provider', 'WEB').upper()}",
-                    "data_provenance": "LIVE_SEARCH_DISCOVERED",
-                })
-    except Exception as e:
-        logger.warning("Live search discovery note: %s", e)
+        try:
+            search_res = router.search(
+                query_to_execute,
+                num_results=min(max(int(limit), 5), 10),
+                db=db,
+                use_cache=use_cache,
+                page=page_to_execute,
+            )
 
-    if live_search_candidates:
-        from services.trigger_discovery_service import evaluate_event_semantics, extract_event_date
+            p_status = search_res.get("provider_status")
+            err_msg = str(search_res.get("error") or "")
 
-        for candidate in live_search_candidates:
-            title = str(candidate.get("event_title") or "")
-            snippet = str(candidate.get("event_description") or "")
-            url = str(candidate.get("evidence_url") or "")
-            source_item = next(
-                (item for item in search_res.get("results", []) if str(item.get("url") or "") == url),
-                {},
-            )
-            result_date = str((source_item.get("metadata") or {}).get("date") or "")
-            evidence_text = ". ".join(value for value in (title, snippet, result_date) if value)
-            semantics = evaluate_event_semantics(snippet, title=title)
-            recency = extract_event_date(
-                f"{snippet} {result_date}",
-                title=title,
-                now_dt=datetime.now(timezone.utc),
-                url=url,
-            )
-            facility = _resolve_live_facility(str(candidate.get("company_name") or ""), evidence_text)
-            trigger_valid = bool(
-                semantics.get("is_valid")
-                and recency.get("recency_tier") in {"CURRENT", "RECENT"}
-                and not recency.get("is_future_planned_milestone")
-            )
-            facility_verified = bool(
-                facility.get("facility_verified")
-                and facility.get("linkage_confidence") in {"DIRECT", "STRONG"}
-            )
-            candidate.update(
-                city=facility.get("city") or "",
-                state=facility.get("state") or "",
-                current_run_live=True,
-                trigger_valid=trigger_valid,
-                trigger_semantics=semantics,
-                trigger_recency=recency,
-                facility_verified=facility_verified,
-                facility=facility.get("facility_name") or "",
-                facility_evidence=facility,
-                opportunity_qualified=trigger_valid and facility_verified,
-            )
+            # 2. Check Execution States & Provider Errors (Amendment 4)
+            if p_status in {PROVIDER_BUDGET_EXHAUSTED, PROVIDER_QUOTA_EXHAUSTED} or "429" in err_msg:
+                execution_state = STATE_RATE_LIMITED
+                discovery_query_memory.record_query_execution(
+                    query=query_to_execute,
+                    page=page_to_execute,
+                    sector=sector_to_execute,
+                    trigger=trigger_to_execute,
+                    geography=geo_to_execute,
+                    execution_state=execution_state,
+                    metadata_json={"error": err_msg},
+                    db=db,
+                )
+            elif p_status == PROVIDER_ERROR or (err_msg and "no organic results" not in err_msg.lower()):
+                execution_state = (
+                    STATE_TIMEOUT
+                    if ("timed out" in err_msg.lower() or "timeout" in err_msg.lower())
+                    else STATE_PROVIDER_ERROR
+                )
+                discovery_query_memory.record_query_execution(
+                    query=query_to_execute,
+                    page=page_to_execute,
+                    sector=sector_to_execute,
+                    trigger=trigger_to_execute,
+                    geography=geo_to_execute,
+                    execution_state=execution_state,
+                    metadata_json={"error": err_msg},
+                    db=db,
+                )
+            elif (
+                search_res.get("provider") == "serper"
+                and search_res.get("provider_status") in {"LIVE", "EMPTY"}
+                and not search_res.get("cache_hit")
+            ):
+                raw_results = search_res.get("results", []) or []
+
+                # 3. Cheap Filters Before LLM (Amendment 6)
+                grouped_candidates, filter_telemetry = opportunity_reasoner.apply_cheap_filters(raw_results)
+
+                strong_count = 0
+                incomplete_count = 0
+                weak_count = 0
+
+                from services.trigger_discovery_service import evaluate_event_semantics, extract_event_date
+
+                for candidate_group in grouped_candidates:
+                    company_name = candidate_group.get("company_name", "")
+
+                    # 4. Opportunity Reasoner (Amendment 1 & 3)
+                    assessment = opportunity_reasoner.reason_opportunity(
+                        candidate_group=candidate_group,
+                        sector=sector_to_execute,
+                        geography=geo_to_execute,
+                    )
+
+                    # 5. Targeted Research for Incomplete Leads (if promising)
+                    if assessment.get("opportunity_classification") == CLASSIFICATION_INCOMPLETE:
+                        incomplete_count += 1
+                        research_res = adaptive_research_service.conduct_targeted_research(
+                            candidate_group=candidate_group,
+                            initial_assessment=assessment,
+                            sector=sector_to_execute,
+                            geography=geo_to_execute,
+                            db=db,
+                        )
+                        assessment = research_res.get("final_assessment", assessment)
+
+                    classification = assessment.get("opportunity_classification")
+                    if classification == CLASSIFICATION_STRONG:
+                        strong_count += 1
+                    elif classification == CLASSIFICATION_INCOMPLETE:
+                        pass
+                    else:
+                        weak_count += 1
+
+                    # Deterministic Grounding & Verification
+                    title = candidate_group["titles"][0] if candidate_group.get("titles") else ""
+                    snippet = candidate_group["snippets"][0] if candidate_group.get("snippets") else ""
+                    url = candidate_group["source_urls"][0] if candidate_group.get("source_urls") else ""
+                    source_item = next((item for item in raw_results if str(item.get("url") or "") == url), {})
+                    result_date = str((source_item.get("metadata") or {}).get("date") or "")
+                    evidence_text = ". ".join(value for value in (title, snippet, result_date) if value)
+
+                    semantics = evaluate_event_semantics(snippet, title=title)
+                    recency = extract_event_date(
+                        f"{snippet} {result_date}",
+                        title=title,
+                        now_dt=datetime.now(timezone.utc),
+                        url=url,
+                    )
+                    facility = _resolve_live_facility(company_name, evidence_text)
+
+                    trigger_valid = bool(
+                        semantics.get("is_valid")
+                        and recency.get("recency_tier") in {"CURRENT", "RECENT"}
+                        and not recency.get("is_future_planned_milestone")
+                    )
+                    facility_verified = bool(
+                        facility.get("facility_verified")
+                        and facility.get("linkage_confidence") in {"DIRECT", "STRONG"}
+                    )
+
+                    opportunity_qualified = bool(
+                        classification == CLASSIFICATION_STRONG
+                        and trigger_valid
+                        and facility_verified
+                    )
+
+                    live_search_candidates.append({
+                        "company_name": company_name[:100],
+                        "city": facility.get("city") or geo_to_execute,
+                        "state": facility.get("state") or geo_to_execute,
+                        "industry": sector_to_execute,
+                        "signal_type": trigger_to_execute,
+                        "event_title": title[:200],
+                        "event_description": snippet[:500],
+                        "evidence_url": url,
+                        "source_classification": f"LIVE_SEARCH_{search_res.get('provider', 'WEB').upper()}",
+                        "data_provenance": "LIVE_SEARCH_DISCOVERED",
+                        "current_run_live": True,
+                        "trigger_valid": trigger_valid,
+                        "trigger_semantics": semantics,
+                        "trigger_recency": recency,
+                        "facility_verified": facility_verified,
+                        "facility": facility.get("facility_name") or "",
+                        "facility_evidence": facility,
+                        "opportunity_qualified": opportunity_qualified,
+                        "opportunity_classification": classification,
+                        "opportunity_assessment": assessment,
+                        "evidence_provenance": assessment.get("evidence_provenance", {}),
+                    })
+
+                # 6. Productivity and Exhaustion Calculation (Amendment 2)
+                raw_count = len(raw_results)
+                dup_count = filter_telemetry.get("duplicate_urls", 0)
+                new_comp = len(grouped_candidates)
+                inval_ent = filter_telemetry.get("invalid_entities_rejected", 0)
+
+                yield_score, exhaustion_score, execution_state, score_components = (
+                    discovery_query_memory.compute_productivity_and_exhaustion(
+                        results_count=raw_count,
+                        duplicate_count=dup_count,
+                        new_companies=new_comp,
+                        strong_opps=strong_count,
+                        incomplete_opps=incomplete_count,
+                        weak_opps=weak_count,
+                        invalid_entities=inval_ent,
+                    )
+                )
+
+                # Persist execution in PostgreSQL + 24h Redis cooldown for success (Amendment 5)
+                discovery_query_memory.record_query_execution(
+                    query=query_to_execute,
+                    page=page_to_execute,
+                    sector=sector_to_execute,
+                    trigger=trigger_to_execute,
+                    geography=geo_to_execute,
+                    execution_state=execution_state,
+                    results_count=raw_count,
+                    unique_results=max(0, raw_count - dup_count),
+                    new_companies=new_comp,
+                    strong_opps=strong_count,
+                    incomplete_opps=incomplete_count,
+                    weak_opps=weak_count,
+                    yield_score=yield_score,
+                    exhaustion_score=exhaustion_score,
+                    metadata_json=score_components,
+                    db=db,
+                )
+
+                # Mark newly seen URLs in Redis
+                fresh_urls = [r.get("url") for r in raw_results if r.get("url")]
+                discovery_query_memory.mark_urls_seen(fresh_urls)
+
+            else:
+                # 0 organic results returned
+                execution_state = STATE_SUCCESS_EXHAUSTED
+                yield_score, exhaustion_score, execution_state, score_components = (
+                    discovery_query_memory.compute_productivity_and_exhaustion(
+                        results_count=0,
+                        duplicate_count=0,
+                        new_companies=0,
+                        strong_opps=0,
+                        incomplete_opps=0,
+                        weak_opps=0,
+                        invalid_entities=0,
+                    )
+                )
+                discovery_query_memory.record_query_execution(
+                    query=query_to_execute,
+                    page=page_to_execute,
+                    sector=sector_to_execute,
+                    trigger=trigger_to_execute,
+                    geography=geo_to_execute,
+                    execution_state=execution_state,
+                    results_count=0,
+                    unique_results=0,
+                    new_companies=0,
+                    strong_opps=0,
+                    incomplete_opps=0,
+                    weak_opps=0,
+                    yield_score=yield_score,
+                    exhaustion_score=exhaustion_score,
+                    metadata_json=score_components,
+                    db=db,
+                )
+        except Exception as e:
+            logger.warning("Live search discovery note: %s", e)
 
     # Production no-cache discovery must never persist pilot catalog rows as current work.
     candidate_pool = live_search_candidates
@@ -701,6 +887,9 @@ def discover_new_calibration_opportunities(
             "target_facility": candidate.get("facility") or (candidate.get("facility_evidence") or {}).get("facility_name") or "",
             "facility_evidence": candidate.get("facility_evidence") or {},
             "opportunity_qualified": bool(candidate.get("opportunity_qualified")),
+            "opportunity_classification": candidate.get("opportunity_classification", "UNKNOWN"),
+            "opportunity_assessment": candidate.get("opportunity_assessment") or {},
+            "evidence_provenance": candidate.get("evidence_provenance") or {},
             "causality_chain": {
                 "event": candidate["event_title"],
                 "business_change": ingested["causality"]["five_question_reasoning"]["q1_what_changed"],
@@ -730,6 +919,11 @@ def discover_new_calibration_opportunities(
             ),
         },
         "candidates": discovered_candidates,
+        "planned_query": planned_query,
+        "execution_state": execution_state,
+        "yield_score": yield_score,
+        "exhaustion_score": exhaustion_score,
+        "score_components": score_components,
     }
 
 

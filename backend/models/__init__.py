@@ -20,6 +20,7 @@ from models.call_record import CallRecord
 from models.reasoning_engine import CompanyBeliefState, SignalEvidenceNode
 from models.lab_scope import NABLLabScope, NABLScopeParameter
 from models.decision_maker_candidate import DecisionMakerCandidate
+from models.discovery_query_log import DiscoveryQueryLog
 
 __all__ = [
     "Company", "Person", "CompanyWebsiteIntel", "CompanyIntentSignal", "OutreachDraft",
@@ -32,5 +33,5 @@ __all__ = [
     "CompanyIntelligenceFact", "CompanyTimelineEvent", "StakeholderIntelligence", "RegulatoryIntelligence",
     "CallRecord", "CompanyBeliefState", "SignalEvidenceNode",
     "NABLLabScope", "NABLScopeParameter",
-    "DecisionMakerCandidate",
+    "DecisionMakerCandidate", "DiscoveryQueryLog",
 ]

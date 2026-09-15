@@ -1279,6 +1279,21 @@ class SalesoorjaOperator:
                 if serper_before is not None and serper_after is not None and serper_after > serper_before:
                     self._provider_call("Serper", serper_after - serper_before)
             self._heartbeat(f"Serper live discovery search completed ({target_geo})")
+
+            planned = discovery.get("planned_query") or {}
+            exec_state = discovery.get("execution_state")
+            sec_name = planned.get("sector") or "Manufacturing"
+            trig_name = planned.get("trigger") or "Expansion"
+            geo_name = planned.get("geography") or target_geo
+            y_score = float(discovery.get("yield_score") or 0.0)
+
+            if exec_state == "SUCCESS_EXHAUSTED":
+                self._update(last_action=f"Discovery query exhausted ({sec_name} | {trig_name}) — rotating to next angle")
+            elif exec_state == "SUCCESS_PRODUCTIVE":
+                self._update(last_action=f"Productive discovery ({sec_name} in {geo_name}) — yield: {y_score:.1f}")
+            else:
+                self._update(last_action=f"Discovering: {sec_name} | {trig_name} | {geo_name}")
+
             source_status = discovery.get("source_status") or {}
             current_run_live = bool(source_status.get("current_run_live"))
             candidates = [
