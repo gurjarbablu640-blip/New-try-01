@@ -274,20 +274,28 @@ def ingest_discovered_signal_lead(
                 "rejection_reason": rejection_reason or resolution.get("rejection_reason"),
             }
 
-    # Strict Persistence Guard: Final check that clean_name is an authentic corporate entity
+    # Authoritative Pre-Persistence Entity Truth Gate (Task 3D.1D)
+    from services.pre_persistence_entity_gate import pre_persistence_entity_gate
     from services.entity_truth_gate import (
-        classify_entity_candidate,
-        EntityType,
         get_normalized_comparison_key,
         ENTITY_TELEMETRY,
     )
-    final_cls = classify_entity_candidate(clean_name, context_text=event_title, url=evidence_url or "")
-    if final_cls.get("entity_class") != EntityType.COMPANY:
+
+    prepersist_decision = pre_persistence_entity_gate.resolve_pre_persistence_decision(
+        candidate_name=clean_name,
+        title=event_title or "",
+        snippet=event_description or "",
+        url=evidence_url or "",
+        industry=industry or "",
+        facility_info=facility_evidence,
+    )
+
+    if not prepersist_decision.is_target_industrial or not prepersist_decision.canonical_company_name:
         logger.warning(
-            "[PERSISTENCE_GUARD] Blocked non-company '%s' (class=%s, reason=%s) from DB creation",
+            "[PREPERSISTENCE_GATE] Blocked non-target '%s' (type=%s, reason=%s) from Company DB persistence",
             clean_name,
-            final_cls.get("entity_class"),
-            final_cls.get("reason"),
+            prepersist_decision.entity_type,
+            prepersist_decision.reason,
         )
         return {
             "status": "rejected_invalid_entity",
@@ -295,8 +303,12 @@ def ingest_discovered_signal_lead(
             "company_name": clean_name,
             "icp_score": 0,
             "buying_window": None,
-            "rejection_reason": final_cls.get("reason"),
+            "rejection_reason": prepersist_decision.reason or f"Entity type {prepersist_decision.entity_type} not industrial target",
+            "prepersistence_decision": prepersist_decision.to_dict(),
         }
+
+    # Authoritative canonical company name from truth gate
+    clean_name = prepersist_decision.canonical_company_name.strip()
 
     # 1. Deduplicate or fetch company using normalized comparison key
     norm_key = get_normalized_comparison_key(clean_name)
@@ -961,6 +973,21 @@ def discover_new_calibration_opportunities(
                     # If still invalid, reject entity strictly
                     if not resolution or not resolution.get("is_valid") or not resolution.get("company_name"):
                         invalid_entities_rejected += 1
+                        continue
+
+                    # Pre-persistence deterministic early filter to avoid follow-up research waste
+                    from services.pre_persistence_entity_gate import pre_persistence_entity_gate
+                    cand_check_name = resolution["company_name"].strip()
+                    hard_reject = pre_persistence_entity_gate.deterministic_hard_reject(
+                        cand_check_name, context_text=title, url=url
+                    )
+                    if hard_reject:
+                        invalid_entities_rejected += 1
+                        logger.info(
+                            "[PREPERSIST_FILTER_BEFORE_RESEARCH] Filtered candidate '%s' before research: %s",
+                            cand_check_name,
+                            hard_reject.reason,
+                        )
                         continue
 
                     if used_page_evidence:

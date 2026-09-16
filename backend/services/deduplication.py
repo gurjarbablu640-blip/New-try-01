@@ -210,6 +210,22 @@ def ingest_or_merge_lead(
         if not company.apollo_id and apollo_id:
             company.apollo_id = apollo_id
     else:
+        from services.pre_persistence_entity_gate import pre_persistence_entity_gate
+        cand_dec = pre_persistence_entity_gate.resolve_pre_persistence_decision(
+            candidate_name=raw_name,
+            industry=industry or "",
+            url=company_data.get("website") or "",
+        )
+        if not cand_dec.is_target_industrial or not cand_dec.canonical_company_name:
+            logger.warning(
+                "[DEDUPLICATION_GUARD] Blocked non-target lead '%s' (type=%s, reason=%s) from Company creation",
+                raw_name,
+                cand_dec.entity_type,
+                cand_dec.reason,
+            )
+            return None, [], "REJECTED_NON_TARGET"
+        raw_name = cand_dec.canonical_company_name.strip()
+        norm_name = normalize_company_name(raw_name)
         company = Company(
             name=raw_name,
             normalized_name=norm_name,

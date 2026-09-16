@@ -1926,16 +1926,22 @@ class SalesoorjaOperator:
         from services.follow_up_engine import calculate_cadence_schedule, FollowUpEngine
 
         company_name = str(account.get("company_name") or "Unknown Company").strip()
-        from services.entity_truth_gate import classify_entity_candidate, EntityType, get_normalized_comparison_key
-        cls_check = classify_entity_candidate(company_name)
-        if cls_check.get("entity_class") != EntityType.COMPANY:
+        from services.pre_persistence_entity_gate import pre_persistence_entity_gate
+        from services.entity_truth_gate import get_normalized_comparison_key
+        cls_check = pre_persistence_entity_gate.resolve_pre_persistence_decision(
+            candidate_name=company_name,
+            industry=str(account.get("industry") or ""),
+            facility_info={"facility_name": str(account.get("facility") or "")},
+        )
+        if not cls_check.is_target_industrial or not cls_check.canonical_company_name:
             logger.warning(
-                "[OPERATOR_PERSISTENCE_GUARD] Skipping non-company candidate '%s' (class=%s, reason=%s)",
+                "[OPERATOR_PERSISTENCE_GUARD] Skipping non-target candidate '%s' (type=%s, reason=%s)",
                 company_name,
-                cls_check.get("entity_class"),
-                cls_check.get("reason"),
+                cls_check.entity_type,
+                cls_check.reason,
             )
             return None
+        company_name = cls_check.canonical_company_name.strip()
 
         norm_key = get_normalized_comparison_key(company_name)
         company = db.query(Company).filter((Company.name == company_name) | (Company.normalized_name == norm_key)).first()
