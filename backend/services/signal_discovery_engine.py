@@ -1104,9 +1104,9 @@ def discover_new_calibration_opportunities(
 
                 # 6. Productivity and Exhaustion Calculation (Amendment 2)
                 raw_count = len(raw_results)
-                dup_count = filter_telemetry.get("duplicate_urls", 0)
+                dup_count = max(0, len(raw_results) - len(seen_in_batch))
                 new_comp = len(grouped_candidates)
-                inval_ent = filter_telemetry.get("invalid_entities_rejected", 0)
+                inval_ent = invalid_entities_rejected
 
                 yield_score, exhaustion_score, execution_state, score_components = (
                     discovery_query_memory.compute_productivity_and_exhaustion(
