@@ -947,7 +947,7 @@ def discover_new_calibration_opportunities(
 
                     # Strategy B: Fallback to Snippet/Title Extraction
                     if not resolution or not resolution.get("is_valid"):
-                        raw_cand = extract_clean_company_name_from_title(title) or extract_candidate_company_name(title, snippet)
+                        raw_cand = extract_clean_company_name_from_title(title, url=url) or extract_candidate_company_name(title, snippet)
                         res_b = resolve_canonical_company_identity(
                             raw_candidate=raw_cand or "",
                             title=title,

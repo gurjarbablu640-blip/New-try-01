@@ -189,6 +189,48 @@ HEADLINE_VERB_PATTERNS = [
     r"\bto\s+build\b", r"\bto\s+invest\b",
     r"\bhas\b", r"\bgets\b", r"\bwins\b", r"\braises\b",
     r"\battracts\b", r"\bacquires\b",
+    r"\bto\s+supply\b", r"\bsupplies\b", r"\bsupplied\b",
+    r"\bto\s+deliver\b", r"\bdelivers\b", r"\bdelivered\b",
+    r"\bto\s+provide\b", r"\bprovides\b", r"\bprovided\b",
+    r"\bto\s+manufacture\b", r"\bmanufactures\b", r"\bmanufactured\b",
+    r"\bto\s+install\b", r"\binstalls\b", r"\binstalled\b",
+    r"\bto\s+establish\b", r"\bestablishes\b", r"\bestablished\b",
+    r"\bawards?\b", r"\bawarded\b",
+    r"\bbags?\s+order\b", r"\bbags?\s+contract\b",
+    r"\bsecures?\s+order\b", r"\bsecures?\s+contract\b",
+    r"\bwins?\s+order\b", r"\bwins?\s+contract\b",
+    r"\breceives?\s+order\b", r"\breceives?\s+contract\b", r"\breceived\s+order\b", r"\breceived\s+contract\b",
+    r"\bto\s+develop\b", r"\bdevelops\b", r"\bdeveloped\b",
+    r"\bto\s+execute\b", r"\bexecutes\b", r"\bexecuted\b",
+    r"\bto\s+construct\b", r"\bconstructs\b", r"\bconstructed\b",
+    r"\bto\s+implement\b", r"\bimplements\b", r"\bimplemented\b",
+]
+
+
+# Project Trackers, B2B Information Portals, and Industrial Databases
+PROJECT_TRACKER_AND_PORTAL_PATTERNS = [
+    r"\b(?:projects?|projectx|capex|tender|tenders)\s*(?:tracker|tracking|intelligence|monitor|database|portal|alert|alerts|info|watch|x)\b",
+    r"^(?:new\s+)?projects?\s+(?:india|tracker|tracking|database|portal|monitor)\b",
+    r"^welcome\s+to\s+.*\b(?:tracker|tracking|projects?|portal|database)\b",
+    r"\b(?:market|business|industrial|industry|project)\s+intelligence\b",
+    r"\b(?:industrial|industry|b2b|trade)\s+(?:media|portal|database|platform|insights?)\b",
+    r"\b(?:projects?|tenders?)\s+database\b",
+]
+
+PROJECT_TRACKER_AND_PORTAL_DOMAINS = [
+    "projectx", "projectxindia", "newprojectstracker", "projecttracker",
+    "projectmonitor", "industrialprojects", "projectsindia", "projects-india",
+    "projectstracker", "projectalert", "capextracker", "b2bportal", "tendersinfo",
+]
+
+MANUFACTURING_OWNERSHIP_PATTERNS = [
+    r"\b(?:our|its)\s+(?:manufacturing\s+plants?|factory|factories|production\s+facilities?|manufacturing\s+facilities?|manufacturing\s+units?|manufacturing\s+locations?|plants?)\b",
+    r"\b(?:we|company)\s+(?:manufacture|manufactures|produce|produces|fabricate|fabricates|operates?\s+(?:a|the|its)?\s*(?:plant|factory|facility))\b",
+    r"\b(?:production|manufacturing)\s+capacity\s+of\b",
+    r"\b(?:factory|plant)\s+address\b",
+    r"\bfacility\s+ownership\b",
+    r"\bour\s+facility\s+in\b",
+    r"\bmanufacturing\s+facility\s+in\b",
 ]
 
 # Events, expos, conferences, and exhibitions
@@ -588,6 +630,64 @@ def classify_entity_candidate(
                         "normalized_key": norm_key,
                     }
 
+
+    # Gate 9B: Project Trackers, B2B Intelligence Portals & Industrial Databases
+    # Check Manufacturer Exception:
+    has_manufacturing_evidence = False
+    combined_context = f"{context_text} {candidate}".casefold()
+    if any(re.search(pat, combined_context) for pat in MANUFACTURING_OWNERSHIP_PATTERNS):
+        has_manufacturing_evidence = True
+
+    # Check if candidate is a legitimate company with corporate legal suffix (e.g. Tata Projects Limited)
+    is_legitimate_project_company = False
+    if CORPORATE_SUFFIX_PATTERN.search(lowered):
+        portal_subwords = {"tracker", "tracking", "intelligence", "database", "portal", "monitor", "alert", "media", "b2b", "news", "newsletter", "insight", "insights", "projectx"}
+        if not any(sw in lowered for sw in portal_subwords):
+            is_legitimate_project_company = True
+
+    if not has_manufacturing_evidence and not is_legitimate_project_company:
+        # 1. Name patterns for project tracking / intelligence / portal
+        for pat in PROJECT_TRACKER_AND_PORTAL_PATTERNS:
+            if re.search(pat, lowered):
+                reason = f"Candidate is a project tracker / B2B media / project intelligence portal ('{raw}')"
+                cache_rejection(norm_key, EntityType.PUBLISHER, reason)
+                return {
+                    "candidate": raw,
+                    "entity_class": EntityType.PUBLISHER,
+                    "is_company": False,
+                    "confidence": 0.0,
+                    "reason": reason,
+                    "normalized_key": norm_key,
+                }
+
+        # 2. Domain matching: candidate matches source tracker / portal domain
+        if url:
+            parsed_netloc_9b = urlparse(url).netloc.casefold().removeprefix("www.")
+            if any(ptd in parsed_netloc_9b for ptd in PROJECT_TRACKER_AND_PORTAL_DOMAINS):
+                for dom_tok in re.findall(r"[a-z0-9]+", parsed_netloc_9b):
+                    if dom_tok in lowered and len(dom_tok) >= 4 and dom_tok not in ("india", "global", "online"):
+                        reason = f"Candidate matches project tracker/portal domain ('{parsed_netloc_9b}')"
+                        cache_rejection(norm_key, EntityType.PUBLISHER, reason)
+                        return {
+                            "candidate": raw,
+                            "entity_class": EntityType.PUBLISHER,
+                            "is_company": False,
+                            "confidence": 0.0,
+                            "reason": reason,
+                            "normalized_key": norm_key,
+                        }
+                if ("project" in parsed_netloc_9b or "tracker" in parsed_netloc_9b) and ("project" in lowered or "tracker" in lowered):
+                    reason = f"Candidate derives from project tracking site domain ('{parsed_netloc_9b}')"
+                    cache_rejection(norm_key, EntityType.PUBLISHER, reason)
+                    return {
+                        "candidate": raw,
+                        "entity_class": EntityType.PUBLISHER,
+                        "is_company": False,
+                        "confidence": 0.0,
+                        "reason": reason,
+                        "normalized_key": norm_key,
+                    }
+
     # Gate 10: Publisher & News Source Suppression
     # 1. Known publishers list
     if lowered in KNOWN_PUBLISHERS or norm_key in {"pv magazine", "pv magazine india", "jmk research", "ibef", "businessline"}:
@@ -814,6 +914,11 @@ def extract_clean_company_name_from_title(title: str, url: str = "") -> str:
             continue
 
         res = classify_entity_candidate(clean, context_text=raw_title, url=url)
+        # If this chunk is a publisher, news source, directory, or portal, NEVER accept as company
+        if res["entity_class"] in (EntityType.PUBLISHER, EntityType.NEWS_SOURCE, EntityType.DIRECTORY, EntityType.JOB_PORTAL):
+            logger.debug("Skipping publisher/source portal chunk '%s': %s", clean, res["reason"])
+            continue
+
         if res["is_company"]:
             final_cand = res.get("trimmed_candidate") or clean
             return final_cand[:100]
