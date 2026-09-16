@@ -570,3 +570,66 @@ def test_strategy_status_api(test_db):
     assert len(resp_dec.json()) >= 1
 
 
+# ── Requirement 13: Cold-Start Global Scope vs Exploration ────────────────────
+
+def test_cold_start_global_scope_distinction(test_db, ba_service):
+    """COLD_START must strictly represent global system query volume < 5.
+    
+    When total system queries >= 5 but 0 decisions exist, system enters EXPLORE,
+    not COLD_START.
+    """
+    # Case A: 3 queries in DB (< 5) -> COLD_START
+    for i in range(3):
+        test_db.add(DiscoveryQueryLog(
+            query=f"query {i}",
+            normalized_query=f"query {i}",
+            sector="Automotive & Auto Components",
+        ))
+    test_db.commit()
+
+    mode_a, meta_a = ba_service.determine_exploration_mode(test_db)
+    assert mode_a == "COLD_START"
+    assert "System in cold-start" in meta_a["reason"]
+
+    # Case B: Add 3 more queries -> total queries = 6 (>= 5), 0 decisions exist
+    for i in range(3, 6):
+        test_db.add(DiscoveryQueryLog(
+            query=f"query {i}",
+            normalized_query=f"query {i}",
+            sector="Automotive & Auto Components",
+        ))
+    test_db.commit()
+
+    mode_b, meta_b = ba_service.determine_exploration_mode(test_db)
+    # Must NOT be COLD_START! It is EXPLORE because explore_ratio = 0.0 < 25%
+    assert mode_b == "EXPLORE"
+    assert "explore" in meta_b["reason"].lower()
+
+
+# ── Requirement 14: Consecutive Sector Rotation Dampening ────────────────────
+
+def test_consecutive_sector_rotation_dampening(test_db, ba_service):
+    """Analyst must not repeatedly fixate on the same sector turn after turn."""
+    # Seed 10 queries
+    for i in range(10):
+        test_db.add(DiscoveryQueryLog(
+            query=f"query {i}",
+            normalized_query=f"query {i}",
+            sector="Aerospace & Defense",
+        ))
+    test_db.commit()
+
+    # Decision 1 selects a sector
+    d1 = ba_service.evaluate_next_strategy(test_db)
+    test_db.add(d1)
+    test_db.commit()
+
+    # Decision 2: thanks to consecutive dampening, must rotate to a different sector
+    d2 = ba_service.evaluate_next_strategy(test_db)
+    test_db.add(d2)
+    test_db.commit()
+
+    assert d2.sector != d1.sector
+
+
+

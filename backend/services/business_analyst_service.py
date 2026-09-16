@@ -375,21 +375,18 @@ class BusinessAnalystService:
             .all()
         )
 
-        if not recent_decisions:
-            return "COLD_START", {
-                "reason": "No previous strategic decisions recorded",
-                "explore_ratio": 0.0,
-                "window_size": 0,
-            }
-
-        explore_count = sum(1 for d in recent_decisions if d.mode == "EXPLORE")
         window_size = len(recent_decisions)
-        explore_ratio = explore_count / max(1, window_size)
+        explore_count = sum(1 for d in recent_decisions if d.mode == "EXPLORE")
+        explore_ratio = (explore_count / window_size) if window_size > 0 else 0.0
 
         # If explore ratio is below 25%, schedule an EXPLORE turn
         if explore_ratio < 0.25:
             mode = "EXPLORE"
-            reason = f"Rolling explore ratio {explore_ratio:.1%} < 25% target over last {window_size} decisions"
+            reason = (
+                f"Rolling explore ratio {explore_ratio:.1%} < 25% target over last {window_size} decisions"
+                if window_size > 0
+                else "System has historical queries but 0 recent decisions (initializing explore turn)"
+            )
         else:
             mode = "EXPLOIT"
             reason = f"Rolling explore ratio {explore_ratio:.1%} satisfies target (exploit mode active)"
@@ -438,8 +435,8 @@ class BusinessAnalystService:
         )
 
         for sector in sectors_to_evaluate:
-            # Check sector starvation: has sector been neglected in recent decisions?
-            sector_starved = sector not in recent_sectors[:5] if len(recent_sectors) >= 5 else False
+            # Check sector starvation: neglected in recent decisions
+            sector_starved = (sector not in recent_sectors[:5]) if recent_sectors else False
 
             # Default trigger for sector
             sec_default_trigger = MANUFACTURING_SECTORS[sector].get("default_trigger", "plant_expansion")
@@ -469,6 +466,13 @@ class BusinessAnalystService:
                     trigger=trigger,
                     geography=geo_to_test,
                 )
+
+                # Consecutive sector dampening to prevent monopolistic fixation
+                if recent_sectors:
+                    if sector == recent_sectors[0]:
+                        score -= 2.5  # Penalize repeating the immediately prior sector
+                    elif len(recent_sectors) > 1 and sector == recent_sectors[1]:
+                        score -= 1.0  # Mild dampening if selected 2 turns ago
 
                 # Anti-starvation adjustments:
                 # In EXPLORE mode or COLD_START: strongly boost starved sectors and under-tested angles
