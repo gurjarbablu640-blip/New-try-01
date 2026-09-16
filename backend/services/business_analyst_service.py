@@ -679,6 +679,21 @@ class BusinessAnalystService:
         explore_count = sum(1 for d in recent if d.mode == "EXPLORE")
         rolling_explore_ratio = round(explore_count / max(1, len(recent)), 3)
 
+        # Throughput & Pacing Telemetry
+        pacing_summary = {}
+        queue_depths = {}
+        try:
+            from services.daily_pacing_controller import daily_pacing_controller
+            from services.funnel_workflow_manager import funnel_workflow_manager
+            real_sends = daily_pacing_controller.get_real_sends_today(db)
+            queue_depths = funnel_workflow_manager.get_stage_depths(db)
+            pacing_summary = daily_pacing_controller.compute_pacing(
+                sent_today=real_sends,
+                send_ready_depth=queue_depths.get("SEND_READY", 0),
+            )
+        except Exception as e:
+            logger.debug("Could not attach pacing to strategy status: %s", e)
+
         return {
             "status": "ACTIVE",
             "total_strategic_decisions": total_decisions,
@@ -692,6 +707,8 @@ class BusinessAnalystService:
                 "enquiries_generated_total": int(total_enquiries),
                 "strong_per_query": round(int(total_strong) / max(1, total_queries), 3),
             },
+            "pacing": pacing_summary,
+            "queue_depths": queue_depths,
             "primary_kpi": "ENQUIRIES GENERATED",
         }
 

@@ -727,8 +727,20 @@ def discover_new_calibration_opportunities(
             ):
                 raw_results = search_res.get("results", []) or []
 
-                # 3. Cheap Filters Before LLM (Amendment 6)
+                # 3. Cheap Filters & Result Triage Before LLM (Amendments 3 & 6)
                 grouped_candidates, filter_telemetry = opportunity_reasoner.apply_cheap_filters(raw_results)
+
+                from services.search_result_triage import (
+                    triage_and_rank_results,
+                    CLASS_HIGH_VALUE_PRIMARY,
+                    CLASS_POTENTIALLY_RELEVANT,
+                    CLASS_COMPANY_PAGE,
+                )
+                from services.page_content_fetcher import page_content_fetcher
+                from services.structured_evidence_extractor import extract_structured_evidence
+
+                triaged_results = triage_and_rank_results(raw_results, max_fetch=3)
+                triaged_by_url = {item["url"]: item for item in triaged_results}
 
                 strong_count = 0
                 incomplete_count = 0
@@ -739,11 +751,49 @@ def discover_new_calibration_opportunities(
                 for candidate_group in grouped_candidates:
                     company_name = candidate_group.get("company_name", "")
 
-                    # 4. Opportunity Reasoner (Amendment 1 & 3)
+                    # 3b. Bounded Page Content Fetching & Structured Evidence Extraction
+                    evidence_packets = []
+                    candidate_urls = candidate_group.get("source_urls", []) or []
+                    for u in candidate_urls[:2]:
+                        norm_u = u.strip()
+                        if not norm_u:
+                            continue
+                        tr_item = triaged_by_url.get(norm_u)
+                        source_class = tr_item.get("relevance_class", "POTENTIALLY_RELEVANT") if tr_item else "SECONDARY"
+                        if source_class in {"NOISE", "FINANCIAL_MARKET_NOISE"} and len(candidate_urls) > 1:
+                            continue
+
+                        content_res = page_content_fetcher.fetch_page(norm_u, db=db, source_type=source_class)
+                        if content_res.get("fetch_status") == "FETCH_SUCCESS" and content_res.get("extracted_text"):
+                            title_fallback = candidate_group["titles"][0] if candidate_group.get("titles") else ""
+                            page_title = content_res.get("title") or title_fallback
+                            page_pub_date = content_res.get("publication_date")
+                            structured_facts = extract_structured_evidence(
+                                text=content_res["extracted_text"],
+                                title=page_title,
+                                url=norm_u,
+                                publication_date=page_pub_date,
+                            )
+                            evidence_packets.append({
+                                "source_type": source_class,
+                                "url": norm_u,
+                                "title": page_title,
+                                "publication_date": page_pub_date or "",
+                                "publisher": content_res.get("publisher") or "",
+                                "author": content_res.get("author") or "",
+                                "extracted_text": content_res.get("extracted_text") or "",
+                                "structured_facts": structured_facts,
+                                "independent_source_count": 1,
+                            })
+
+                    candidate_group["evidence_packets"] = evidence_packets
+
+                    # 4. Opportunity Reasoner with Evidence Packets
                     assessment = opportunity_reasoner.reason_opportunity(
                         candidate_group=candidate_group,
                         sector=sector_to_execute,
                         geography=geo_to_execute,
+                        evidence_packets=evidence_packets,
                     )
 
                     # 5. Targeted Research for Incomplete Leads (if promising)
@@ -757,6 +807,9 @@ def discover_new_calibration_opportunities(
                             db=db,
                         )
                         assessment = research_res.get("final_assessment", assessment)
+                        if research_res.get("aggregated_evidence"):
+                            evidence_packets = research_res.get("aggregated_evidence")
+                            candidate_group["evidence_packets"] = evidence_packets
 
                     classification = assessment.get("opportunity_classification")
                     if classification == CLASSIFICATION_STRONG:
@@ -766,17 +819,39 @@ def discover_new_calibration_opportunities(
                     else:
                         weak_count += 1
 
-                    # Deterministic Grounding & Verification
+                    # Deterministic Grounding & Verification using Extracted Evidence
                     title = candidate_group["titles"][0] if candidate_group.get("titles") else ""
                     snippet = candidate_group["snippets"][0] if candidate_group.get("snippets") else ""
                     url = candidate_group["source_urls"][0] if candidate_group.get("source_urls") else ""
                     source_item = next((item for item in raw_results if str(item.get("url") or "") == url), {})
                     result_date = str((source_item.get("metadata") or {}).get("date") or "")
-                    evidence_text = ". ".join(value for value in (title, snippet, result_date) if value)
 
-                    semantics = evaluate_event_semantics(snippet, title=title)
+                    # Incorporate fetched page text and facts into evidence
+                    page_body_texts = [p.get("extracted_text", "")[:2500] for p in evidence_packets if p.get("extracted_text")]
+                    rich_body = " ".join(page_body_texts)
+
+                    best_pub_date = ""
+                    for p in evidence_packets:
+                        if p.get("publication_date"):
+                            best_pub_date = p.get("publication_date")
+                            break
+                    if not best_pub_date:
+                        best_pub_date = result_date
+
+                    evidence_text = f"{title}. {snippet}. {rich_body}".strip()
+                    for p in evidence_packets:
+                        facts = p.get("structured_facts") or {}
+                        city_fact = facts.get("city")
+                        state_fact = facts.get("state")
+                        fac_name = facts.get("facility_name")
+                        if city_fact and city_fact.lower() not in evidence_text.lower():
+                            evidence_text += f" Located in {city_fact}, {state_fact or ''}."
+                        if fac_name and fac_name.lower() not in evidence_text.lower():
+                            evidence_text += f" Facility: {fac_name}."
+
+                    semantics = evaluate_event_semantics(f"{snippet} {rich_body[:1000]}", title=title)
                     recency = extract_event_date(
-                        f"{snippet} {result_date}",
+                        f"{snippet} {best_pub_date} {rich_body[:2000]}",
                         title=title,
                         now_dt=datetime.now(timezone.utc),
                         url=url,
@@ -809,7 +884,7 @@ def discover_new_calibration_opportunities(
                         "industry": sector_to_execute,
                         "signal_type": trigger_to_execute,
                         "event_title": title[:200],
-                        "event_description": snippet[:500],
+                        "event_description": (snippet + (" " + rich_body[:300] if rich_body else ""))[:500],
                         "evidence_url": url,
                         "source_classification": f"LIVE_SEARCH_{search_res.get('provider', 'WEB').upper()}",
                         "data_provenance": "LIVE_SEARCH_DISCOVERED",
@@ -824,6 +899,8 @@ def discover_new_calibration_opportunities(
                         "opportunity_classification": classification,
                         "opportunity_assessment": assessment,
                         "evidence_provenance": assessment.get("evidence_provenance", {}),
+                        "evidence_packets": evidence_packets,
+                        "independent_source_count": sum(p.get("independent_source_count", 1) for p in evidence_packets) if evidence_packets else 1,
                     })
 
                 # 6. Productivity and Exhaustion Calculation (Amendment 2)
@@ -845,6 +922,21 @@ def discover_new_calibration_opportunities(
                 )
 
                 # Persist execution in PostgreSQL + 24h Redis cooldown for success (Amendment 5)
+                meta_payload = dict(score_components)
+                meta_payload.update({
+                    "archetype": planned_query.get("archetype"),
+                    "precision_level": planned_query.get("precision_level"),
+                    "relaxation_reason": planned_query.get("relaxation_reason"),
+                    "root_search_intent_id": planned_query.get("root_search_intent_id"),
+                    "parent_query_id": planned_query.get("parent_query_id"),
+                    "was_substituted": planned_query.get("was_substituted", False),
+                    "substitution_reason": planned_query.get("substitution_reason"),
+                    "results_returned": raw_count,
+                    "results_after_url_dedup": max(0, raw_count - dup_count),
+                    "company_groups": new_comp,
+                    "valid_company_groups": len([c for c in live_search_candidates if c.get("company_name")]),
+                })
+
                 executed_query_log = discovery_query_memory.record_query_execution(
                     query=query_to_execute,
                     page=page_to_execute,
@@ -860,10 +952,24 @@ def discover_new_calibration_opportunities(
                     weak_opps=weak_count,
                     yield_score=yield_score,
                     exhaustion_score=exhaustion_score,
-                    metadata_json=score_components,
+                    metadata_json=meta_payload,
                     analyst_decision_id=strategy_decision.id if strategy_decision else None,
                     db=db,
                 )
+
+                # Enqueue candidates into durable PostgreSQL funnel workflow
+                try:
+                    from services.funnel_workflow_manager import funnel_workflow_manager
+                    for cand in live_search_candidates:
+                        funnel_workflow_manager.enqueue_candidate(
+                            db,
+                            source_query_id=executed_query_log.id if executed_query_log else None,
+                            analyst_decision_id=strategy_decision.id if strategy_decision else None,
+                            payload=cand,
+                            priority=80 if cand.get("opportunity_qualified") else 50,
+                        )
+                except Exception as eq_err:
+                    logger.debug("Could not enqueue candidate to funnel workflow: %s", eq_err)
 
                 # Mark newly seen URLs in Redis
                 fresh_urls = [r.get("url") for r in raw_results if r.get("url")]
@@ -883,6 +989,20 @@ def discover_new_calibration_opportunities(
                         invalid_entities=0,
                     )
                 )
+                meta_payload = dict(score_components)
+                meta_payload.update({
+                    "archetype": planned_query.get("archetype"),
+                    "precision_level": planned_query.get("precision_level"),
+                    "relaxation_reason": planned_query.get("relaxation_reason"),
+                    "root_search_intent_id": planned_query.get("root_search_intent_id"),
+                    "parent_query_id": planned_query.get("parent_query_id"),
+                    "was_substituted": planned_query.get("was_substituted", False),
+                    "substitution_reason": planned_query.get("substitution_reason"),
+                    "results_returned": 0,
+                    "results_after_url_dedup": 0,
+                    "company_groups": 0,
+                    "valid_company_groups": 0,
+                })
                 executed_query_log = discovery_query_memory.record_query_execution(
                     query=query_to_execute,
                     page=page_to_execute,
@@ -898,7 +1018,7 @@ def discover_new_calibration_opportunities(
                     weak_opps=0,
                     yield_score=yield_score,
                     exhaustion_score=exhaustion_score,
-                    metadata_json=score_components,
+                    metadata_json=meta_payload,
                     analyst_decision_id=strategy_decision.id if strategy_decision else None,
                     db=db,
                 )

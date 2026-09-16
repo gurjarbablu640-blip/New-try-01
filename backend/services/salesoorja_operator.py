@@ -61,6 +61,12 @@ COUNTER_KEYS = (
     "test_emails_sent",
     "production_emails_sent",
     "real_prospect_emails_sent",
+    "pages_fetched",
+    "pages_fetched_success",
+    "followup_searches",
+    "opportunities_deep_researched",
+    "evidence_complete",
+    "evidence_incomplete",
 )
 PROVIDER_KEYS = (
     "Serper",
@@ -839,8 +845,96 @@ class SalesoorjaOperator:
         state["daily_send_target"] = int(getattr(self.settings, "DAILY_SEND_TARGET", 150))
         state["daily_send_max"] = int(getattr(self.settings, "DAILY_SEND_MAX", 250))
         state["start_time"] = str(getattr(self.settings, "SALESOORJA_START_TIME", "09:00"))
-        state["end_time"] = str(getattr(self.settings, "SALESOORJA_END_TIME", "18:00"))
+        state["end_time"] = str(getattr(self.settings, "SALESOORJA_END_TIME", "23:59"))
         state["production_guard_errors"] = self._production_errors()
+
+        # Throughput & Pacing Telemetry
+        try:
+            from services.daily_pacing_controller import daily_pacing_controller
+            from services.funnel_workflow_manager import funnel_workflow_manager
+
+            db = self._db_factory() if self._db_factory else None
+            real_sends_today = 0
+            queue_depths = {}
+            send_ready_depth = 0
+            if db is not None:
+                try:
+                    real_sends_today = daily_pacing_controller.get_real_sends_today(db, business_date=state.get("business_date"))
+                    queue_depths = funnel_workflow_manager.get_stage_depths(db)
+                    send_ready_depth = queue_depths.get("SEND_READY", 0)
+                finally:
+                    db.close()
+
+            serper_calls = int((state.get("provider_usage") or {}).get("Serper", 0))
+            pacing = daily_pacing_controller.compute_pacing(
+                sent_today=real_sends_today,
+                send_ready_depth=send_ready_depth,
+                provider_limited=bool(serper_calls >= 1500),
+            )
+            state["daily_min_target"] = pacing["daily_min_target"]
+            state["daily_stretch_target"] = pacing["daily_stretch_target"]
+            state["sent_today"] = real_sends_today
+            state["expected_min_by_now"] = pacing["expected_min_by_now"]
+            state["expected_stretch_by_now"] = pacing["expected_stretch_by_now"]
+            state["send_deficit_to_100"] = pacing["send_deficit_to_100"]
+            state["send_deficit_to_150"] = pacing["send_deficit_to_150"]
+            state["send_ready_depth"] = send_ready_depth
+            state["queue_depths"] = queue_depths
+            state["forecast_status"] = pacing["forecast_status"]
+            state["primary_bottleneck"] = pacing["primary_bottleneck"]
+            state["pacing"] = pacing
+        except Exception as p_err:
+            logger.debug("Could not compute pacing for status payload: %s", p_err)
+
+        # Evidence Deep-Dive & Research Depth Telemetry
+        try:
+            pages_fetched_today = 0
+            pages_success_today = 0
+            db = self._db_factory() if self._db_factory else None
+            if db is not None:
+                try:
+                    from models.research_evidence import ResearchEvidenceRecord
+                    from sqlalchemy import func
+                    b_date_str = state.get("business_date")
+                    if b_date_str:
+                        start_of_day = datetime.fromisoformat(b_date_str).replace(tzinfo=timezone.utc)
+                    else:
+                        start_of_day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                    pages_fetched_today = db.query(func.count(ResearchEvidenceRecord.id)).filter(
+                        ResearchEvidenceRecord.retrieved_at >= start_of_day
+                    ).scalar() or 0
+                    pages_success_today = db.query(func.count(ResearchEvidenceRecord.id)).filter(
+                        ResearchEvidenceRecord.retrieved_at >= start_of_day,
+                        ResearchEvidenceRecord.fetch_status == "FETCH_SUCCESS",
+                    ).scalar() or 0
+                finally:
+                    db.close()
+
+            cnt = state.get("counters") or {}
+            c_fetched = cnt.get("pages_fetched", 0)
+            c_success = cnt.get("pages_fetched_success", 0)
+            pages_fetched_today = max(pages_fetched_today, c_fetched)
+            pages_success_today = max(pages_success_today, c_success)
+
+            rate = (pages_success_today / pages_fetched_today * 100.0) if pages_fetched_today > 0 else 0.0
+            state["pages_fetched_today"] = pages_fetched_today
+            state["pages_fetched_success_today"] = pages_success_today
+            state["page_fetch_success_rate"] = round(rate, 1)
+            state["opportunities_deep_researched"] = cnt.get("opportunities_deep_researched", 0)
+            state["followup_searches_today"] = cnt.get("followup_searches", 0)
+            state["evidence_complete_count"] = cnt.get("evidence_complete", 0)
+            state["evidence_incomplete_count"] = cnt.get("evidence_incomplete", 0)
+            state["current_research_stage"] = state.get("current_research_stage") or "Idle"
+
+            # Cost control metrics
+            qual_opps = max(1, cnt.get("qualified_opportunities", 0))
+            serper_calls = int((state.get("provider_usage") or {}).get("Serper", 0))
+            state["searches_per_qualified_opportunity"] = round(serper_calls / qual_opps, 2)
+            state["pages_read_per_qualified_opportunity"] = round(pages_success_today / qual_opps, 2)
+            state["followups_per_qualified_opportunity"] = round(cnt.get("followup_searches", 0) / qual_opps, 2)
+        except Exception as r_err:
+            logger.debug("Could not compute research telemetry for status payload: %s", r_err)
+
         return state
 
     def get_transport_receipts(self) -> list[dict[str, Any]]:
@@ -1364,7 +1458,27 @@ class SalesoorjaOperator:
 
     def _process_production_account(self, db: Any, account: Mapping[str, Any], account_key: str) -> None:
         company_name = str(account.get("company_name") or "Unknown company")
-        self._update(current_company=company_name, last_action=f"Validating trigger and facility for {company_name}")
+        ev_packets = account.get("evidence_packets") or []
+        packet_count = len(ev_packets)
+        if packet_count > 0:
+            self._update(
+                current_company=company_name,
+                last_action=f"Deep research completed ({packet_count} sources): {company_name}",
+                current_research_stage=f"Synthesizing evidence for {company_name}",
+            )
+            self._increment("opportunities_deep_researched")
+            self._increment("pages_fetched", packet_count)
+            self._increment("pages_fetched_success", sum(1 for p in ev_packets if p.get("extracted_text")))
+            if account.get("opportunity_classification") == "STRONG":
+                self._increment("evidence_complete")
+            else:
+                self._increment("evidence_incomplete")
+        else:
+            self._update(
+                current_company=company_name,
+                last_action=f"Validating trigger and facility for {company_name}",
+                current_research_stage=f"Verifying facility location for {company_name}",
+            )
         self._increment("companies_researched")
         try:
             # 1. Entity Truth Gate: Discovered entity must be an actual organization/company

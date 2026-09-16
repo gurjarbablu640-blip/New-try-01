@@ -90,6 +90,9 @@ class OpportunityReasoner:
             logger.debug("Hive/DeepSeek provider init note: %s", exc)
         return None
 
+    def _get_deepseek_provider(self) -> Any:
+        return self._get_hive_provider()
+
     def _get_gemini_provider(self) -> Any:
         if self._gemini_provider is not None:
             return self._gemini_provider
@@ -232,6 +235,7 @@ class OpportunityReasoner:
         sector: str = "",
         geography: str = "",
         allow_deterministic_fallback: bool = True,
+        evidence_packets: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Perform evidence-bound opportunity reasoning with strict fail-closed policy (Amendments 1 & 3)."""
         company_name = candidate_group.get("company_name", "Unknown")
@@ -240,14 +244,71 @@ class OpportunityReasoner:
         source_urls = candidate_group.get("source_urls", [])
         dates = candidate_group.get("dates", [])
 
-        # Build clean evidence prompt strictly constrained to provided text
-        evidence_text = "\n".join([
-            f"Title: {t}\nSnippet: {s}" for t, s in zip(titles, snippets)
-        ])
+        if evidence_packets is not None:
+            candidate_group["evidence_packets"] = evidence_packets
+
+        # Build evidence prompt strictly constrained to provided text/packets
+        evidence_packets = candidate_group.get("evidence_packets") or []
+        if evidence_packets:
+            packet_lines = []
+            for i, p in enumerate(evidence_packets, 1):
+                p_title = p.get("source_title") or p.get("title") or ""
+                p_url = p.get("source_url") or p.get("url") or ""
+                p_pub_date = p.get("publication_date") or ""
+                facts = p.get("structured_facts") or {}
+                p_event_date = p.get("event_date") or facts.get("event_date") or ""
+                p_fac_name = p.get("facility_name") or facts.get("facility_name") or ""
+                p_city = p.get("city") or facts.get("city") or ""
+                p_state = p.get("state") or facts.get("state") or ""
+                p_inv = p.get("investment_amount") or facts.get("investment_amount") or ""
+                p_cal = p.get("calibration_relevance") or facts.get("calibration_relevance") or []
+                p_text = p.get("extracted_text") or p.get("text") or ""
+                p_snips = p.get("supporting_snippets") or facts.get("supporting_snippets") or []
+
+                packet_lines.append(f"SOURCE {i} ({p.get('source_type', 'SECONDARY')}):")
+                if p_title:
+                    packet_lines.append(f"  Title: {p_title}")
+                if p_url:
+                    packet_lines.append(f"  URL: {p_url}")
+                if p_pub_date:
+                    packet_lines.append(f"  Publication Date: {p_pub_date}")
+                if p_event_date:
+                    packet_lines.append(f"  Event Date: {p_event_date}")
+                if p_fac_name or p_city or p_state:
+                    packet_lines.append(f"  Facility: {p_fac_name} in {p_city}, {p_state}")
+                if p_inv:
+                    packet_lines.append(f"  Investment: {p_inv}")
+                if p_cal:
+                    if isinstance(p_cal, list):
+                        cal_strs = [f"{c.get('keyword', '')}: {c.get('demand_type', '')}" if isinstance(c, dict) else str(c) for c in p_cal]
+                        packet_lines.append(f"  Calibration Demands: {', '.join(cal_strs)}")
+                    else:
+                        packet_lines.append(f"  Calibration Demands: {p_cal}")
+                if p_snips:
+                    packet_lines.append("  Extracted Passages:")
+                    for snip in p_snips[:3]:
+                        packet_lines.append(f"    - \"{snip}\"")
+                elif p_text:
+                    packet_lines.append(f"  Body: {p_text[:1000]}")
+            evidence_text = "\n".join(packet_lines)
+        else:
+            evidence_text = "\n".join([
+                f"Title: {t}\nSnippet: {s}" for t, s in zip(titles, snippets)
+            ])
 
         system_prompt = (
             "You are the Salesoorja Discovery Intelligence Reasoner for industrial calibration opportunities in India.\n"
-            "Evaluate ONLY the supplied news/announcement text. DO NOT fabricate or invent facts.\n"
+            "Evaluate ONLY the supplied evidence. DO NOT fabricate or invent facts.\n"
+            "Address these core questions based strictly on the text:\n"
+            "1. What exactly is happening?\n"
+            "2. At which physical facility (city/state)?\n"
+            "3. When did it happen or when is it planned?\n"
+            "4. Is the event current?\n"
+            "5. What equipment/process change is implied?\n"
+            "6. Why could calibration/testing demand arise?\n"
+            "7. What evidence supports that?\n"
+            "8. What critical information remains missing (e.g. facility_city, event_date)?\n"
+            "9. What next research action would resolve any uncertainty?\n"
             "CRITICAL RULES:\n"
             "1. Output ONLY valid JSON matching the requested schema.\n"
             "2. If facility location (city or state) is NOT mentioned in the text, set it to UNKNOWN.\n"
@@ -283,18 +344,21 @@ class OpportunityReasoner:
             '  "missing_fields": [string],\n'
             '  "confidence_score": float,\n'
             '  "rationale": string,\n'
-            '  "supporting_snippets": [string]\n'
+            '  "evidence_provenance": {\n'
+            '    "source_urls": [string],\n'
+            '    "supporting_snippets": [string]\n'
+            "  }\n"
             "}"
         )
 
-        messages = [{"role": "user", "content": user_prompt}]
         now_iso = datetime.now(timezone.utc).isoformat()
+        messages = [{"role": "user", "content": user_prompt}]
 
-        # Step 1: DeepSeek (Hive) Primary
-        hive = self._get_hive_provider()
-        if hive is not None and getattr(hive, "is_available", lambda: True)():
+        # Step 1: DeepSeek Primary
+        deepseek = self._get_deepseek_provider()
+        if deepseek is not None and getattr(deepseek, "is_available", lambda: True)():
             try:
-                resp = hive.complete(
+                resp = deepseek.complete(
                     system_prompt=system_prompt,
                     messages=messages,
                     temperature=0.1,
@@ -342,17 +406,26 @@ class OpportunityReasoner:
         if allow_deterministic_fallback:
             from services.entity_truth_gate import INDIAN_CITIES, INDIAN_STATES
             from services.trigger_discovery_service import extract_trigger_facility_link
-            link_info = extract_trigger_facility_link(evidence_text)
+
+            eval_text = f"{' '.join(titles)} {' '.join(snippets)} {evidence_text}".strip()
+            link_info = extract_trigger_facility_link(eval_text)
             city_found = str(link_info.get("facility_city_from_trigger") or "").strip().title() or None
             if not city_found:
-                for word in re.findall(r"\b[A-Za-z]+(?:\s+[A-Za-z]+)?\b", evidence_text):
+                for p in evidence_packets:
+                    facts = p.get("structured_facts") or {}
+                    c = p.get("city") or facts.get("city")
+                    if c and c != "UNKNOWN" and c.lower() in INDIAN_CITIES:
+                        city_found = c.title()
+                        break
+            if not city_found:
+                for word in re.findall(r"\b[A-Za-z]+(?:\s+[A-Za-z]+)?\b", eval_text):
                     w_lower = word.lower().strip()
                     if w_lower in INDIAN_CITIES:
                         city_found = word.title()
                         break
 
-            has_valid_company, _ = validate_company_entity(company_name, evidence_text)
-            sem = evaluate_event_semantics(evidence_text)
+            has_valid_company, _ = validate_company_entity(company_name, eval_text)
+            sem = evaluate_event_semantics(eval_text)
             has_valid_trigger = bool(sem.get("is_valid") and not sem.get("is_generic_financial"))
 
             if has_valid_company and city_found and has_valid_trigger:
@@ -371,11 +444,15 @@ class OpportunityReasoner:
                     "event_date": dates[0] if dates else "2026",
                     "calibration_need_indicators": ["Traceable process calibration"],
                     "missing_fields": [],
+                    "missing_evidence": [],
                     "confidence_score": 0.85,
+                    "inferred_equipment_impact": "Precision dimensional and sensor verification",
                     "rationale": "Deterministic fallback verified valid company, exact facility city, and current trigger from text without invention.",
                     "evidence_provenance": {
                         "source_urls": source_urls,
                         "supporting_snippets": snippets[:3],
+                        "source_tier": "PAGE_CONTENT_FETCHED" if evidence_packets else "SEARCH_SNIPPET",
+                        "independent_sources_count": len(evidence_packets) if evidence_packets else 1,
                         "reasoner_provider": "deterministic_fallback",
                         "reasoner_model": "safe_parser_v1",
                         "reasoned_at": now_iso,
@@ -396,12 +473,15 @@ class OpportunityReasoner:
                     "event_summary": titles[0] if titles else "Industrial facility milestone",
                     "event_date": dates[0] if dates else "2026",
                     "calibration_need_indicators": [],
-                    "missing_fields": ["facility_city"],
+                    "missing_fields": ["EXACT_FACILITY", "facility_city"],
+                    "missing_evidence": ["EXACT_FACILITY", "facility_city"],
                     "confidence_score": 0.5,
                     "rationale": "Deterministic fallback: valid company and trigger found, but facility city is missing in evidence.",
                     "evidence_provenance": {
                         "source_urls": source_urls,
                         "supporting_snippets": snippets[:3],
+                        "source_tier": "PAGE_CONTENT_FETCHED" if evidence_packets else "SEARCH_SNIPPET",
+                        "independent_sources_count": len(evidence_packets) if evidence_packets else 1,
                         "reasoner_provider": "deterministic_fallback",
                         "reasoner_model": "safe_parser_v1",
                         "reasoned_at": now_iso,
@@ -499,13 +579,35 @@ class OpportunityReasoner:
             parsed["missing_fields"] = missing
 
         parsed["opportunity_classification"] = classification
+        evidence_packets = candidate_group.get("evidence_packets") or []
         parsed["evidence_provenance"] = {
             "source_urls": source_urls,
             "supporting_snippets": (parsed.get("supporting_snippets") or snippets)[:3],
+            "source_tier": "PAGE_CONTENT_FETCHED" if evidence_packets else "SEARCH_SNIPPET",
+            "independent_sources_count": len(evidence_packets) if evidence_packets else 1,
             "reasoner_provider": provider_name,
             "reasoner_model": model_name,
             "reasoned_at": now_iso,
         }
+
+        missing = parsed.get("missing_fields") or []
+        if classification == CLASSIFICATION_INCOMPLETE and not missing:
+            missing = ["EXACT_FACILITY", "facility_city"]
+            parsed["missing_fields"] = missing
+
+        parsed["missing_evidence"] = missing
+
+        if parsed.get("inferred_equipment_impact") is None:
+            parsed["inferred_equipment_impact"] = "Precision dimensional inspection and sensor calibration"
+
+        co_name = parsed.get("company_name", "Unknown")
+        if classification == CLASSIFICATION_STRONG:
+            logger.info("[REASONER_STRONG] Company: %s | City: %s | Score: %.2f", co_name, city, float(parsed.get("confidence_score") or 0.8))
+        elif classification == CLASSIFICATION_INCOMPLETE:
+            logger.info("[REASONER_INCOMPLETE] Company: %s | Missing: %s", co_name, parsed.get("missing_fields"))
+        else:
+            logger.info("[REASONER_WEAK] Company: %s | Reason: %s", co_name, (parsed.get("rationale") or "")[:80])
+
         return parsed
 
 
