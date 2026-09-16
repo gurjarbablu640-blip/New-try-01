@@ -695,7 +695,7 @@ def discover_new_calibration_opportunities(
         )
 
         # 1. Stateful Adaptive Query Planning under Business Analyst Guidance
-        planned_query = discovery_query_planner.get_next_planned_query(
+        planned_query = discovery_query_planner.plan_with_llm_strategist(
             db=db,
             preferred_sector=strategy_decision.sector,
             preferred_geo=strategy_decision.geography,
@@ -1164,6 +1164,11 @@ def discover_new_calibration_opportunities(
                     "results_after_url_dedup": max(0, raw_count - dup_count),
                     "company_groups": new_comp,
                     "valid_company_groups": len([c for c in live_search_candidates if c.get("company_name")]),
+                    "planner_provider": planned_query.get("provider"),
+                    "search_goal": planned_query.get("search_goal"),
+                    "search_lane": planned_query.get("search_lane"),
+                    "llm_confidence": planned_query.get("confidence"),
+                    "strategy_summary": planned_query.get("strategy_summary"),
                 })
 
                 executed_query_log = discovery_query_memory.record_query_execution(
