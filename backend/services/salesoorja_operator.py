@@ -1855,10 +1855,23 @@ class SalesoorjaOperator:
         from services.follow_up_engine import calculate_cadence_schedule, FollowUpEngine
 
         company_name = str(account.get("company_name") or "Unknown Company").strip()
-        company = db.query(Company).filter(Company.name == company_name).first()
+        from services.entity_truth_gate import classify_entity_candidate, EntityType, get_normalized_comparison_key
+        cls_check = classify_entity_candidate(company_name)
+        if cls_check.get("entity_class") != EntityType.COMPANY:
+            logger.warning(
+                "[OPERATOR_PERSISTENCE_GUARD] Skipping non-company candidate '%s' (class=%s, reason=%s)",
+                company_name,
+                cls_check.get("entity_class"),
+                cls_check.get("reason"),
+            )
+            return None
+
+        norm_key = get_normalized_comparison_key(company_name)
+        company = db.query(Company).filter((Company.name == company_name) | (Company.normalized_name == norm_key)).first()
         if not company:
             company = Company(
                 name=company_name,
+                normalized_name=norm_key,
                 domain=str(account.get("domain") or ""),
                 city=str(account.get("city") or ""),
                 state=str(account.get("state") or ""),

@@ -1,20 +1,122 @@
-"""Entity Truth Gate — Validates that discovered entities are genuine corporate organizations.
+"""Entity Truth Gate — Hardened Company Entity Resolution and False-Positive Suppression.
 
-Prevents non-company entities from entering the Salesoorja pipeline:
-- Public figures and political titles (PM Modi, Chief Minister, etc.)
-- Editorial headlines and predicate verb phrases
-- Geographic locations, states, and city names
-- Events, expos, conferences, and summits
-- Government bodies, public policies, and schemes
-- Generic adjectives and abstract nouns
+Implements Task 3C.1 deterministic entity classification:
+- Explicit EntityType classifications (COMPANY, PERSON, PUBLISHER, NEWS_SOURCE, DIRECTORY,
+  JOB_PORTAL, GOVERNMENT_SECTOR_LABEL, PRODUCT_OR_SERVICE, ARTICLE_HEADLINE_FRAGMENT,
+  GENERIC_INDUSTRY_TERM, NAVIGATION_LABEL, UNKNOWN)
+- Layered deterministic entity classification pipeline:
+  1. Normalization (whitespace, quotes, HTML artifacts, bullets; preserve '&', '-', '.', '+')
+  2. Obvious non-company rejection (empty, length < 2, numeric counters, dates, calendar years)
+  3. Bounded in-memory rejected-entity cache
+  4. Public figures & conservative person suppression
+  5. Navigation & generic page labels
+  6. Headline predicate verbs / editorial fragments
+  7. Geographic locations alone
+  8. Events, expos, summits, schemes, policies
+  9. Publisher & news source suppression (dynamic domain + known list)
+  10. Directory & job portal suppression
+  11. Generic phrase, commercial offer, product, and government sector suppression
+  12. Company positive shape validation
+- Headline boundary trimming:
+  Isolates corporate subject before action/predicate verbs when resolving entities from titles/headlines.
+- Persistence guard: only EntityType.COMPANY may proceed into Company persistence.
 """
 from __future__ import annotations
 
+import html
 import logging
 import re
-from typing import Tuple
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+class EntityType:
+    COMPANY = "COMPANY"
+    PERSON = "PERSON"
+    PUBLISHER = "PUBLISHER"
+    NEWS_SOURCE = "NEWS_SOURCE"
+    DIRECTORY = "DIRECTORY"
+    JOB_PORTAL = "JOB_PORTAL"
+    GOVERNMENT_SECTOR_LABEL = "GOVERNMENT_SECTOR_LABEL"
+    PRODUCT_OR_SERVICE = "PRODUCT_OR_SERVICE"
+    ARTICLE_HEADLINE_FRAGMENT = "ARTICLE_HEADLINE_FRAGMENT"
+    GENERIC_INDUSTRY_TERM = "GENERIC_INDUSTRY_TERM"
+    NAVIGATION_LABEL = "NAVIGATION_LABEL"
+    UNKNOWN = "UNKNOWN"
+
+
+# Telemetry counters for entity classification and lifecycle
+ENTITY_TELEMETRY: Dict[str, int] = {
+    "ENTITY_RAW_CANDIDATES": 0,
+    "ENTITY_COMPANY_ACCEPTED": 0,
+    "ENTITY_REJECT_PERSON": 0,
+    "ENTITY_REJECT_PUBLISHER": 0,
+    "ENTITY_REJECT_DIRECTORY": 0,
+    "ENTITY_REJECT_HEADLINE_FRAGMENT": 0,
+    "ENTITY_REJECT_GENERIC": 0,
+    "ENTITY_REJECT_PRODUCT_SERVICE": 0,
+    "ENTITY_REJECT_NAVIGATION": 0,
+    "ENTITY_REJECT_AMBIGUOUS": 0,
+    "ENTITY_NORMALIZED_MATCH": 0,
+    "COMPANY_ROWS_CREATED": 0,
+}
+
+
+def reset_entity_telemetry() -> None:
+    for k in ENTITY_TELEMETRY:
+        ENTITY_TELEMETRY[k] = 0
+
+
+def record_entity_telemetry(entity_class: str) -> None:
+    ENTITY_TELEMETRY["ENTITY_RAW_CANDIDATES"] += 1
+    if entity_class == EntityType.COMPANY:
+        ENTITY_TELEMETRY["ENTITY_COMPANY_ACCEPTED"] += 1
+    elif entity_class == EntityType.PERSON:
+        ENTITY_TELEMETRY["ENTITY_REJECT_PERSON"] += 1
+    elif entity_class in (EntityType.PUBLISHER, EntityType.NEWS_SOURCE):
+        ENTITY_TELEMETRY["ENTITY_REJECT_PUBLISHER"] += 1
+    elif entity_class in (EntityType.DIRECTORY, EntityType.JOB_PORTAL):
+        ENTITY_TELEMETRY["ENTITY_REJECT_DIRECTORY"] += 1
+    elif entity_class == EntityType.ARTICLE_HEADLINE_FRAGMENT:
+        ENTITY_TELEMETRY["ENTITY_REJECT_HEADLINE_FRAGMENT"] += 1
+    elif entity_class in (EntityType.GENERIC_INDUSTRY_TERM, EntityType.GOVERNMENT_SECTOR_LABEL):
+        ENTITY_TELEMETRY["ENTITY_REJECT_GENERIC"] += 1
+    elif entity_class == EntityType.PRODUCT_OR_SERVICE:
+        ENTITY_TELEMETRY["ENTITY_REJECT_PRODUCT_SERVICE"] += 1
+    elif entity_class == EntityType.NAVIGATION_LABEL:
+        ENTITY_TELEMETRY["ENTITY_REJECT_NAVIGATION"] += 1
+    else:
+        ENTITY_TELEMETRY["ENTITY_REJECT_AMBIGUOUS"] += 1
+
+
+# Bounded in-memory LRU cache for rejected entities
+_REJECTED_ENTITIES_CACHE: Dict[str, Dict[str, Any]] = {}
+_MAX_REJECTED_CACHE_SIZE = 1000
+
+
+def get_cached_rejection(norm_key: str) -> Optional[Tuple[str, str]]:
+    if norm_key in _REJECTED_ENTITIES_CACHE:
+        entry = _REJECTED_ENTITIES_CACHE[norm_key]
+        return entry["entity_class"], entry["reason"]
+    return None
+
+
+def cache_rejection(norm_key: str, entity_class: str, reason: str, context: str = "") -> None:
+    if len(_REJECTED_ENTITIES_CACHE) >= _MAX_REJECTED_CACHE_SIZE:
+        for k in list(_REJECTED_ENTITIES_CACHE.keys())[:200]:
+            _REJECTED_ENTITIES_CACHE.pop(k, None)
+    _REJECTED_ENTITIES_CACHE[norm_key] = {
+        "entity_class": entity_class,
+        "reason": reason,
+        "context": context[:100],
+    }
+
+
+def clear_rejected_entities_cache() -> None:
+    _REJECTED_ENTITIES_CACHE.clear()
+
 
 # Indian states and union territories
 INDIAN_STATES = {
@@ -43,7 +145,7 @@ POLITICAL_AND_PUBLIC_FIGURE_PATTERNS = [
     r"\bprime\s+minister\b",
     r"\bchief\s+minister\b",
     r"\b(?:cm|pm)\b",
-    r"\b(?:shri|smt|dr|mr|mrs|ms)\b",
+    r"\b(?:shri|smt|dr|mr|mrs|ms|prof)\b",
     r"\bhon(?:ou?rable|\'ble)?\b",
     r"\bminister\b",
     r"\bgovernor\b",
@@ -81,8 +183,12 @@ HEADLINE_VERB_PATTERNS = [
     r"\bapproves?\b", r"\bapproved\b",
     r"\blays\s+foundation\b",
     r"\binks\s+mou\b", r"\bsigns\s+mou\b",
-    r"\beyes\b", r"\bplans\b",
+    r"\beyes\b", r"\bplans\b", r"\bplanned\b",
     r"\bopens\b", r"\bopened\b",
+    r"\brelocates\b", r"\brelocated\b", r"\bto\s+relocate\b",
+    r"\bto\s+build\b", r"\bto\s+invest\b",
+    r"\bhas\b", r"\bgets\b", r"\bwins\b", r"\braises\b",
+    r"\battracts\b", r"\bacquires\b",
 ]
 
 # Events, expos, conferences, and exhibitions
@@ -109,150 +215,574 @@ GENERIC_NON_COMPANY_WORDS = {
     "product", "products", "catalog", "catalogue", "brochure", "brochures",
     "services", "equipment", "machinery", "category", "categories",
     "specification", "specifications", "downloads", "gallery", "portfolio",
+    "mega", "ultra", "prime", "smart", "eco", "green", "clean", "future",
+    "vision", "national", "premier", "online", "portal", "platform", "app",
 }
 
 # Generic page, navigation, section, and website content labels
 GENERIC_PAGE_AND_NAVIGATION_PATTERNS = [
-    # "Our Businesses", "Our Business", "Our Products", "Our Services", "Our Solutions", "Our Company", etc.
     r"^our\s+(?:businesses|business|products|services|solutions|company|presence|offerings|team|people|vision|mission|brands|portfolio|clients|partners|ventures|divisions|units|locations|facilities|operations|leaders(?:hip)?|story|journey|catalog|catalogue|brochure)$",
-    # "About Us", "About The Company", "About Our Company", "Who We Are", "What We Do", etc.
     r"^about\s+(?:us|the\s+company|our\s+company|our\s+group|group|ourselves)$",
     r"^(?:who\s+we\s+are|what\s+we\s+do|where\s+we\s+are|where\s+we\s+operate|how\s+we\s+work|why\s+choose\s+us|how\s+we\s+do\s+it)$",
-    # "Contact Us", "Get In Touch", "Reach Us", "Locate Us"
     r"^(?:contact\s+(?:us|me)?|get\s+in\s+touch|reach\s+us|locate\s+us|find\s+us)$",
-    # "Investor Relations", "Corporate Governance", "Financial Results", etc.
     r"^(?:investor\s+relations|investors?|financial\s+results|annual\s+reports?|quarterly\s+results|corporate\s+governance|shareholder\s+information)$",
-    # "Careers", "Work With Us", "Join Our Team", etc.
     r"^(?:careers?|job\s+openings?|work\s+with\s+us|join\s+(?:us|our\s+team)|current\s+openings?|employment\s+opportunities?)$",
-    # "Home", "Homepage", "Main Page", "Overview", "Company Overview", etc.
     r"^(?:home(?:page)?|main\s+page|overview|company\s+overview|business\s+overview|corporate\s+overview|welcome)$",
-    # "Media", "News", "Press Release", etc.
     r"^(?:media(?:\s+centre|\s+center)?|news(?:\s+(&|and)\s+media)?|press\s+releases?|in\s+the\s+news|latest\s+news|newsroom)$",
-    # "Locations", "Manufacturing Facilities", etc.
     r"^(?:locations?|our\s+locations?|global\s+presence|manufacturing\s+facilities|manufacturing\s+locations|our\s+facilities|facilities|plants?)$",
-    # "Industries", "Solutions", "Products & Services", etc.
     r"^(?:industries(?:\s+served)?|sectors|solutions|products\s+(&|and)\s+services|services\s+(&|and)\s+products|our\s+offerings|offerings)$",
-    # "Product Catalog", "Product Brochure", "Downloads", "Case Studies", etc.
     r"^(?:products?|services?|equipment|machinery|instrument|component)\s+(?:catalog|catalogue|brochure|line|range|category|categories|list|portfolio|specifications?|details|offerings?)$",
     r"^(?:catalog|catalogue|brochure|brochures|whitepapers?|case\s+studies|downloads?|gallery|faq|faqs|blog|blogs|articles?|sitemap|privacy\s+policy|terms\s+(?:of\s+use|and\s+conditions)|disclaimer)$",
-    # Standalone single-word category/navigation labels without corporate modifiers
     r"^(?:business|businesses|manufacturing|corporate|enterprise|services?|products?|solutions?|industries|facilities|locations?|overview|careers?|news|media|home|catalog|catalogue|brochure|brochures|downloads?)$",
 ]
 
-# Common news, aggregator, social, and directory domains that report on third-party companies
+# Directory, aggregator, job board, and reporting platforms
+DIRECTORY_AND_JOB_DOMAINS = {
+    "naukri.com", "indeed.com", "indiamart.com", "tradeindia.com", "scribd.com",
+    "zaubacorp.com", "tofler.in", "quickr.com", "justdial.com", "linkedin.com",
+    "glassdoor.com", "shine.com", "foundit.in", "monsterindia.com",
+    "yellowpages.in", "sulekha.com", "exportersindia.com",
+}
+
+# Common news, aggregator, media, and analyst domains
 NEWS_AND_AGGREGATOR_DOMAINS = {
     "thehindubusinessline.com", "economictimes.indiatimes.com", "business-standard.com", "livemint.com",
     "thehindu.com", "hindustantimes.com", "timesofindia.indiatimes.com",
     "reuters.com", "bloomberg.com", "cnbctv18.com", "moneycontrol.com",
     "financialexpress.com", "ndtv.com", "ndtvprofit.com", "zeeconnect.com",
     "theprint.in", "thewire.in", "scroll.in", "indiatoday.in", "news18.com",
-    "pib.gov.in", "bseindia.com", "nseindia.com", "linkedin.com", "naukri.com",
-    "indiamart.com", "wikipedia.org", "tradeindia.com", "zaubacorp.com",
-    "tofler.in", "quickr.com", "justdial.com", "youtube.com", "facebook.com",
-    "twitter.com", "x.com", "instagram.com",
+    "pib.gov.in", "bseindia.com", "nseindia.com", "pv-magazine-india.com",
+    "pv-magazine.com", "autocarpro.in", "etauto.com", "jmkresearch.com",
+    "ibef.org", "mercomindia.com", "saurenergy.com", "energytrend.com",
+    "spglobal.com", "woodmac.com", "fitchratings.com", "crisil.com",
+    "icra.in", "careedge.in", "careratings.com", "investingintamilnadu.com",
+    "nredcap.in", "autopunditz.com", "poidata.io",
+}
+
+# Known news, publisher, and research institute names for high-confidence shortcut
+KNOWN_PUBLISHERS = {
+    "pv magazine", "pv magazine india", "ibef", "businessline", "the hindu businessline",
+    "economic times", "the economic times", "jmk research", "reuters", "bloomberg",
+    "moneycontrol", "financial express", "livemint", "times of india", "business standard",
+    "etauto", "autocar professional", "s&p global", "zee news", "ndtv", "ndtv profit",
+    "cnbc-tv18", "cnbc tv18", "hindustan times", "the print", "the wire", "scroll.in",
+    "pib", "pib delhi", "mercom india", "saur energy", "crisil", "icra", "care ratings",
+    "careedge", "autopunditz", "poi data", "investing in tamil nadu",
 }
 
 # Recognized corporate suffixes indicating an actual organization
 CORPORATE_SUFFIX_PATTERN = re.compile(
     r"\b(ltd|limited|pvt|private|inc|corp|corporation|gmbh|llc|co|enterprises|"
     r"industries|technologies|electronics|motors|energy|solutions|systems|"
-    r"group|holdings|works|infra|power|engineering|manufacturing)\b",
+    r"group|holdings|works|infra|power|engineering|manufacturing|components|"
+    r"steel|chemicals|fasteners|renewables|auto|automotive|instruments)\b",
     re.IGNORECASE,
 )
 
 
-def validate_company_entity(name: str, context_text: str = "") -> Tuple[bool, str]:
-    """Deterministically validates whether a candidate entity is an actual company/organization.
-
-    Returns:
-        (True, "VALID_COMPANY_ENTITY") if passes all truth gates.
-        (False, exact_rejection_reason) if rejected.
+def normalize_entity_candidate(raw: str) -> str:
+    """Normalizes whitespace, HTML entities, leading/trailing punctuation, quotes, bullets.
+    Preserves meaningful corporate punctuation: '&', '-', '.', '+'.
     """
-    clean_name = str(name or "").strip()
-    if not clean_name:
-        return False, "Entity name is empty"
+    if not raw:
+        return ""
+    text = html.unescape(str(raw))
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(
+        r"^[\s\"'“”‘’•·\-\|\:\;\(\)\[\]\{\}\,\.\*]+|[\s\"'“”‘’•·\-\|\:\;\(\)\[\]\{\}\,\.\*]+$",
+        "",
+        text,
+    ).strip()
+    return text
 
-    if len(clean_name) < 2:
-        return False, "Entity name is too short (< 2 characters)"
 
-    lowered = clean_name.casefold()
-    norm_lowered = re.sub(r"^[^\w]+|[^\w]+$", "", lowered).strip()
-    words = clean_name.split()
+def get_normalized_comparison_key(name: str) -> str:
+    """Generates a canonical lookup key for deduplication.
+    Normalizes legal suffixes (Pvt Ltd, Limited, LLP, etc.) and punctuation,
+    WITHOUT altering the evidence-grounded display/canonical company name.
+    """
+    clean = normalize_entity_candidate(name).casefold()
+    clean = re.sub(
+        r"\b(?:private\s+limited|pvt\.?\s*ltd\.?|limited|ltd\.?|llp|inc\.?|corp\.?|corporation|gmbh|co\.?|co\s+ltd\.?)\b",
+        "",
+        clean,
+        flags=re.IGNORECASE,
+    ).strip()
+    clean = re.sub(r"[^\w\s]", "", clean)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean
 
-    # Gate 1: Public figures, politicians, and official titles
+
+def trim_headline_subject_boundary(text: str) -> Tuple[str, bool]:
+    """Isolates the corporate subject boundary preceding action/predicate text in headlines.
+
+    Examples:
+    'Waaree Energies relocates 6GW vertically' -> ('Waaree Energies', True)
+    'Maruti Suzuki has' -> ('Maruti Suzuki', True)
+    'ITP Aero has' -> ('ITP Aero', True)
+    'Toyota to build three assembly plants' -> ('Toyota', True)
+
+    Returns (trimmed_subject, did_trim).
+    CRITICAL: Only accepts the left-hand portion if it independently passes company validation!
+    """
+    raw = normalize_entity_candidate(text)
+    if not raw:
+        return "", False
+
+    for verb_pat in HEADLINE_VERB_PATTERNS:
+        match = re.search(verb_pat, raw, re.IGNORECASE)
+        if match:
+            lead_candidate = raw[: match.start()].strip()
+            lead_candidate = re.sub(r"[,;:\-\s]+$", "", lead_candidate).strip()
+            lead_candidate = re.sub(r"\s+(?:in|at|to|on|for|with|by|of)$", "", lead_candidate, flags=re.I).strip()
+            if len(lead_candidate) >= 2 and len(lead_candidate.split()) <= 5:
+                valid, _ = validate_company_entity(lead_candidate)
+                if valid:
+                    return lead_candidate, True
+
+    return raw, False
+
+
+def classify_entity_candidate(
+    candidate: str,
+    context_text: str = "",
+    url: str = "",
+    site_name: str = "",
+) -> Dict[str, Any]:
+    """Classifies candidate entity into explicit EntityType categories.
+
+    Pipeline:
+    1. Normalization
+    2. Empty / length / numeric / calendar checks
+    3. Cached rejection check
+    4. Public figures & person suppression
+    5. Navigation & generic page labels
+    6. Headline predicate verbs / editorial fragments
+    7. Geographic location alone
+    8. Events, expos, summits, schemes, policies
+    9. Publisher & news source suppression (dynamic domain + known list)
+    10. Directory & job portal suppression
+    11. Generic phrase, commercial offer, product, and government sector suppression
+    12. Company positive shape validation
+    """
+    raw = normalize_entity_candidate(candidate)
+    if not raw:
+        return {
+            "candidate": candidate,
+            "entity_class": EntityType.UNKNOWN,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": "Entity candidate is empty",
+            "normalized_key": "",
+        }
+
+    norm_key = get_normalized_comparison_key(raw)
+    cached = get_cached_rejection(norm_key)
+    if cached:
+        cached_class, cached_reason = cached
+        return {
+            "candidate": raw,
+            "entity_class": cached_class,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": f"Cached rejection: {cached_reason}",
+            "normalized_key": norm_key,
+        }
+
+    if len(raw) < 2:
+        reason = "Entity candidate is too short (< 2 chars)"
+        cache_rejection(norm_key, EntityType.UNKNOWN, reason)
+        return {
+            "candidate": raw,
+            "entity_class": EntityType.UNKNOWN,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "normalized_key": norm_key,
+        }
+
+    lowered = raw.casefold()
+    words = raw.split()
+
+    # Gate 1: Numeric counters or economic fragments (e.g. 'A 40 Billion', '11 Verified Upcoming...')
+    if re.match(r"^(?:a\s+)?[\$₹]?\s*\d+\s*(?:billion|million|crore|cr|bn|mn)\b", lowered) or re.match(r"^(\d+|[ivxlcdm]+)[\s\.\,\-]", lowered):
+        reason = f"Candidate is a numeric/economic fragment or counter ('{raw}')"
+        cache_rejection(norm_key, EntityType.ARTICLE_HEADLINE_FRAGMENT, reason)
+        return {
+            "candidate": raw,
+            "entity_class": EntityType.ARTICLE_HEADLINE_FRAGMENT,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "normalized_key": norm_key,
+        }
+
+    # Gate 2: Event or calendar year
+    if re.search(r"\b(20[2-3]\d)\b", lowered):
+        reason = f"Candidate contains an event or calendar year ('{raw}')"
+        cache_rejection(norm_key, EntityType.ARTICLE_HEADLINE_FRAGMENT, reason)
+        return {
+            "candidate": raw,
+            "entity_class": EntityType.ARTICLE_HEADLINE_FRAGMENT,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "normalized_key": norm_key,
+        }
+
+    # Gate 3: Public figures, politicians, official titles (Highest priority)
     for pattern in POLITICAL_AND_PUBLIC_FIGURE_PATTERNS:
         if re.search(pattern, lowered):
-            return False, f"Entity matches public figure or official title pattern ('{pattern}')"
+            reason = f"Entity matches public figure or official title pattern ('{pattern}')"
+            cache_rejection(norm_key, EntityType.PERSON, reason)
+            return {
+                "candidate": raw,
+                "entity_class": EntityType.PERSON,
+                "is_company": False,
+                "confidence": 0.0,
+                "reason": reason,
+                "normalized_key": norm_key,
+            }
 
-    # Gate 1b: Generic page, navigation, section, and website content labels
+    # Gate 4: Generic page and navigation headings
     for pattern in GENERIC_PAGE_AND_NAVIGATION_PATTERNS:
-        if re.match(pattern, norm_lowered):
-            return False, f"Entity is a generic page or navigation heading ('{clean_name}')"
+        if re.match(pattern, lowered):
+            reason = f"Entity is a generic page or navigation heading ('{raw}')"
+            cache_rejection(norm_key, EntityType.NAVIGATION_LABEL, reason)
+            return {
+                "candidate": raw,
+                "entity_class": EntityType.NAVIGATION_LABEL,
+                "is_company": False,
+                "confidence": 0.0,
+                "reason": reason,
+                "normalized_key": norm_key,
+            }
 
-    # Gate 2: Event or calendar year (e.g. 'Source India 2026', 'Auto Expo 2026')
-    if re.search(r"\b(20[2-3]\d)\b", lowered):
-        return False, "Entity contains an event or calendar year"
-
-    # Gate 3: Word Count Limit (headlines and phrases have many words)
-    if len(words) > 5:
-        return False, f"Entity word count ({len(words)}) exceeds maximum allowable for a corporate name"
-
-    # Gate 4: Starts with numeric count or list indicator (e.g. '11 Verified Upcoming...')
-    if re.match(r"^(\d+|[ivxlcdm]+)[\s\.\,\-]", lowered):
-        return False, "Entity starts with a numeric counter or list index"
-
-    # Gate 5: Editorial question / headline phrasing (e.g. 'Did you know...', 'Why...', 'Decoding...')
+    # Gate 5: Editorial questions and headline action verbs / predicate phrases
     if re.match(r"^(?:did\s+you\s+know|why|how|what|when|where|decoding|here\s+is)\b", lowered):
-        return False, "Entity uses editorial question or headline phrasing"
+        reason = "Entity uses editorial question or headline phrasing"
+        cache_rejection(norm_key, EntityType.ARTICLE_HEADLINE_FRAGMENT, reason)
+        return {
+            "candidate": raw,
+            "entity_class": EntityType.ARTICLE_HEADLINE_FRAGMENT,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "normalized_key": norm_key,
+        }
 
-    # Gate 5: Headline Action Verbs / Predicate Phrases
-    for pattern in HEADLINE_VERB_PATTERNS:
-        if re.search(pattern, lowered):
-            return False, f"Entity contains headline action verb/predicate ('{pattern}')"
+    for verb_pat in HEADLINE_VERB_PATTERNS:
+        if re.search(verb_pat, lowered):
+            reason = f"Entity contains headline action verb/predicate ('{verb_pat}')"
+            cache_rejection(norm_key, EntityType.ARTICLE_HEADLINE_FRAGMENT, reason)
+            return {
+                "candidate": raw,
+                "entity_class": EntityType.ARTICLE_HEADLINE_FRAGMENT,
+                "is_company": False,
+                "confidence": 0.0,
+                "reason": reason,
+                "normalized_key": norm_key,
+            }
 
-    # Gate 6: Geographic Locations / States / Cities alone
+    # Gate 6: Geographic locations alone
     if lowered in INDIAN_STATES:
-        return False, f"Entity is a geographic state name ('{clean_name}')"
+        reason = f"Entity is a geographic state name ('{raw}')"
+        cache_rejection(norm_key, EntityType.GOVERNMENT_SECTOR_LABEL, reason)
+        return {
+            "candidate": raw,
+            "entity_class": EntityType.GOVERNMENT_SECTOR_LABEL,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "normalized_key": norm_key,
+        }
+
     if lowered in INDIAN_CITIES:
-        return False, f"Entity is a geographic city name ('{clean_name}')"
+        reason = f"Entity is a geographic city name ('{raw}')"
+        cache_rejection(norm_key, EntityType.GOVERNMENT_SECTOR_LABEL, reason)
+        return {
+            "candidate": raw,
+            "entity_class": EntityType.GOVERNMENT_SECTOR_LABEL,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "normalized_key": norm_key,
+        }
+
     if any(lowered.endswith(f" {suffix}") for suffix in ("hub", "corridor", "state", "region", "landscape")):
-        # Check if the prefix is a state or city (e.g. "Gujarat Semiconductor Hub")
         prefix = re.sub(r"\s+(?:semiconductor\s+)?(?:hub|corridor|state|region|landscape)$", "", lowered).strip()
         if prefix in INDIAN_STATES or prefix in INDIAN_CITIES:
-            return False, f"Entity is a geographic region/hub ('{clean_name}')"
+            reason = f"Entity is a geographic region/hub ('{raw}')"
+            cache_rejection(norm_key, EntityType.GOVERNMENT_SECTOR_LABEL, reason)
+            return {
+                "candidate": raw,
+                "entity_class": EntityType.GOVERNMENT_SECTOR_LABEL,
+                "is_company": False,
+                "confidence": 0.0,
+                "reason": reason,
+                "normalized_key": norm_key,
+            }
 
     # Gate 7: Events, Expos, Summits, Conferences
     for pattern in EVENT_PATTERNS:
         if re.search(pattern, lowered):
-            return False, f"Entity matches event/expo/summit pattern ('{pattern}')"
+            reason = f"Entity matches event/expo/summit pattern ('{pattern}')"
+            cache_rejection(norm_key, EntityType.ARTICLE_HEADLINE_FRAGMENT, reason)
+            return {
+                "candidate": raw,
+                "entity_class": EntityType.ARTICLE_HEADLINE_FRAGMENT,
+                "is_company": False,
+                "confidence": 0.0,
+                "reason": reason,
+                "normalized_key": norm_key,
+            }
 
     # Gate 8: Government Schemes, Policies, and Administrative Releases
     for pattern in GOVERNMENT_SCHEME_PATTERNS:
         if re.search(pattern, lowered):
-            return False, f"Entity matches government scheme/policy/release pattern ('{pattern}')"
+            reason = f"Entity matches government scheme/policy/release pattern ('{pattern}')"
+            cache_rejection(norm_key, EntityType.GOVERNMENT_SECTOR_LABEL, reason)
+            return {
+                "candidate": raw,
+                "entity_class": EntityType.GOVERNMENT_SECTOR_LABEL,
+                "is_company": False,
+                "confidence": 0.0,
+                "reason": reason,
+                "normalized_key": norm_key,
+            }
 
-    # Gate 9: Generic Adjectives / Abstract Nouns
+    # Gate 9: Directory & Job Portal Suppression
+    job_and_directory_patterns = [
+        r"\b(?:jobs?|hiring|openings?|vacancies|recruitment|profiles?|apqp)\b",
+        r"^(?:careers?|jobs?|openings?|vacancies|working)\s+(?:at|in|with)\b",
+        r"\b(?:manufacturers|suppliers|exporters|dealers|distributors|wholesalers)\s+(?:in|near|across|of)\b",
+        r"\b(?:top|best|list\s+of)\s+.*\b(?:manufacturers|companies|suppliers|exporters)\b",
+        r"^how\s+many\s+.*\b(?:manufacturers|companies|suppliers)\b",
+    ]
+    for pat in job_and_directory_patterns:
+        if re.search(pat, lowered):
+            reason = f"Matches directory or job-listing heading ('{raw}')"
+            cache_rejection(norm_key, EntityType.JOB_PORTAL if "job" in pat or "profile" in pat or "apqp" in pat else EntityType.DIRECTORY, reason)
+            return {
+                "candidate": raw,
+                "entity_class": EntityType.JOB_PORTAL if "job" in pat or "profile" in pat or "apqp" in pat else EntityType.DIRECTORY,
+                "is_company": False,
+                "confidence": 0.0,
+                "reason": reason,
+                "normalized_key": norm_key,
+            }
+
+    if url:
+        parsed_netloc = urlparse(url).netloc.casefold().removeprefix("www.")
+        if any(d in parsed_netloc for d in DIRECTORY_AND_JOB_DOMAINS):
+            for dom_token in re.findall(r"[a-z0-9]+", parsed_netloc):
+                if dom_token in lowered and len(dom_token) >= 4:
+                    reason = f"Candidate matches directory/job board domain ('{parsed_netloc}')"
+                    cache_rejection(norm_key, EntityType.DIRECTORY, reason)
+                    return {
+                        "candidate": raw,
+                        "entity_class": EntityType.DIRECTORY,
+                        "is_company": False,
+                        "confidence": 0.0,
+                        "reason": reason,
+                        "normalized_key": norm_key,
+                    }
+
+    # Gate 10: Publisher & News Source Suppression
+    # 1. Known publishers list
+    if lowered in KNOWN_PUBLISHERS or norm_key in {"pv magazine", "pv magazine india", "jmk research", "ibef", "businessline"}:
+        reason = f"Candidate is a known news or research publication ('{raw}')"
+        cache_rejection(norm_key, EntityType.PUBLISHER, reason)
+        return {
+            "candidate": raw,
+            "entity_class": EntityType.PUBLISHER,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "normalized_key": norm_key,
+        }
+
+    # 2. Dynamic URL domain match against candidate (e.g. pv-magazine-india.com vs 'pv magazine India')
+    if url:
+        parsed_netloc = urlparse(url).netloc.casefold().removeprefix("www.")
+        domain_parts = [p for p in re.split(r"[\.\-]", parsed_netloc) if p not in ("com", "co", "in", "org", "net", "io", "news", "media")]
+        cand_tokens = [w for w in re.findall(r"[a-z0-9]+", lowered) if len(w) >= 2]
+        if domain_parts and cand_tokens:
+            overlap = set(domain_parts).intersection(cand_tokens)
+            if len(overlap) >= 2 or (len(cand_tokens) == 1 and overlap):
+                if any(nd in parsed_netloc for nd in NEWS_AND_AGGREGATOR_DOMAINS) or "magazine" in lowered or "times" in lowered or "daily" in lowered:
+                    reason = f"Candidate dynamically matches news publisher domain '{parsed_netloc}'"
+                    cache_rejection(norm_key, EntityType.PUBLISHER, reason)
+                    return {
+                        "candidate": raw,
+                        "entity_class": EntityType.PUBLISHER,
+                        "is_company": False,
+                        "confidence": 0.0,
+                        "reason": reason,
+                        "normalized_key": norm_key,
+                    }
+
+    # Gate 11: Person name heuristics (e.g. 'Omprakash Singh Bisht')
+    if (
+        2 <= len(words) <= 3
+        and not CORPORATE_SUFFIX_PATTERN.search(lowered)
+        and not any(w in lowered for w in ("technologies", "energy", "solar", "motors", "fasteners", "steel", "forge", "electronics"))
+    ):
+        indian_surnames_and_middles = {
+            "singh", "sharma", "patel", "kumar", "verma", "yadav", "gupta", "mishra",
+            "joshi", "bisht", "nair", "reddy", "rao", "shukla", "pandey", "choudhary",
+            "chauhan", "rathore", "agarwal", "bhat", "das", "deshmukh", "kulkarni",
+            "shinde", "jain", "bose", "sen", "mehta", "shah",
+        }
+        word_tokens = [w.casefold() for w in words]
+        if any(w in indian_surnames_and_middles for w in word_tokens[1:]):
+            reason = f"Matches individual human name pattern ('{raw}')"
+            cache_rejection(norm_key, EntityType.PERSON, reason)
+            return {
+                "candidate": raw,
+                "entity_class": EntityType.PERSON,
+                "is_company": False,
+                "confidence": 0.0,
+                "reason": reason,
+                "normalized_key": norm_key,
+            }
+
+    # Gate 12: Generic phrase, product, franchise, and government sector suppression
+    # Multi-sector list: e.g. "Automobile, Auto Components & EV"
+    if re.search(r"\b(?:automobile|auto\s+components?|ev|renewables?|electronics?|power)\s*(?:,|&|and)\s*(?:automobile|auto\s+components?|ev|renewables?|electronics?|power)\b", lowered):
+        reason = f"Candidate is a multi-sector category label ('{raw}')"
+        cache_rejection(norm_key, EntityType.GOVERNMENT_SECTOR_LABEL, reason)
+        return {
+            "candidate": raw,
+            "entity_class": EntityType.GOVERNMENT_SECTOR_LABEL,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "normalized_key": norm_key,
+        }
+
+    # Commercial franchise, marketing, newsletter, or report offerings
+    if re.search(r"\b(?:franchise|dealership|distributorship|newsletter|market\s+insights|data\s+insights|business\s+data)\b", lowered):
+        reason = f"Candidate is a generic commercial franchise, newsletter, or market data phrase ('{raw}')"
+        cache_rejection(norm_key, EntityType.PRODUCT_OR_SERVICE, reason)
+        return {
+            "candidate": raw,
+            "entity_class": EntityType.PRODUCT_OR_SERVICE,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "normalized_key": norm_key,
+        }
+
+    # Standalone generic products or terms
+    generic_product_terms = {
+        "ev", "solar module", "solar modules", "solar cell", "solar cells",
+        "ion cell", "ion cells", "lithium ion", "battery pack", "battery packs",
+        "electric vehicle", "electric vehicles", "wind turbine", "green hydrogen",
+        "semiconductor", "semiconductors", "daily morning newsletter",
+    }
+    if lowered in generic_product_terms or norm_key in {"ev", "solar module", "ion cell", "daily morning newsletter"}:
+        reason = f"Candidate is a generic product or publication phrase ('{raw}')"
+        cache_rejection(norm_key, EntityType.GENERIC_INDUSTRY_TERM, reason)
+        return {
+            "candidate": raw,
+            "entity_class": EntityType.GENERIC_INDUSTRY_TERM,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "normalized_key": norm_key,
+        }
+
+    # Gate 13: Generic adjectives / abstract nouns alone
     if len(words) == 1 and lowered in GENERIC_NON_COMPANY_WORDS:
-        return False, f"Entity is a single generic non-company word ('{clean_name}')"
+        reason = f"Entity is a single generic non-company word ('{raw}')"
+        cache_rejection(norm_key, EntityType.GENERIC_INDUSTRY_TERM, reason)
+        return {
+            "candidate": raw,
+            "entity_class": EntityType.GENERIC_INDUSTRY_TERM,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "normalized_key": norm_key,
+        }
 
     if all(w.casefold() in GENERIC_NON_COMPANY_WORDS for w in words):
-        return False, f"Entity comprises only generic non-company terms ('{clean_name}')"
+        reason = f"Entity comprises only generic non-company terms ('{raw}')"
+        cache_rejection(norm_key, EntityType.GENERIC_INDUSTRY_TERM, reason)
+        return {
+            "candidate": raw,
+            "entity_class": EntityType.GENERIC_INDUSTRY_TERM,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "normalized_key": norm_key,
+        }
 
-    # Gate 10: Ending with prepositions or trailing punctuation
+    # Gate 14: Incomplete trailing preposition fragment
     if lowered.endswith((" in", " at", " to", " on", " for", " with", " by", " of")):
-        return False, "Entity ends with an incomplete preposition fragment"
+        reason = "Entity ends with an incomplete preposition fragment"
+        cache_rejection(norm_key, EntityType.ARTICLE_HEADLINE_FRAGMENT, reason)
+        return {
+            "candidate": raw,
+            "entity_class": EntityType.ARTICLE_HEADLINE_FRAGMENT,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "normalized_key": norm_key,
+        }
 
-    return True, "VALID_COMPANY_ENTITY"
+    # Gate 15: Word count limit (> 5 words is almost certainly an editorial clause)
+    if len(words) > 5:
+        reason = f"Entity word count ({len(words)}) exceeds maximum allowable for a corporate name"
+        cache_rejection(norm_key, EntityType.ARTICLE_HEADLINE_FRAGMENT, reason)
+        return {
+            "candidate": raw,
+            "entity_class": EntityType.ARTICLE_HEADLINE_FRAGMENT,
+            "is_company": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "normalized_key": norm_key,
+        }
+
+    # Passed all rejection gates -> corporate shape validation
+    conf = 0.85
+    if CORPORATE_SUFFIX_PATTERN.search(lowered):
+        conf = 0.95
+
+    return {
+        "candidate": raw,
+        "trimmed_candidate": raw,
+        "entity_class": EntityType.COMPANY,
+        "is_company": True,
+        "confidence": conf,
+        "reason": "VALID_COMPANY_ENTITY",
+        "normalized_key": norm_key,
+    }
 
 
-def extract_clean_company_name_from_title(title: str) -> str:
+def validate_company_entity(name: str, context_text: str = "", url: str = "") -> Tuple[bool, str]:
+    """Deterministically validates whether a candidate entity is an actual company/organization.
+
+    Maintains full backwards compatibility with existing codebase.
+    Returns:
+        (True, "VALID_COMPANY_ENTITY") if passes all truth gates.
+        (False, exact_rejection_reason) if rejected.
+    """
+    res = classify_entity_candidate(name, context_text=context_text, url=url)
+    record_entity_telemetry(res["entity_class"])
+    if res["is_company"]:
+        return True, "VALID_COMPANY_ENTITY"
+    return False, res["reason"]
+
+
+def extract_clean_company_name_from_title(title: str, url: str = "") -> str:
     """Extracts and validates a clean corporate entity from a raw search title.
 
     Handles news titles with action verbs by isolating the corporate subject,
     and inspects title chunks to skip generic page headings (e.g., 'Our Businesses - Tata Electronics').
     Returns clean name if valid, or empty string if rejected by entity truth gate.
     """
-    raw_title = str(title or "").strip()
+    raw_title = normalize_entity_candidate(title)
     if not raw_title:
         return ""
 
@@ -274,35 +804,21 @@ def extract_clean_company_name_from_title(title: str) -> str:
             if len(parts) > 0 and len(parts[0].strip()) >= 2:
                 extracted = parts[0].strip()
         else:
-            # Check for action verb patterns to isolate the leading subject
-            for verb_pat in (
-                r"\blaunches\b", r"\blaunched\b",
-                r"\binaugurates\b", r"\binaugurated\b",
-                r"\bcommissions\b", r"\bcommissioned\b",
-                r"\bto\s+set\s+up\b", r"\bsets\s+up\b", r"\bsetting\s+up\b",
-                r"\bexpands\b", r"\bexpanded\b",
-                r"\bopens\b", r"\bopened\b",
-                r"\binvests\b", r"\binvesting\b",
-                r"\bannounces\b", r"\bannounced\b",
-                r"\bcelebrates\b", r"\bsecures\b",
-                r"\bunveils\b", r"\boperationalizes?\b",
-            ):
-                if re.search(verb_pat, chunk, re.IGNORECASE):
-                    lead_subject = re.split(verb_pat, chunk, flags=re.IGNORECASE)[0].strip()
-                    if len(lead_subject) >= 2:
-                        extracted = lead_subject
-                    break
+            # Check headline predicate trimming first
+            trimmed, did_trim = trim_headline_subject_boundary(chunk)
+            if did_trim:
+                extracted = trimmed
 
-        clean = re.sub(r"[^a-zA-Z0-9\s&.,-]", "", extracted).strip(" ,.-")
+        clean = normalize_entity_candidate(extracted)
         if not clean:
             continue
 
-        # Validate through entity truth gate
-        is_valid, reason = validate_company_entity(clean, context_text=raw_title)
-        if is_valid:
-            return clean[:100]
+        res = classify_entity_candidate(clean, context_text=raw_title, url=url)
+        if res["is_company"]:
+            final_cand = res.get("trimmed_candidate") or clean
+            return final_cand[:100]
         else:
-            logger.debug("Skipping invalid/generic title chunk '%s': %s", clean, reason)
+            logger.debug("Skipping invalid/non-company title chunk '%s': %s", clean, res["reason"])
 
     return ""
 
@@ -315,7 +831,8 @@ def resolve_canonical_company_identity(
 ) -> Dict[str, Any]:
     """Deterministically resolves and validates canonical company identity from multi-evidence context.
 
-    Prevents generic navigation headings ('Our Businesses', 'About Us', 'Careers') from passing,
+    Prevents generic navigation headings ('Our Businesses', 'About Us', 'Careers'),
+    publishers ('pv magazine India'), and headline fragments from passing,
     and resolves grounded corporate entities supported by title segments, snippets,
     and registered domains with zero invention.
 
@@ -324,17 +841,17 @@ def resolve_canonical_company_identity(
             "company_name": str,
             "confidence": float,
             "confidence_level": str,  # 'HIGH', 'MEDIUM', 'LOW', 'REJECTED'
-            "canonicalization_method": str,  # 'EXPLICIT_TITLE_OR_SNIPPET', 'DOMAIN_CORROBORATED', 'MULTI_SOURCE_CORROBORATED', 'UNKNOWN'
+            "canonicalization_method": str,
             "evidence": str,
             "is_valid": bool,
             "rejection_reason": Optional[str],
+            "entity_class": str,
+            "normalized_key": str,
         }
     """
-    from urllib.parse import urlparse
-
-    raw_candidate = str(raw_candidate or "").strip()
-    title = str(title or "").strip()
-    snippet = str(snippet or "").strip()
+    raw_candidate = normalize_entity_candidate(raw_candidate)
+    title = normalize_entity_candidate(title)
+    snippet = normalize_entity_candidate(snippet)
     url = str(url or "").strip()
 
     parsed_netloc = ""
@@ -378,65 +895,78 @@ def resolve_canonical_company_identity(
             return True
         return False
 
-    # ── Strategy 1: Explicit Candidate Validation ─────────────────────────────
+    # ── Strategy 1: Explicit Candidate Classification & Boundary Trimming ───────
     if raw_candidate:
-        is_valid, reason = validate_company_entity(raw_candidate, title)
-        if is_valid:
-            if _domain_corroborates(raw_candidate):
+        cls_res = classify_entity_candidate(raw_candidate, context_text=title, url=url)
+        cand_to_use = cls_res.get("trimmed_candidate") or raw_candidate
+        if cls_res["is_company"]:
+            if _domain_corroborates(cand_to_use):
                 return {
-                    "company_name": raw_candidate,
+                    "company_name": cand_to_use,
                     "confidence": 0.95,
                     "confidence_level": "HIGH",
                     "canonicalization_method": "DOMAIN_CORROBORATED",
-                    "evidence": f"Candidate '{raw_candidate}' corroborated by corporate domain '{parsed_netloc}'",
+                    "evidence": f"Candidate '{cand_to_use}' corroborated by corporate domain '{parsed_netloc}'",
                     "is_valid": True,
                     "rejection_reason": None,
+                    "entity_class": EntityType.COMPANY,
+                    "normalized_key": cls_res["normalized_key"],
                 }
-            elif _domain_contradicts(raw_candidate):
-                logger.debug("Domain contradiction: '%s' vs domain '%s'", raw_candidate, parsed_netloc)
+            elif _domain_contradicts(cand_to_use):
+                logger.debug("Domain contradiction: '%s' vs domain '%s'", cand_to_use, parsed_netloc)
                 return {
-                    "company_name": raw_candidate,
+                    "company_name": cand_to_use,
                     "confidence": 0.50,
                     "confidence_level": "LOW",
                     "canonicalization_method": "EXPLICIT_TITLE_OR_SNIPPET",
-                    "evidence": f"Candidate '{raw_candidate}' contradicts corporate domain '{parsed_netloc}'",
+                    "evidence": f"Candidate '{cand_to_use}' contradicts corporate domain '{parsed_netloc}'",
                     "is_valid": False,
-                    "rejection_reason": f"Company '{raw_candidate}' contradicts non-news domain '{parsed_netloc}'",
+                    "rejection_reason": f"Company '{cand_to_use}' contradicts non-news domain '{parsed_netloc}'",
+                    "entity_class": EntityType.UNKNOWN,
+                    "normalized_key": cls_res["normalized_key"],
                 }
             else:
                 return {
-                    "company_name": raw_candidate,
+                    "company_name": cand_to_use,
                     "confidence": 0.90,
                     "confidence_level": "HIGH",
                     "canonicalization_method": "EXPLICIT_TITLE_OR_SNIPPET",
-                    "evidence": f"Candidate '{raw_candidate}' explicitly present in title",
+                    "evidence": f"Candidate '{cand_to_use}' explicitly present in title",
                     "is_valid": True,
                     "rejection_reason": None,
+                    "entity_class": EntityType.COMPANY,
+                    "normalized_key": cls_res["normalized_key"],
                 }
 
     # ── Strategy 2: Bounded Title Segment Canonical Resolution ───────────────
-    clean_title_cand = extract_clean_company_name_from_title(title)
+    clean_title_cand = extract_clean_company_name_from_title(title, url=url)
     if clean_title_cand:
-        if _domain_corroborates(clean_title_cand):
-            return {
-                "company_name": clean_title_cand,
-                "confidence": 0.95,
-                "confidence_level": "HIGH",
-                "canonicalization_method": "DOMAIN_CORROBORATED",
-                "evidence": f"Title segment '{clean_title_cand}' corroborated by domain '{parsed_netloc}'",
-                "is_valid": True,
-                "rejection_reason": None,
-            }
-        else:
-            return {
-                "company_name": clean_title_cand,
-                "confidence": 0.88,
-                "confidence_level": "HIGH",
-                "canonicalization_method": "MULTI_SOURCE_CORROBORATED" if (snippet and clean_title_cand.lower() in snippet.lower()) else "EXPLICIT_TITLE_OR_SNIPPET",
-                "evidence": f"Title segment '{clean_title_cand}' verified as genuine corporate entity",
-                "is_valid": True,
-                "rejection_reason": None,
-            }
+        cls_title = classify_entity_candidate(clean_title_cand, context_text=title, url=url)
+        if cls_title["is_company"]:
+            if _domain_corroborates(clean_title_cand):
+                return {
+                    "company_name": clean_title_cand,
+                    "confidence": 0.95,
+                    "confidence_level": "HIGH",
+                    "canonicalization_method": "DOMAIN_CORROBORATED",
+                    "evidence": f"Title segment '{clean_title_cand}' corroborated by domain '{parsed_netloc}'",
+                    "is_valid": True,
+                    "rejection_reason": None,
+                    "entity_class": EntityType.COMPANY,
+                    "normalized_key": cls_title["normalized_key"],
+                }
+            else:
+                return {
+                    "company_name": clean_title_cand,
+                    "confidence": 0.88,
+                    "confidence_level": "HIGH",
+                    "canonicalization_method": "MULTI_SOURCE_CORROBORATED" if (snippet and clean_title_cand.lower() in snippet.lower()) else "EXPLICIT_TITLE_OR_SNIPPET",
+                    "evidence": f"Title segment '{clean_title_cand}' verified as genuine corporate entity",
+                    "is_valid": True,
+                    "rejection_reason": None,
+                    "entity_class": EntityType.COMPANY,
+                    "normalized_key": cls_title["normalized_key"],
+                }
 
     # ── Strategy 3: Grounded Snippet Resolution ───────────────────────────────
     if snippet:
@@ -445,9 +975,9 @@ def resolve_canonical_company_identity(
             snippet,
         )
         for match in corp_matches:
-            clean_m = match.strip(" ,.-")
-            is_val, _ = validate_company_entity(clean_m, snippet)
-            if is_val:
+            clean_m = normalize_entity_candidate(match)
+            cls_m = classify_entity_candidate(clean_m, context_text=snippet, url=url)
+            if cls_m["is_company"]:
                 if _domain_corroborates(clean_m):
                     return {
                         "company_name": clean_m,
@@ -457,6 +987,8 @@ def resolve_canonical_company_identity(
                         "evidence": f"Snippet entity '{clean_m}' corroborated by domain '{parsed_netloc}'",
                         "is_valid": True,
                         "rejection_reason": None,
+                        "entity_class": EntityType.COMPANY,
+                        "normalized_key": cls_m["normalized_key"],
                     }
                 elif is_news or not parsed_netloc:
                     return {
@@ -467,11 +999,14 @@ def resolve_canonical_company_identity(
                         "evidence": f"Snippet entity '{clean_m}' with explicit corporate suffix",
                         "is_valid": True,
                         "rejection_reason": None,
+                        "entity_class": EntityType.COMPANY,
+                        "normalized_key": cls_m["normalized_key"],
                     }
 
-    # ── Strategy 4: Zero-Invention Guard ──────────────────────────────────────
+    # ── Strategy 4: Zero-Invention Guard (Fail closed) ─────────────────────────
+    last_cls = classify_entity_candidate(raw_candidate, url=url) if raw_candidate else {"entity_class": EntityType.UNKNOWN, "reason": "No candidate"}
     rejection = (
-        f"Entity candidate '{raw_candidate}' rejected as generic navigation/page heading and unsupported by grounded text evidence"
+        f"Entity candidate '{raw_candidate}' rejected ({last_cls['reason']})"
         if raw_candidate
         else f"Title '{title[:50]}' contains no grounded corporate entity"
     )
@@ -483,4 +1018,6 @@ def resolve_canonical_company_identity(
         "evidence": "No grounded corporate entity in search evidence",
         "is_valid": False,
         "rejection_reason": rejection,
+        "entity_class": last_cls["entity_class"],
+        "normalized_key": get_normalized_comparison_key(raw_candidate) if raw_candidate else "",
     }

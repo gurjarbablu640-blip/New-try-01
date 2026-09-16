@@ -238,7 +238,7 @@ def ingest_discovered_signal_lead(
     )
 
     clean_name = (company_name or "").strip()
-    is_valid, rejection_reason = validate_company_entity(clean_name, event_title)
+    is_valid, rejection_reason = validate_company_entity(clean_name, event_title, url=evidence_url or "")
     canonical_method = "EXPLICIT_TITLE_OR_SNIPPET"
     canonical_confidence = 0.90
     if not is_valid:
@@ -274,13 +274,41 @@ def ingest_discovered_signal_lead(
                 "rejection_reason": rejection_reason or resolution.get("rejection_reason"),
             }
 
-    # 1. Deduplicate or fetch company
-    company = db.query(Company).filter(Company.name.ilike(clean_name)).first()
+    # Strict Persistence Guard: Final check that clean_name is an authentic corporate entity
+    from services.entity_truth_gate import (
+        classify_entity_candidate,
+        EntityType,
+        get_normalized_comparison_key,
+        ENTITY_TELEMETRY,
+    )
+    final_cls = classify_entity_candidate(clean_name, context_text=event_title, url=evidence_url or "")
+    if final_cls.get("entity_class") != EntityType.COMPANY:
+        logger.warning(
+            "[PERSISTENCE_GUARD] Blocked non-company '%s' (class=%s, reason=%s) from DB creation",
+            clean_name,
+            final_cls.get("entity_class"),
+            final_cls.get("reason"),
+        )
+        return {
+            "status": "rejected_invalid_entity",
+            "company_id": None,
+            "company_name": clean_name,
+            "icp_score": 0,
+            "buying_window": None,
+            "rejection_reason": final_cls.get("reason"),
+        }
+
+    # 1. Deduplicate or fetch company using normalized comparison key
+    norm_key = get_normalized_comparison_key(clean_name)
+    company = db.query(Company).filter(
+        (Company.name.ilike(clean_name)) | (Company.normalized_name == norm_key)
+    ).first()
     is_new = False
     if not company:
         is_new = True
         company = Company(
             name=clean_name,
+            normalized_name=norm_key,
             city=city,
             state=state,
             industry=industry,
@@ -294,7 +322,9 @@ def ingest_discovered_signal_lead(
         db.add(company)
         db.commit()
         db.refresh(company)
+        ENTITY_TELEMETRY["COMPANY_ROWS_CREATED"] += 1
     else:
+        ENTITY_TELEMETRY["ENTITY_NORMALIZED_MATCH"] += 1
         # Preserve downstream attribution links if not already set
         if discovery_query_log_id and not company.discovery_query_log_id:
             company.discovery_query_log_id = discovery_query_log_id

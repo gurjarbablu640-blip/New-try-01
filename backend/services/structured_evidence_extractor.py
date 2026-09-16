@@ -154,35 +154,29 @@ def extract_structured_evidence(
     # 5. Calibration Relevance Indicators
     cal_indicators = extract_calibration_relevance(body_text)
 
-    # 6. Company validation - Check action verbs first so subject entity precedes the verb
-    company_name = candidate_company
+    # 6. Company validation - Check candidate and headline verbs with boundary trimming
+    company_name = ""
+    if candidate_company:
+        is_val, _ = validate_company_entity(candidate_company, context_text=title, url=url)
+        if is_val:
+            company_name = candidate_company
+
     if not company_name and title:
-        m = re.split(
-            r"\b(commences|commenced|announces|announced|to invest|invests|inaugurates|inaugurated|signs|signed|sets up|sets|expands|expanded|commissions|commissioned|starts|started|plans|planned)\b",
-            title,
-            flags=re.I,
-        )
-        if m and len(m) > 1:
-            cand = m[0].strip()
-            if not cand.lower().startswith(("rs", "inr", "₹", "in ")):
-                is_valid, _ = validate_company_entity(cand, title)
-                if is_valid:
-                    company_name = cand
+        from services.entity_truth_gate import extract_clean_company_name_from_title, trim_headline_subject_boundary
+        trimmed, did_trim = trim_headline_subject_boundary(title)
+        if did_trim:
+            company_name = trimmed
+        else:
+            extracted_cand = extract_clean_company_name_from_title(title, url=url)
+            if extracted_cand:
+                company_name = extracted_cand
 
-        if not company_name:
-            from services.entity_truth_gate import extract_clean_company_name_from_title
-            extracted_cand = extract_clean_company_name_from_title(title)
-            if extracted_cand and not extracted_cand.lower().startswith(("rs", "inr", "₹")):
-                is_valid, _ = validate_company_entity(extracted_cand, title)
-                if is_valid:
-                    company_name = extracted_cand
-
-    # Minimal Task 3B: If title did not resolve company, use page body leading text
+    # If title did not resolve company, use page body leading text
     if not company_name and body_text:
         lead_text = body_text[:2000]
         # Match leading organization subject preceding action verbs in article body
         body_match = re.search(
-            r"(?:^|\.\s+|\n+)(?:In\s+[A-Za-z]+,\s*)?([A-Z0-9][A-Za-z0-9\s.,&'\-]{2,40}?)\s+(?:today\s+)?(?:has\s+)?(?:announced|announces|inaugurated|inaugurates|commissioned|commissions|invested|invests|set\s+up|sets\s+up|expanded|expands|signed|signs|unveiled|unveils)\b",
+            r"(?:^|\.\s+|\n+)(?:In\s+[A-Za-z]+,\s*)?([A-Z0-9][A-Za-z0-9\s.,&'\-]{2,40}?)\s+(?:today\s+)?(?:has\s+)?(?:announced|announces|inaugurated|inaugurates|commissioned|commissions|invested|invests|set\s+up|sets\s+up|expanded|expands|signed|signs|unveiled|unveils|plans|planned|relocates|relocated)\b",
             lead_text,
         )
         if body_match:
@@ -201,7 +195,7 @@ def extract_structured_evidence(
                 and not any(cand_lower.endswith(ge) for ge in generic_endings)
                 and len(cand.split()) <= 4
             ):
-                is_valid, _ = validate_company_entity(cand, lead_text[:300])
+                is_valid, _ = validate_company_entity(cand, lead_text[:300], url=url)
                 if is_valid:
                     company_name = cand
 
