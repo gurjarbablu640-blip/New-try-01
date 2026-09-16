@@ -59,6 +59,12 @@ class TestEntityResolutionPrecision(unittest.TestCase):
             "Hero MotoCorp",
             "Baxy Mobility",
             "Ola Electric Technologies Pvt Ltd",
+            # Task 3C.1.3 Added Authentic Entities
+            "Electronics Manufacturing Services Private Limited",
+            "Super Screws",
+            "HARMAN",
+            "Bosch",
+            "Toyota",
         ]
 
         # 35 non-company entities covering all historical and live failure classes
@@ -100,6 +106,18 @@ class TestEntityResolutionPrecision(unittest.TestCase):
             "Battery Pack Solutions Franchise",
             "Senior Metrology Engineer Jobs",
             "Lithium Ion",
+            # Task 3C.1.3 Added Negative Categories and Headline Fragments
+            "Electronics manufacturing services",
+            "India’s Top Fastest",
+            "India's Top Fastest",
+            "Toyota to roll out solid",
+            "ProjectX India",
+            "Contract manufacturing services",
+            "Precision engineering services",
+            "Industrial automation solutions",
+            "India to roll out EV incentives",
+            "Government to roll out manufacturing scheme",
+            "Top 10 Fastest-Growing EMS Companies",
         ]
 
         critical_regressions = {
@@ -121,6 +139,12 @@ class TestEntityResolutionPrecision(unittest.TestCase):
             "Solar Module",
             "Maruti Suzuki has",
             "ITP Aero has",
+            # Task 3C.1.3 Critical Regressions
+            "Electronics manufacturing services",
+            "India’s Top Fastest",
+            "India's Top Fastest",
+            "Toyota to roll out solid",
+            "ProjectX India",
         }
 
         tp = 0

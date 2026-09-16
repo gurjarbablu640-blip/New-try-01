@@ -204,6 +204,21 @@ HEADLINE_VERB_PATTERNS = [
     r"\bto\s+execute\b", r"\bexecutes\b", r"\bexecuted\b",
     r"\bto\s+construct\b", r"\bconstructs\b", r"\bconstructed\b",
     r"\bto\s+implement\b", r"\bimplements\b", r"\bimplemented\b",
+    # Task 3C.1.3 Expanded Action / Predicate Boundaries (Section 7)
+    r"\bto\s+roll\s+out\b", r"\brolls\s+out\b", r"\brolled\s+out\b", r"\brolling\s+out\b",
+    r"\bto\s+introduce\b", r"\bintroduces\b", r"\bintroduced\b", r"\bintroducing\b",
+    r"\bto\s+produce\b", r"\bproduces\b", r"\bproduced\b", r"\bproducing\b",
+    r"\bto\s+start\b", r"\bstarts\b", r"\bstarted\b", r"\bstarting\b",
+    r"\bto\s+begin\b", r"\bbegins\b", r"\bbegan\b", r"\bbeginning\b",
+    r"\bto\s+commence\b", r"\bcommences\b", r"\bcommenced\b", r"\bcommencing\b",
+    r"\bto\s+launch\b", r"\blaunching\b",
+    r"\bto\s+expand\b", r"\bexpanding\b",
+    r"\bto\s+open\b", r"\bopening\b",
+    r"\bto\s+raise\b", r"\braises\b", r"\braised\b", r"\braising\b",
+    r"\bto\s+acquire\b", r"\bacquires\b", r"\bacquired\b", r"\bacquiring\b",
+    r"\bto\s+set\s+up\b", r"\bsetting\s+up\b",
+    r"\bwill\s+(?:build|invest|launch|start|expand|produce|manufacture|set\s+up|roll\s+out|develop|supply|install|add|open|establish|commence)\b",
+    r"\bplans\s+to\b", r"\baims\s+to\b", r"\bexpects\s+to\b",
 ]
 
 
@@ -233,6 +248,22 @@ MANUFACTURING_OWNERSHIP_PATTERNS = [
     r"\bmanufacturing\s+facility\s+in\b",
 ]
 
+# Superlative / Incomplete editorial headline fragments (Task 3C.1.3 Section 6)
+SUPERLATIVE_AND_EDITORIAL_FRAGMENT_PATTERNS = [
+    r"^(?:indias?|india['’]s|world(?:['’]s)?|asia(?:['’]s)?|global)\s+(?:top|fastest|leading|largest|biggest|best|growing)\b",
+    r"^(?:top|fastest|leading|largest|biggest|best)\s+(?:fastest|growing|growth|manufacturers?|companies|players?|producers?|exporters?|suppliers?|startups?|\d+)\b",
+    r"^(?:top|fastest|leading|largest|biggest|best)$",
+    r"\b(?:fastest[- ]growing|leading\s+manufacturers?|top\s+fastest|top\s+growing|largest\s+players?|best\s+companies|top\s+companies|top\s+\d+)\b",
+]
+
+# Generic Industry / Service Category detection (Task 3C.1.3 Section 4 & 5)
+GENERIC_CATEGORY_AND_INDUSTRY_PATTERNS = [
+    r"\b(?:contract|electronics|semiconductor|battery|solar\s+module|automotive|precision\s+engineering|electrical\s+equipment|industrial\s+automation|renewable\s+energy|metal\s+fabrication|packaging\s+machinery|cnc\s+machining)\s+(?:manufacturing\s+services?|manufacturing|components?|solutions?|manufacturers?|systems?|equipments?|technolog(?:y|ies))\b",
+    r"^(?:electronics|contract|semiconductor|battery|automotive|aerospace|pharmaceutical|chemical|textile|plastics?|metal|precision|solar|wind|ev)\s+(?:manufacturing\s+services?|manufacturing|components?|solutions?|manufacturers?|systems?|equipments?|services?)\b",
+    r"\b(?:manufacturing\s+services?|contract\s+manufacturing|precision\s+engineering\s+services?|industrial\s+automation\s+solutions?|electrical\s+equipment\s+manufacturers?|solar\s+module\s+manufacturing|battery\s+manufacturing|semiconductor\s+manufacturing\s+services?)\b",
+    r"^(?:electronics\s+manufacturing\s+services|contract\s+manufacturing\s+services|automotive\s+components|precision\s+engineering\s+services|solar\s+module\s+manufacturing|battery\s+manufacturing|electrical\s+equipment\s+manufacturers|industrial\s+automation\s+solutions|semiconductor\s+manufacturing\s+services)$",
+]
+
 # Events, expos, conferences, and exhibitions
 EVENT_PATTERNS = [
     r"\bexpo\b", r"\bexhibition\b", r"\bsummit\b", r"\bconclave\b",
@@ -259,6 +290,9 @@ GENERIC_NON_COMPANY_WORDS = {
     "specification", "specifications", "downloads", "gallery", "portfolio",
     "mega", "ultra", "prime", "smart", "eco", "green", "clean", "future",
     "vision", "national", "premier", "online", "portal", "platform", "app",
+    "fastest", "leading", "growing", "growth", "best", "biggest",
+    "manufacturing", "contract", "electronics", "components", "solutions",
+    "engineering", "automation", "electrical", "semiconductor",
 }
 
 # Generic page, navigation, section, and website content labels
@@ -313,6 +347,11 @@ KNOWN_PUBLISHERS = {
 }
 
 # Recognized corporate suffixes indicating an actual organization
+LEGAL_CORPORATE_SUFFIX_PATTERN = re.compile(
+    r"\b(?:ltd|limited|pvt|private\s+limited|pvt\s+ltd|inc|incorporated|corp|corporation|gmbh|llc|plc)\b",
+    re.IGNORECASE,
+)
+
 CORPORATE_SUFFIX_PATTERN = re.compile(
     r"\b(ltd|limited|pvt|private|inc|corp|corporation|gmbh|llc|co|enterprises|"
     r"industries|technologies|electronics|motors|energy|solutions|systems|"
@@ -419,8 +458,13 @@ def classify_entity_candidate(
         }
 
     norm_key = get_normalized_comparison_key(raw)
+    lowered = raw.casefold()
+    words = raw.split()
+    has_corp_suffix = bool(CORPORATE_SUFFIX_PATTERN.search(lowered))
+    has_legal_corp_suffix = bool(LEGAL_CORPORATE_SUFFIX_PATTERN.search(lowered))
+
     cached = get_cached_rejection(norm_key)
-    if cached:
+    if cached and not has_legal_corp_suffix:
         cached_class, cached_reason = cached
         return {
             "candidate": raw,
@@ -525,6 +569,76 @@ def classify_entity_candidate(
                 "reason": reason,
                 "normalized_key": norm_key,
             }
+
+    has_corp_suffix = bool(CORPORATE_SUFFIX_PATTERN.search(lowered))
+
+    # Gate 5b: Superlative / Incomplete editorial headline fragments (Task 3C.1.3 Section 6)
+    if not has_legal_corp_suffix:
+        for sup_pat in SUPERLATIVE_AND_EDITORIAL_FRAGMENT_PATTERNS:
+            if re.search(sup_pat, lowered):
+                reason = f"Entity matches superlative/editorial headline fragment pattern ('{sup_pat}')"
+                cache_rejection(norm_key, EntityType.ARTICLE_HEADLINE_FRAGMENT, reason)
+                return {
+                    "candidate": raw,
+                    "entity_class": EntityType.ARTICLE_HEADLINE_FRAGMENT,
+                    "is_company": False,
+                    "confidence": 0.0,
+                    "reason": reason,
+                    "normalized_key": norm_key,
+                }
+
+    # Gate 5c: Contextual continuation check (Task 3C.1.3 Section 9)
+    if context_text and not has_legal_corp_suffix:
+        norm_cand = re.sub(r"[^\w\s]", "", raw).strip().lower()
+        norm_ctx = re.sub(r"[^\w\s]", "", context_text).strip().lower()
+        if norm_cand in norm_ctx and norm_cand != norm_ctx:
+            idx = norm_ctx.find(norm_cand)
+            after = norm_ctx[idx + len(norm_cand):].strip()
+            if re.match(r"^(?:growing|growth|manufacturers?|companies|players?|producers?|exporters?|suppliers?|startups?|firms?|brands?)\b", after):
+                reason = f"Candidate is an incomplete title fragment preceding '{after.split()[0]}' ('{raw}')"
+                cache_rejection(norm_key, EntityType.ARTICLE_HEADLINE_FRAGMENT, reason)
+                return {
+                    "candidate": raw,
+                    "entity_class": EntityType.ARTICLE_HEADLINE_FRAGMENT,
+                    "is_company": False,
+                    "confidence": 0.0,
+                    "reason": reason,
+                    "normalized_key": norm_key,
+                }
+
+    # Gate 5d: Generic Industry / Service Category detection (Task 3C.1.3 Section 4 & 5)
+    if not has_legal_corp_suffix:
+        for cat_pat in GENERIC_CATEGORY_AND_INDUSTRY_PATTERNS:
+            if re.search(cat_pat, lowered):
+                reason = f"Candidate is a generic industry/service category term ('{raw}')"
+                cache_rejection(norm_key, EntityType.GENERIC_INDUSTRY_TERM, reason)
+                return {
+                    "candidate": raw,
+                    "entity_class": EntityType.GENERIC_INDUSTRY_TERM,
+                    "is_company": False,
+                    "confidence": 0.0,
+                    "reason": reason,
+                    "normalized_key": norm_key,
+                }
+
+        if url:
+            try:
+                parsed_path = urlparse(url).path.lower()
+                if re.search(r"/(?:tag|tags|category|categories|topic|topics|search|industry|industries|sector|sectors)/", parsed_path):
+                    cand_slug = re.sub(r"[^\w\s]", "", lowered).replace(" ", "[-_+]")
+                    if re.search(cand_slug, parsed_path) or any(t in parsed_path for t in words if len(t) >= 4):
+                        reason = f"Candidate matches taxonomy/tag/category URL path ('{raw}')"
+                        cache_rejection(norm_key, EntityType.GENERIC_INDUSTRY_TERM, reason)
+                        return {
+                            "candidate": raw,
+                            "entity_class": EntityType.GENERIC_INDUSTRY_TERM,
+                            "is_company": False,
+                            "confidence": 0.0,
+                            "reason": reason,
+                            "normalized_key": norm_key,
+                        }
+            except Exception:
+                pass
 
     # Gate 6: Geographic locations alone
     if lowered in INDIAN_STATES:
@@ -806,7 +920,7 @@ def classify_entity_candidate(
             "normalized_key": norm_key,
         }
 
-    if all(w.casefold() in GENERIC_NON_COMPANY_WORDS for w in words):
+    if all(w.casefold() in GENERIC_NON_COMPANY_WORDS for w in words) and not has_legal_corp_suffix:
         reason = f"Entity comprises only generic non-company terms ('{raw}')"
         cache_rejection(norm_key, EntityType.GENERIC_INDUSTRY_TERM, reason)
         return {

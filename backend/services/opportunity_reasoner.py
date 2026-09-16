@@ -43,27 +43,32 @@ def extract_candidate_company_name(title: str, snippet: str = "") -> Optional[st
     raw = title.strip()
     # Remove trailing source attribution
     raw = re.split(r"[-|–—:]\s*(?:The Economic Times|Business Standard|Livemint|Reuters|PTI|ANI|CNBC|Moneycontrol|Financial Express|Press Release|NDTV Profit|BSE|NSE)", raw, flags=re.IGNORECASE)[0]
+
+    # Priority 1: Check headline predicate trimming first (Task 3C.1.3 Section 7 & 8)
+    from services.entity_truth_gate import trim_headline_subject_boundary, validate_company_entity
+    trimmed_subject, did_trim = trim_headline_subject_boundary(raw)
+    if did_trim:
+        return trimmed_subject
+
     # Match leading company pattern: "Tata Motors to set up...", "Renewsys inaugurates..."
     lead_match = re.match(
-        r"^(?P<company>[A-Z0-9][A-Za-z0-9\s.,&'\-]{2,40}?)\s+(?:to\s+(?:set\s+up|invest|expand|launch|commission|build)|inaugurates?|commissions?|expands?|invests?|sets\s+up|opens?|announces?|begins?|unveils?)",
+        r"^(?P<company>[A-Z0-9][A-Za-z0-9\s.,&'\-]{2,40}?)\s+(?:to\s+(?:set\s+up|invest|expand|launch|commission|build|roll\s+out|produce|manufacture)|inaugurates?|commissions?|expands?|invests?|sets\s+up|opens?|announces?|begins?|unveils?)",
         raw,
         re.IGNORECASE,
     )
     if lead_match:
         name = lead_match.group("company").strip()
         if len(name) >= 3 and not name.lower().startswith(("how", "why", "what", "where", "exclusive")):
-            from services.entity_truth_gate import validate_company_entity
-            if validate_company_entity(name)[0]:
+            if validate_company_entity(name, context_text=title)[0]:
                 return name
 
     # Fallback to headline segments - inspect segments for non-generic valid corporate entity
     parts = [p.strip() for p in re.split(r"[:\-|–—]", raw) if p.strip()]
     if parts:
-        from services.entity_truth_gate import validate_company_entity
         for part in parts:
             words = part.split()
             if 1 <= len(words) <= 5:
-                if validate_company_entity(part)[0]:
+                if validate_company_entity(part, context_text=title)[0]:
                     return part
 
     return None
