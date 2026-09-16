@@ -794,4 +794,26 @@ class DiscoveryQueryPlanner:
         }
 
 
+
+    def plan_with_llm_strategist(
+        self,
+        db: Optional[Session] = None,
+        preferred_sector: Optional[str] = None,
+        preferred_geo: Optional[str] = None,
+        preferred_trigger: Optional[str] = None,
+        strategy_decision_id: Optional[int] = None,
+        search_lane: str = "EVENT_EXPANSION",
+    ) -> Dict[str, Any]:
+        """Generate discovery query using LLM Discovery Strategist (DeepSeek -> Gemini -> deterministic)."""
+        from services.llm_discovery_strategist import llm_discovery_strategist
+        return llm_discovery_strategist.plan_query(
+            db=db,
+            sector=preferred_sector or "Automotive & Auto Components",
+            geography=preferred_geo or "Pan-India",
+            trigger=preferred_trigger,
+            search_lane=search_lane,
+            strategy_decision_id=strategy_decision_id,
+        )
+
+
 discovery_query_planner = DiscoveryQueryPlanner()
