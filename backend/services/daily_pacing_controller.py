@@ -52,8 +52,12 @@ class DailyPacingController:
         self.stretch_target = stretch_target
         self.hard_max = hard_max
 
-    def get_window_progress(self, now_dt: Optional[datetime] = None) -> float:
-        """Return fraction of the 15-hour daily operating window elapsed (0.0 to 1.0)."""
+    def get_window_progress(self, now_dt: Optional[datetime] = None, is_24x7: bool = False) -> float:
+        """Return fraction of the daily operating window elapsed (0.0 to 1.0).
+        
+        If is_24x7: 24-hour continuous window (00:00 to 24:00 IST).
+        Otherwise: standard 15-hour window (09:00 to 23:59 IST).
+        """
         if now_dt is None:
             now_dt = datetime.now(KOLKATA_TZ)
         elif now_dt.tzinfo is None:
@@ -62,6 +66,10 @@ class DailyPacingController:
             now_dt = now_dt.astimezone(KOLKATA_TZ)
 
         cur_time = now_dt.time()
+        if is_24x7:
+            elapsed_seconds = cur_time.hour * 3600 + cur_time.minute * 60 + cur_time.second
+            return min(1.0, max(0.0, elapsed_seconds / 86400.0))
+
         start_time = time(WINDOW_START_HOUR, WINDOW_START_MINUTE)
         end_time = time(WINDOW_END_HOUR, WINDOW_END_MINUTE)
 
@@ -84,9 +92,10 @@ class DailyPacingController:
         send_ready_depth: int = 0,
         provider_limited: bool = False,
         now_dt: Optional[datetime] = None,
+        is_24x7: bool = False,
     ) -> Dict[str, Any]:
         """Compute real-time pacing telemetry and forecast status."""
-        progress = self.get_window_progress(now_dt)
+        progress = self.get_window_progress(now_dt, is_24x7=is_24x7)
 
         expected_min_by_now = round(self.min_target * progress, 1)
         expected_stretch_by_now = round(self.stretch_target * progress, 1)

@@ -844,8 +844,10 @@ class SalesoorjaOperator:
         state["last_transport_receipt"] = receipts[-1] if receipts else None
         state["daily_send_target"] = int(getattr(self.settings, "DAILY_SEND_TARGET", 150))
         state["daily_send_max"] = int(getattr(self.settings, "DAILY_SEND_MAX", 250))
-        state["start_time"] = str(getattr(self.settings, "SALESOORJA_START_TIME", "09:00"))
-        state["end_time"] = str(getattr(self.settings, "SALESOORJA_END_TIME", "23:59"))
+        is_24x7 = self._is_24x7()
+        state["production_24x7"] = is_24x7
+        state["start_time"] = "00:00" if is_24x7 else str(getattr(self.settings, "SALESOORJA_START_TIME", "09:00"))
+        state["end_time"] = "23:59" if is_24x7 else str(getattr(self.settings, "SALESOORJA_END_TIME", "23:59"))
         state["production_guard_errors"] = self._production_errors()
 
         # Throughput & Pacing Telemetry
@@ -870,6 +872,7 @@ class SalesoorjaOperator:
                 sent_today=real_sends_today,
                 send_ready_depth=send_ready_depth,
                 provider_limited=bool(serper_calls >= 1500),
+                is_24x7=is_24x7,
             )
             state["daily_min_target"] = pacing["daily_min_target"]
             state["daily_stretch_target"] = pacing["daily_stretch_target"]
@@ -1240,13 +1243,80 @@ class SalesoorjaOperator:
     def _local_now(self) -> datetime:
         return self._now().astimezone(ZoneInfo("Asia/Kolkata"))
 
+    def _is_24x7(self) -> bool:
+        return bool(getattr(self.settings, "SALESOORJA_24X7", True))
+
     def _before_start(self) -> bool:
+        if self._is_24x7():
+            return False
         start_hour, start_minute = _safe_time(getattr(self.settings, "SALESOORJA_START_TIME", "09:00"), "09:00")
         return self._local_now().time() < self._local_now().replace(hour=start_hour, minute=start_minute, second=0, microsecond=0).time()
 
     def _after_end(self) -> bool:
+        if self._is_24x7():
+            return False
         end_hour, end_minute = _safe_time(getattr(self.settings, "SALESOORJA_END_TIME", "18:00"), "18:00")
         return self._local_now().time() >= self._local_now().replace(hour=end_hour, minute=end_minute, second=0, microsecond=0).time()
+
+    def _check_midnight_rollover(self) -> bool:
+        """Check if local Asia/Kolkata date has crossed into a new calendar day.
+
+        If date changed:
+        1. Write final daily report for the completed business date.
+        2. Send final daily report email if configured.
+        3. Accumulate day's counters and provider usage into historical totals.
+        4. Reset current-day counters and provider usage to 0.
+        5. Advance business_date to new IST calendar day.
+        6. Reset day-scoped working arrays.
+        7. Save state and return True.
+        """
+        current_date_str = self._local_now().date().isoformat()
+        current_business_date = str(self._state.get("business_date") or "")
+        if not current_business_date:
+            with self._lock:
+                self._state["business_date"] = current_date_str
+                self._save_state()
+            return False
+
+        if current_date_str == current_business_date:
+            return False
+
+        logger.info(
+            "Midnight date rollover detected: advancing business_date from %s to %s",
+            current_business_date,
+            current_date_str,
+        )
+
+        with self._lock:
+            # 1. Generate daily report for the completed business date
+            try:
+                report_path = self._write_report()
+                self._send_final_report_email(report_path)
+            except Exception as r_err:
+                logger.warning("Error generating midnight report for %s: %s", current_business_date, r_err)
+
+            # 2. Accumulate current day counters into historical totals
+            for key, val in self._state.get("counters", {}).items():
+                self._state["historical_counters"][key] = int(self._state["historical_counters"].get(key, 0)) + int(val)
+            for key, val in self._state.get("provider_usage", {}).items():
+                self._state["historical_provider_usage"][key] = int(self._state["historical_provider_usage"].get(key, 0)) + int(val)
+
+            # 3. Reset daily counters and provider usage for new calendar day
+            self._state["counters"] = {key: 0 for key in COUNTER_KEYS}
+            self._state["provider_usage"] = {key: 0 for key in PROVIDER_KEYS}
+
+            # 4. Advance business date
+            self._state["business_date"] = current_date_str
+
+            # 5. Reset day-scoped working arrays
+            self._state["processed_accounts"] = []
+            self._state["transport_receipts"] = []
+            self._state["records"] = {sheet: [] for sheet in REPORT_SHEETS}
+            self._state["last_checkpoint"] = _iso(self._now())
+            self._state["last_action"] = f"Rolled over to business date {current_date_str}; daily counters reset"
+            self._save_state()
+
+        return True
 
     def _outbound_total(self) -> int:
         counters = self._state["counters"]
@@ -1283,6 +1353,7 @@ class SalesoorjaOperator:
     def _run_production_loop(self) -> None:
         last_inbox_poll = 0.0
         while True:
+            self._check_midnight_rollover()
             reason = self._stop_reason()
             if reason:
                 self.finalize_run(reason=reason)
