@@ -727,20 +727,254 @@ def discover_new_calibration_opportunities(
             ):
                 raw_results = search_res.get("results", []) or []
 
-                # 3. Cheap Filters & Result Triage Before LLM (Amendments 3 & 6)
-                grouped_candidates, filter_telemetry = opportunity_reasoner.apply_cheap_filters(raw_results)
-
+                # =========================================================================
+                # TASK 3B: PRE-ENTITY TRIAGE & PAGE FETCH BEFORE ENTITY RESOLUTION
+                # =========================================================================
                 from services.search_result_triage import (
                     triage_and_rank_results,
                     CLASS_HIGH_VALUE_PRIMARY,
                     CLASS_POTENTIALLY_RELEVANT,
                     CLASS_COMPANY_PAGE,
+                    CLASS_INDUSTRY_DIRECTORY,
+                    CLASS_FINANCIAL_MARKET_NOISE,
+                    CLASS_NOISE,
                 )
                 from services.page_content_fetcher import page_content_fetcher
                 from services.structured_evidence_extractor import extract_structured_evidence
+                from services.entity_truth_gate import (
+                    validate_company_entity,
+                    extract_clean_company_name_from_title,
+                    resolve_canonical_company_identity,
+                )
+                from services.opportunity_reasoner import extract_candidate_company_name
+                from services.source_verification_pipeline import (
+                    classify_source_class,
+                    TRIGGER_HARD_REJECT_CLASSES,
+                )
 
-                triaged_results = triage_and_rank_results(raw_results, max_fetch=3)
-                triaged_by_url = {item["url"]: item for item in triaged_results}
+                FETCH_BUDGET_PER_QUERY = 3
+                FETCH_BUDGET_PER_DISCOVERY_ITERATION = 10
+
+                # 3a. Pre-Entity Result Triage directly on raw Serper results
+                selected_for_fetch, all_triaged, triage_telemetry = triage_and_rank_results(
+                    raw_results,
+                    max_to_fetch=FETCH_BUDGET_PER_QUERY,
+                    return_all=True,
+                )
+
+                logger.info(
+                    "[TRIAGE_SUMMARY] Raw: %d | HighValue: %d | CompanyPage: %d | Potential: %d | Directory: %d | FinNoise: %d | Noise: %d | Eligible: %d",
+                    triage_telemetry.get("RAW_SERPER_RESULTS", 0),
+                    triage_telemetry.get("TRIAGE_HIGH_VALUE", 0),
+                    triage_telemetry.get("TRIAGE_COMPANY_PAGE", 0),
+                    triage_telemetry.get("TRIAGE_POTENTIAL", 0),
+                    triage_telemetry.get("TRIAGE_DIRECTORY", 0),
+                    triage_telemetry.get("TRIAGE_FINANCIAL_NOISE", 0),
+                    triage_telemetry.get("TRIAGE_NOISE", 0),
+                    triage_telemetry.get("FETCH_ELIGIBLE", 0),
+                )
+
+                # Track iteration-level fetch budget
+                iteration_fetches = getattr(self, "_iteration_fetches_count", 0) if hasattr(self, "_iteration_fetches_count") else 0
+
+                # 3b. Fetch selected pages BEFORE entity extraction (with dedup and cache reuse)
+                page_fetch_telemetry = {
+                    "PAGE_FETCH_ATTEMPTED": 0,
+                    "PAGE_FETCH_SUCCESS": 0,
+                    "PAGE_FETCH_CACHE_HIT": 0,
+                    "PAGE_FETCH_BLOCKED": 0,
+                    "PAGE_FETCH_TIMEOUT": 0,
+                    "PAGE_FETCH_EMPTY": 0,
+                    "PAGE_FETCH_UNSUPPORTED": 0,
+                }
+
+                # Deduplication across URLs
+                seen_in_batch = set()
+                enriched_results = []
+
+                # Index selected items for quick lookup
+                selected_urls = {str(item.get("url") or "").strip().lower() for item in selected_for_fetch}
+
+                for item in all_triaged:
+                    url = str(item.get("url") or "").strip()
+                    canonical_url = re.sub(r"[?#].*$", "", url).rstrip("/").lower()
+                    if canonical_url in seen_in_batch:
+                        continue
+                    seen_in_batch.add(canonical_url)
+
+                    # Check for obvious binary document noise
+                    if url.lower().endswith((".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv")):
+                        continue
+
+                    # Check for hard financial reject classes
+                    title = str(item.get("title") or "")
+                    snippet = str(item.get("snippet") or item.get("content") or "")
+                    src_class = classify_source_class(url, title=title, snippet=snippet)
+                    if src_class in TRIGGER_HARD_REJECT_CLASSES or item.get("triage_class") == CLASS_FINANCIAL_MARKET_NOISE:
+                        continue
+
+                    item_copy = dict(item)
+                    item_url_lower = url.lower()
+
+                    # Decide if this item should be fetched
+                    should_fetch = (
+                        (item_url_lower in selected_urls or item.get("recommended_fetch"))
+                        and iteration_fetches < FETCH_BUDGET_PER_DISCOVERY_ITERATION
+                    )
+
+                    if should_fetch:
+                        page_fetch_telemetry["PAGE_FETCH_ATTEMPTED"] += 1
+                        iteration_fetches += 1
+
+                        content_res = page_content_fetcher.fetch_page(url, db=db, source_type=item.get("triage_class", "SECONDARY"))
+                        f_status = content_res.get("fetch_status")
+                        if f_status == "FETCH_SUCCESS":
+                            if content_res.get("cache_hit"):
+                                page_fetch_telemetry["PAGE_FETCH_CACHE_HIT"] += 1
+                            else:
+                                page_fetch_telemetry["PAGE_FETCH_SUCCESS"] += 1
+                        elif f_status == "FETCH_BLOCKED":
+                            page_fetch_telemetry["PAGE_FETCH_BLOCKED"] += 1
+                        elif f_status == "FETCH_TIMEOUT":
+                            page_fetch_telemetry["PAGE_FETCH_TIMEOUT"] += 1
+                        elif f_status == "FETCH_EMPTY":
+                            page_fetch_telemetry["PAGE_FETCH_EMPTY"] += 1
+                        else:
+                            page_fetch_telemetry["PAGE_FETCH_UNSUPPORTED"] += 1
+
+                        item_copy["fetch_status"] = f_status
+                        if f_status == "FETCH_SUCCESS" and content_res.get("extracted_text"):
+                            title_fallback = title or ""
+                            page_title = content_res.get("title") or title_fallback
+                            page_pub_date = content_res.get("publication_date")
+                            structured_facts = extract_structured_evidence(
+                                text=content_res["extracted_text"],
+                                title=page_title,
+                                url=url,
+                                publication_date=page_pub_date,
+                                source_type=item.get("triage_class", "SECONDARY"),
+                            )
+                            evidence_packet = {
+                                "source_type": item.get("triage_class", "SECONDARY"),
+                                "url": url,
+                                "title": page_title,
+                                "publication_date": page_pub_date or "",
+                                "publisher": content_res.get("publisher") or "",
+                                "author": content_res.get("author") or "",
+                                "extracted_text": content_res.get("extracted_text") or "",
+                                "structured_facts": structured_facts,
+                                "independent_source_count": 1,
+                            }
+                            item_copy["evidence_packet"] = evidence_packet
+                            item_copy["structured_evidence"] = structured_facts
+                            item_copy["page_title"] = page_title
+                        else:
+                            item_copy["evidence_packet"] = None
+                            item_copy["structured_evidence"] = None
+                    else:
+                        item_copy["fetch_status"] = "NOT_ATTEMPTED"
+                        item_copy["evidence_packet"] = None
+                        item_copy["structured_evidence"] = None
+
+                    enriched_results.append(item_copy)
+
+                # Update iteration fetch tracking if running on instance
+                if hasattr(self, "_iteration_fetches_count"):
+                    self._iteration_fetches_count = iteration_fetches
+
+                # 3c. Extract Candidate Companies & Group Evidence (Task 3B Contract)
+                candidates_by_company = {}
+                results_with_page_evidence = 0
+                results_using_snippet_fallback = 0
+                invalid_entities_rejected = 0
+
+                for item in enriched_results:
+                    title = str(item.get("title") or "")
+                    snippet = str(item.get("snippet") or item.get("content") or "")
+                    url = str(item.get("url") or "")
+                    date_val = str((item.get("metadata") or {}).get("date") or "")
+                    ev_packet = item.get("evidence_packet")
+                    struct_ev = item.get("structured_evidence") or {}
+
+                    resolution = None
+                    used_page_evidence = False
+
+                    # Strategy A: Use Page Evidence if fetch succeeded
+                    if item.get("fetch_status") == "FETCH_SUCCESS" and struct_ev:
+                        page_cand = struct_ev.get("company")
+                        if page_cand and page_cand != "UNKNOWN":
+                            res_a = resolve_canonical_company_identity(
+                                raw_candidate=page_cand,
+                                title=item.get("page_title") or title,
+                                snippet=snippet,
+                                url=url,
+                            )
+                            if res_a.get("is_valid") and res_a.get("company_name"):
+                                resolution = res_a
+                                used_page_evidence = True
+
+                    # Strategy B: Fallback to Snippet/Title Extraction
+                    if not resolution or not resolution.get("is_valid"):
+                        raw_cand = extract_clean_company_name_from_title(title) or extract_candidate_company_name(title, snippet)
+                        res_b = resolve_canonical_company_identity(
+                            raw_candidate=raw_cand or "",
+                            title=title,
+                            snippet=snippet,
+                            url=url,
+                        )
+                        if res_b.get("is_valid") and res_b.get("company_name"):
+                            resolution = res_b
+                            used_page_evidence = False
+
+                    # If still invalid, reject entity strictly
+                    if not resolution or not resolution.get("is_valid") or not resolution.get("company_name"):
+                        invalid_entities_rejected += 1
+                        continue
+
+                    if used_page_evidence:
+                        results_with_page_evidence += 1
+                    else:
+                        results_using_snippet_fallback += 1
+
+                    norm_name = resolution["company_name"].strip()
+                    if norm_name not in candidates_by_company:
+                        candidates_by_company[norm_name] = {
+                            "company_name": norm_name,
+                            "company_name_confidence": resolution.get("confidence", 0.90),
+                            "canonicalization_method": resolution.get("canonicalization_method", "EXPLICIT_TITLE_OR_SNIPPET"),
+                            "company_name_evidence": resolution.get("evidence", ""),
+                            "titles": [],
+                            "snippets": [],
+                            "source_urls": [],
+                            "dates": [],
+                            "evidence_packets": [],
+                        }
+                    group = candidates_by_company[norm_name]
+                    if title and title not in group["titles"]:
+                        group["titles"].append(title)
+                    if snippet and snippet not in group["snippets"]:
+                        group["snippets"].append(snippet)
+                    if url and url not in group["source_urls"]:
+                        group["source_urls"].append(url)
+                    if date_val and date_val not in group["dates"]:
+                        group["dates"].append(date_val)
+                    if ev_packet and ev_packet not in group["evidence_packets"]:
+                        group["evidence_packets"].append(ev_packet)
+
+                grouped_candidates = list(candidates_by_company.values())
+
+                logger.info(
+                    "[DISCOVERY_PIPELINE_TELEMETRY] Raw: %d | PageFetchAttempted: %d | PageFetchSuccess: %d | CacheHit: %d | Blocked: %d | Timeout: %d | ResultsWithPageEv: %d | ResultsSnippetFallback: %d | EntityCandidates: %d",
+                    len(raw_results),
+                    page_fetch_telemetry["PAGE_FETCH_ATTEMPTED"],
+                    page_fetch_telemetry["PAGE_FETCH_SUCCESS"],
+                    page_fetch_telemetry["PAGE_FETCH_CACHE_HIT"],
+                    page_fetch_telemetry["PAGE_FETCH_BLOCKED"],
+                    page_fetch_telemetry["PAGE_FETCH_TIMEOUT"],
+                    results_with_page_evidence,
+                    results_using_snippet_fallback,
+                    len(grouped_candidates),
+                )
 
                 strong_count = 0
                 incomplete_count = 0
@@ -750,44 +984,7 @@ def discover_new_calibration_opportunities(
 
                 for candidate_group in grouped_candidates:
                     company_name = candidate_group.get("company_name", "")
-
-                    # 3b. Bounded Page Content Fetching & Structured Evidence Extraction
-                    evidence_packets = []
-                    candidate_urls = candidate_group.get("source_urls", []) or []
-                    for u in candidate_urls[:2]:
-                        norm_u = u.strip()
-                        if not norm_u:
-                            continue
-                        tr_item = triaged_by_url.get(norm_u)
-                        source_class = tr_item.get("relevance_class", "POTENTIALLY_RELEVANT") if tr_item else "SECONDARY"
-                        if source_class in {"NOISE", "FINANCIAL_MARKET_NOISE"} and len(candidate_urls) > 1:
-                            continue
-
-                        content_res = page_content_fetcher.fetch_page(norm_u, db=db, source_type=source_class)
-                        if content_res.get("fetch_status") == "FETCH_SUCCESS" and content_res.get("extracted_text"):
-                            title_fallback = candidate_group["titles"][0] if candidate_group.get("titles") else ""
-                            page_title = content_res.get("title") or title_fallback
-                            page_pub_date = content_res.get("publication_date")
-                            structured_facts = extract_structured_evidence(
-                                text=content_res["extracted_text"],
-                                title=page_title,
-                                url=norm_u,
-                                publication_date=page_pub_date,
-                            )
-                            evidence_packets.append({
-                                "source_type": source_class,
-                                "url": norm_u,
-                                "title": page_title,
-                                "publication_date": page_pub_date or "",
-                                "publisher": content_res.get("publisher") or "",
-                                "author": content_res.get("author") or "",
-                                "extracted_text": content_res.get("extracted_text") or "",
-                                "structured_facts": structured_facts,
-                                "independent_source_count": 1,
-                            })
-
-                    candidate_group["evidence_packets"] = evidence_packets
-
+                    evidence_packets = candidate_group.get("evidence_packets", [])
                     # 4. Opportunity Reasoner with Evidence Packets
                     assessment = opportunity_reasoner.reason_opportunity(
                         candidate_group=candidate_group,

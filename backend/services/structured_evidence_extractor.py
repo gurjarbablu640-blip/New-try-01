@@ -61,10 +61,9 @@ def extract_facility_and_geography(text: str, candidate_company: str = "") -> Di
     facility_name = None
 
     # Search for Indian cities
-    for word in re.findall(r"\b[A-Za-z]+(?:\s+[A-Za-z]+)?\b", text):
-        w_lower = word.lower().strip()
-        if w_lower in INDIAN_CITIES and not found_city:
-            found_city = word.title()
+    for city in sorted(INDIAN_CITIES, key=len, reverse=True):
+        if re.search(r"\b" + re.escape(city) + r"\b", text, re.IGNORECASE) and not found_city:
+            found_city = city.title()
             break
 
     # Search for Indian states
@@ -165,25 +164,46 @@ def extract_structured_evidence(
         )
         if m and len(m) > 1:
             cand = m[0].strip()
-            is_valid, _ = validate_company_entity(cand, title)
-            if is_valid:
-                company_name = cand
+            if not cand.lower().startswith(("rs", "inr", "₹", "in ")):
+                is_valid, _ = validate_company_entity(cand, title)
+                if is_valid:
+                    company_name = cand
 
         if not company_name:
             from services.entity_truth_gate import extract_clean_company_name_from_title
             extracted_cand = extract_clean_company_name_from_title(title)
-            if extracted_cand:
+            if extracted_cand and not extracted_cand.lower().startswith(("rs", "inr", "₹")):
                 is_valid, _ = validate_company_entity(extracted_cand, title)
                 if is_valid:
                     company_name = extracted_cand
 
-        if not company_name:
-            words = title.split()
-            if len(words) >= 1:
-                potential = words[0]
-                is_valid, _ = validate_company_entity(potential)
+    # Minimal Task 3B: If title did not resolve company, use page body leading text
+    if not company_name and body_text:
+        lead_text = body_text[:2000]
+        # Match leading organization subject preceding action verbs in article body
+        body_match = re.search(
+            r"(?:^|\.\s+|\n+)(?:In\s+[A-Za-z]+,\s*)?([A-Z0-9][A-Za-z0-9\s.,&'\-]{2,40}?)\s+(?:today\s+)?(?:has\s+)?(?:announced|announces|inaugurated|inaugurates|commissioned|commissions|invested|invests|set\s+up|sets\s+up|expanded|expands|signed|signs|unveiled|unveils)\b",
+            lead_text,
+        )
+        if body_match:
+            cand = body_match.group(1).strip()
+            cand = re.sub(r"[,;:-]+$", "", cand).strip()
+            cand_lower = cand.lower()
+            generic_endings = (
+                " index", " sector", " growth", " market", " quarter", " jobs",
+                " line", " plant", " facility", " unit", " state", " states",
+                " government", " policy", " scheme", " minister", " crore", " crores",
+                " plants", " expansion", " capex", " segment", " segments", " output",
+                " production", " manufacturing", " industry", " hub", " park"
+            )
+            if (
+                not cand_lower.startswith(("rs", "inr", "₹", "in ", "the ", "to "))
+                and not any(cand_lower.endswith(ge) for ge in generic_endings)
+                and len(cand.split()) <= 4
+            ):
+                is_valid, _ = validate_company_entity(cand, lead_text[:300])
                 if is_valid:
-                    company_name = potential
+                    company_name = cand
 
     confidence = 0.5
     if geo_fac["city"] != "UNKNOWN":

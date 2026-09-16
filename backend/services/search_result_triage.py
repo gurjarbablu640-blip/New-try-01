@@ -148,11 +148,29 @@ def triage_and_rank_results(
     raw_results: List[Dict[str, Any]],
     max_to_fetch: int = 3,
     max_fetch: Optional[int] = None,
-) -> List[Dict[str, Any]]:
-    """Triage and rank search results, selecting up to max_to_fetch highest-value candidates."""
+    return_all: bool = False,
+) -> Any:
+    """Triage and rank search results, selecting up to max_to_fetch highest-value candidates.
+
+    If return_all is True:
+        returns (selected_for_fetch, all_classified_results, triage_telemetry)
+    If return_all is False:
+        returns selected_for_fetch (for backwards compatibility)
+    """
     if max_fetch is not None:
         max_to_fetch = max_fetch
     classified: List[Dict[str, Any]] = []
+
+    telemetry = {
+        "RAW_SERPER_RESULTS": len(raw_results),
+        "TRIAGE_HIGH_VALUE": 0,
+        "TRIAGE_COMPANY_PAGE": 0,
+        "TRIAGE_POTENTIAL": 0,
+        "TRIAGE_DIRECTORY": 0,
+        "TRIAGE_FINANCIAL_NOISE": 0,
+        "TRIAGE_NOISE": 0,
+        "FETCH_ELIGIBLE": 0,
+    }
 
     for idx, item in enumerate(raw_results):
         triage_class, base_score_100 = classify_search_result(item)
@@ -160,6 +178,20 @@ def triage_and_rank_results(
         item_copy["triage_class"] = triage_class
         item_copy["relevance_class"] = triage_class
         item_copy["original_rank"] = idx + 1
+
+        # Track telemetry
+        if triage_class == CLASS_HIGH_VALUE_PRIMARY:
+            telemetry["TRIAGE_HIGH_VALUE"] += 1
+        elif triage_class == CLASS_COMPANY_PAGE:
+            telemetry["TRIAGE_COMPANY_PAGE"] += 1
+        elif triage_class == CLASS_POTENTIALLY_RELEVANT:
+            telemetry["TRIAGE_POTENTIAL"] += 1
+        elif triage_class == CLASS_INDUSTRY_DIRECTORY:
+            telemetry["TRIAGE_DIRECTORY"] += 1
+        elif triage_class == CLASS_FINANCIAL_MARKET_NOISE:
+            telemetry["TRIAGE_FINANCIAL_NOISE"] += 1
+        else:
+            telemetry["TRIAGE_NOISE"] += 1
 
         # Calculate Priority Score (0.0 to 10.0)
         score = base_score_100 / 10.0 - (idx * 0.2)
@@ -176,12 +208,13 @@ def triage_and_rank_results(
     # Sort descending by relevance score
     classified.sort(key=lambda x: x["relevance_score"], reverse=True)
 
-    # Filter for candidates eligible for page fetching (excluding noise and directories)
+    # Filter for candidates eligible for page fetching (excluding noise, financial noise, and directories)
     eligible = [
         item for item in classified
         if item["triage_class"] in {CLASS_HIGH_VALUE_PRIMARY, CLASS_POTENTIALLY_RELEVANT, CLASS_COMPANY_PAGE}
         and item["relevance_score"] >= 5.0
     ]
+    telemetry["FETCH_ELIGIBLE"] = len(eligible)
 
     selected = eligible[:max_to_fetch]
     for s in selected:
@@ -194,4 +227,6 @@ def triage_and_rank_results(
             (s.get("title") or "")[:60],
         )
 
+    if return_all:
+        return selected, classified, telemetry
     return selected

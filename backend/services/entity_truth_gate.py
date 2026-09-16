@@ -141,7 +141,7 @@ GENERIC_PAGE_AND_NAVIGATION_PATTERNS = [
 
 # Common news, aggregator, social, and directory domains that report on third-party companies
 NEWS_AND_AGGREGATOR_DOMAINS = {
-    "economictimes.indiatimes.com", "business-standard.com", "livemint.com",
+    "thehindubusinessline.com", "economictimes.indiatimes.com", "business-standard.com", "livemint.com",
     "thehindu.com", "hindustantimes.com", "timesofindia.indiatimes.com",
     "reuters.com", "bloomberg.com", "cnbctv18.com", "moneycontrol.com",
     "financialexpress.com", "ndtv.com", "ndtvprofit.com", "zeeconnect.com",
