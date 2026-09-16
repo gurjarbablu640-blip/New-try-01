@@ -25,6 +25,8 @@ from services.calibration_inference_engine import infer_calibration_need, estima
 
 logger = logging.getLogger(__name__)
 
+_MODULE_ITERATION_FETCHES_COUNT: int = 0
+
 # Direct and Indirect Signal Types
 SIGNAL_TAXONOMY = {
     # Direct Signals (Explicit market demand)
@@ -775,7 +777,8 @@ def discover_new_calibration_opportunities(
                 )
 
                 # Track iteration-level fetch budget
-                iteration_fetches = getattr(self, "_iteration_fetches_count", 0) if hasattr(self, "_iteration_fetches_count") else 0
+                global _MODULE_ITERATION_FETCHES_COUNT
+                iteration_fetches = _MODULE_ITERATION_FETCHES_COUNT
 
                 # 3b. Fetch selected pages BEFORE entity extraction (with dedup and cache reuse)
                 page_fetch_telemetry = {
@@ -878,9 +881,8 @@ def discover_new_calibration_opportunities(
 
                     enriched_results.append(item_copy)
 
-                # Update iteration fetch tracking if running on instance
-                if hasattr(self, "_iteration_fetches_count"):
-                    self._iteration_fetches_count = iteration_fetches
+                # Update iteration fetch tracking
+                _MODULE_ITERATION_FETCHES_COUNT = iteration_fetches
 
                 # 3c. Extract Candidate Companies & Group Evidence (Task 3B Contract)
                 candidates_by_company = {}
