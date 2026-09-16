@@ -230,13 +230,55 @@ def ingest_discovered_signal_lead(
     analyst_decision_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Ingests or updates a company based on a verified business trigger signal."""
+    from services.entity_truth_gate import (
+        validate_company_entity,
+        resolve_canonical_company_identity,
+    )
+
+    clean_name = (company_name or "").strip()
+    is_valid, rejection_reason = validate_company_entity(clean_name, event_title)
+    canonical_method = "EXPLICIT_TITLE_OR_SNIPPET"
+    canonical_confidence = 0.90
+    if not is_valid:
+        # Bounded canonical resolution using available context
+        resolution = resolve_canonical_company_identity(
+            raw_candidate=clean_name,
+            title=event_title,
+            snippet=event_description,
+            url=evidence_url or "",
+        )
+        if resolution.get("is_valid") and resolution.get("company_name"):
+            clean_name = resolution["company_name"].strip()
+            canonical_method = resolution.get("canonicalization_method", "CANONICAL_RESOLVED")
+            canonical_confidence = resolution.get("confidence", 0.90)
+            logger.info(
+                "ingest_discovered_signal_lead: Generic entity '%s' canonically resolved to '%s' (%s)",
+                company_name,
+                clean_name,
+                canonical_method,
+            )
+        else:
+            logger.warning(
+                "ingest_discovered_signal_lead: Rejected invalid company entity '%s' (%s) - skipping DB persistence",
+                company_name,
+                rejection_reason or resolution.get("rejection_reason"),
+            )
+            return {
+                "status": "rejected_invalid_entity",
+                "company_id": None,
+                "company_name": company_name,
+                "icp_score": 0,
+                "buying_window": None,
+                "rejection_reason": rejection_reason or resolution.get("rejection_reason"),
+            }
+
     # 1. Deduplicate or fetch company
-    company = db.query(Company).filter(Company.name.ilike(company_name.strip())).first()
+    company = db.query(Company).filter(Company.name.ilike(clean_name)).first()
     is_new = False
     if not company:
         is_new = True
         company = Company(
-            name=company_name.strip(),
+            name=clean_name,
             city=city,
             state=state,
             industry=industry,
@@ -759,6 +801,9 @@ def discover_new_calibration_opportunities(
 
                     live_search_candidates.append({
                         "company_name": company_name[:100],
+                        "company_name_confidence": candidate_group.get("company_name_confidence", 0.90),
+                        "canonicalization_method": candidate_group.get("canonicalization_method", "EXPLICIT_TITLE_OR_SNIPPET"),
+                        "company_name_evidence": candidate_group.get("company_name_evidence", ""),
                         "city": facility.get("city") or geo_to_execute,
                         "state": facility.get("state") or geo_to_execute,
                         "industry": sector_to_execute,
@@ -894,9 +939,21 @@ def discover_new_calibration_opportunities(
             analyst_decision_id=strategy_decision.id if strategy_decision else None,
         )
 
+        if not ingested or not ingested.get("company_id"):
+            logger.info(
+                "discover_new_calibration_opportunities: Skipping candidate '%s' because entity was rejected (%s)",
+                candidate.get("company_name"),
+                ingested.get("rejection_reason") if ingested else "Unknown",
+            )
+            continue
+
+        resolved_name = str(ingested.get("company_name") or candidate["company_name"])
         discovered_candidates.append({
             "company_id": ingested["company_id"],
-            "company_name": candidate["company_name"],
+            "company_name": resolved_name,
+            "company_name_confidence": candidate.get("company_name_confidence", 0.90),
+            "canonicalization_method": candidate.get("canonicalization_method", "EXPLICIT_TITLE_OR_SNIPPET"),
+            "company_name_evidence": candidate.get("company_name_evidence", ""),
             "city": candidate["city"],
             "state": candidate["state"],
             "industry": candidate["industry"],

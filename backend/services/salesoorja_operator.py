@@ -1180,7 +1180,10 @@ class SalesoorjaOperator:
             if time.monotonic() >= next_heartbeat:
                 self._heartbeat()
                 next_heartbeat = time.monotonic() + 10.0
-            time.sleep(min(1.0, deadline - time.monotonic()))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(max(0.0, min(1.0, remaining)))
         return self._is_stop_requested()
 
     def _run_production_loop(self) -> None:

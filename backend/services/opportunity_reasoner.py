@@ -52,15 +52,19 @@ def extract_candidate_company_name(title: str, snippet: str = "") -> Optional[st
     if lead_match:
         name = lead_match.group("company").strip()
         if len(name) >= 3 and not name.lower().startswith(("how", "why", "what", "where", "exclusive")):
-            return name
+            from services.entity_truth_gate import validate_company_entity
+            if validate_company_entity(name)[0]:
+                return name
 
-    # Fallback to headline before colon/dash
-    parts = re.split(r"[:\-|–—]", raw)
+    # Fallback to headline segments - inspect segments for non-generic valid corporate entity
+    parts = [p.strip() for p in re.split(r"[:\-|–—]", raw) if p.strip()]
     if parts:
-        first = parts[0].strip()
-        words = first.split()
-        if 1 <= len(words) <= 5:
-            return first
+        from services.entity_truth_gate import validate_company_entity
+        for part in parts:
+            words = part.split()
+            if 1 <= len(words) <= 5:
+                if validate_company_entity(part)[0]:
+                    return part
 
     return None
 
@@ -144,6 +148,10 @@ class OpportunityReasoner:
             title = str(item.get("title") or "")
             snippet = str(item.get("snippet") or item.get("content") or "")
 
+            # 2. Obvious PDF / Document / Financial Noise Prefilters
+            if url.lower().endswith((".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv")):
+                continue
+
             src_class = classify_source_class(url, title=title, snippet=snippet)
             if src_class in TRIGGER_HARD_REJECT_CLASSES:
                 telemetry["financial_noise_rejected"] += 1
@@ -162,7 +170,7 @@ class OpportunityReasoner:
 
             clean_results.append(item)
 
-        # 4. Extract Company & Run Entity Truth Gate
+        # 4. Extract Company & Run Entity Truth Gate with Bounded Canonical Resolution
         candidates_by_company: Dict[str, Dict[str, Any]] = {}
         for item in clean_results:
             title = str(item.get("title") or "")
@@ -170,21 +178,35 @@ class OpportunityReasoner:
             url = str(item.get("url") or "")
             date_val = str((item.get("metadata") or {}).get("date") or "")
 
-            from services.entity_truth_gate import extract_clean_company_name_from_title
-            name = extract_clean_company_name_from_title(title) or extract_candidate_company_name(title, snippet)
-            if not name:
-                continue
+            from services.entity_truth_gate import (
+                extract_clean_company_name_from_title,
+                resolve_canonical_company_identity,
+            )
 
-            is_valid, reason = validate_company_entity(name, title)
-            if not is_valid:
+            raw_cand = extract_clean_company_name_from_title(title) or extract_candidate_company_name(title, snippet)
+            resolution = resolve_canonical_company_identity(
+                raw_candidate=raw_cand or "",
+                title=title,
+                snippet=snippet,
+                url=url,
+            )
+
+            if not resolution.get("is_valid") or not resolution.get("company_name"):
                 telemetry["invalid_entities_rejected"] += 1
-                logger.info("Cheap Filter: Rejected entity '%s' (%s)", name, reason)
+                logger.info(
+                    "Cheap Filter: Rejected entity candidate '%s' (%s)",
+                    raw_cand or title[:40],
+                    resolution.get("rejection_reason"),
+                )
                 continue
 
-            norm_name = name.strip()
+            norm_name = resolution["company_name"].strip()
             if norm_name not in candidates_by_company:
                 candidates_by_company[norm_name] = {
                     "company_name": norm_name,
+                    "company_name_confidence": resolution.get("confidence", 0.90),
+                    "canonicalization_method": resolution.get("canonicalization_method", "EXPLICIT_TITLE_OR_SNIPPET"),
+                    "company_name_evidence": resolution.get("evidence", ""),
                     "titles": [],
                     "snippets": [],
                     "source_urls": [],
