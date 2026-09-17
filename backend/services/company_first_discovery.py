@@ -168,85 +168,108 @@ class CompanyFirstDiscoveryService:
                 "hold_reason": gate_decision.blocked_reason or "STATIC_MANUFACTURER_NO_CURRENT_TRIGGER",
             }
 
-        # Natural targeted query generated without static negative tails (-stock)
-        query = gate_decision.suggested_query or f'"{company_name}" (expansion OR capex OR "new plant" OR commissioned OR inaugurated) "{geography}"'
-        search_res = self.router.search(query, num_results=5, db=db)
-        results = search_res.get("results", []) or []
-
-        if not results:
-            followup_information_gain_gate.record_search_outcome(
-                company_name=company_name,
-                missing_fact="CAPEX_EVENT",
-                query=query,
-                research_strategy=gate_decision.research_strategy,
-                result_count=0,
-                new_evidence_found=False,
-                evidence_type_found=None,
-                funnel_state_before="INCOMPLETE",
-                funnel_state_after="HOLD",
-                llm_reasoning=gate_decision.reason,
-                db=db,
+        # Atomic Multi-Process Search Reservation (Task 3D.1F.1 Section 4, 5, 6)
+        acquired, res_token = followup_information_gain_gate.acquire_search_reservation(
+            company_name=company_name,
+            missing_fact="CAPEX_EVENT",
+            strategy=gate_decision.research_strategy,
+            attempt=gate_decision.prior_attempt_count + 1,
+        )
+        if not acquired:
+            logger.info(
+                "[COMPANY_FIRST_SEARCH_BLOCKED_CONCURRENT] (%s + CAPEX_EVENT) already reserved by concurrent worker. Skipping duplicate search.",
+                company_name,
             )
             return {
                 "has_trigger": False,
                 "trigger_type": "NONE",
                 "evidence_url": None,
                 "evidence_snippet": None,
-                "hold_reason": "STATIC_MANUFACTURER_NO_CURRENT_TRIGGER",
+                "hold_reason": "CONCURRENT_RESERVATION_ACTIVE",
             }
 
-        # Analyze matching events with bounded page content research
-        from services.search_result_triage import triage_and_rank_results
-        from services.page_content_fetcher import page_content_fetcher
-        from services.structured_evidence_extractor import extract_structured_evidence
-        from services.trigger_discovery_service import evaluate_event_semantics, extract_event_date
-        from datetime import datetime, timezone
+        # Natural targeted query generated without static negative tails (-stock)
+        query = gate_decision.suggested_query or f'"{company_name}" (expansion OR capex OR "new plant" OR commissioned OR inaugurated) "{geography}"'
+        try:
+            search_res = self.router.search(query, num_results=5, db=db)
+            results = search_res.get("results", []) or []
 
-        triaged = triage_and_rank_results(results, max_fetch=2)
-        top = triaged[0] if triaged else results[0]
-        title = str(top.get("title") or "")
-        snippet = str(top.get("snippet") or "")
-        url = str(top.get("url") or "")
+            if not results:
+                followup_information_gain_gate.record_search_outcome(
+                    company_name=company_name,
+                    missing_fact="CAPEX_EVENT",
+                    query=query,
+                    research_strategy=gate_decision.research_strategy,
+                    result_count=0,
+                    new_evidence_found=False,
+                    evidence_type_found=None,
+                    funnel_state_before="INCOMPLETE",
+                    funnel_state_after="HOLD",
+                    llm_reasoning=gate_decision.reason,
+                    db=db,
+                )
+                return {
+                    "has_trigger": False,
+                    "trigger_type": "NONE",
+                    "evidence_url": None,
+                    "evidence_snippet": None,
+                    "hold_reason": "STATIC_MANUFACTURER_NO_CURRENT_TRIGGER",
+                }
 
-        content_res = page_content_fetcher.fetch_page(url, db=db)
-        article_text = content_res.get("extracted_text", "") if content_res.get("fetch_status") == "FETCH_SUCCESS" else ""
-        pub_date = content_res.get("publication_date", "")
+            # Analyze matching events with bounded page content research
+            from services.search_result_triage import triage_and_rank_results
+            from services.page_content_fetcher import page_content_fetcher
+            from services.structured_evidence_extractor import extract_structured_evidence
+            from services.trigger_discovery_service import evaluate_event_semantics, extract_event_date
+            from datetime import datetime, timezone
 
-        date_eval_text = f"{snippet} {pub_date} {article_text[:2000]}".strip()
-        semantics = evaluate_event_semantics(f"{snippet} {article_text[:1000]}", title=title)
-        recency = extract_event_date(date_eval_text, title=title, now_dt=datetime.now(timezone.utc), url=url)
+            triaged = triage_and_rank_results(results, max_fetch=2)
+            top = triaged[0] if triaged else results[0]
+            title = str(top.get("title") or "")
+            snippet = str(top.get("snippet") or "")
+            url = str(top.get("url") or "")
 
-        is_valid = bool(
-            semantics.get("is_valid")
-            and recency.get("recency_tier") in {"CURRENT", "RECENT"}
-            and not recency.get("is_future_planned_milestone")
-        )
+            content_res = page_content_fetcher.fetch_page(url, db=db)
+            article_text = content_res.get("extracted_text", "") if content_res.get("fetch_status") == "FETCH_SUCCESS" else ""
+            pub_date = content_res.get("publication_date", "")
 
-        if is_valid:
-            structured_facts = (
-                extract_structured_evidence(article_text, title=title, url=url, publication_date=pub_date)
-                if article_text
-                else {}
+            date_eval_text = f"{snippet} {pub_date} {article_text[:2000]}".strip()
+            semantics = evaluate_event_semantics(f"{snippet} {article_text[:1000]}", title=title)
+            recency = extract_event_date(date_eval_text, title=title, now_dt=datetime.now(timezone.utc), url=url)
+
+            is_valid = bool(
+                semantics.get("is_valid")
+                and recency.get("recency_tier") in {"CURRENT", "RECENT"}
+                and not recency.get("is_future_planned_milestone")
             )
-            return {
-                "has_trigger": True,
-                "trigger_type": semantics.get("trigger_type", "plant_expansion"),
-                "evidence_url": url,
-                "evidence_title": title,
-                "evidence_snippet": snippet,
-                "recency": recency,
-                "semantics": semantics,
-                "structured_evidence": structured_facts,
-                "hold_reason": None,
-            }
 
-        return {
-            "has_trigger": False,
-            "trigger_type": "UNVERIFIED",
-            "evidence_url": url,
-            "evidence_snippet": snippet,
-            "hold_reason": f"Trigger recency or semantics unverified ({recency.get('recency_tier', 'UNKNOWN')})",
-        }
+            if is_valid:
+                structured_facts = (
+                    extract_structured_evidence(article_text, title=title, url=url, publication_date=pub_date)
+                    if article_text
+                    else {}
+                )
+                return {
+                    "has_trigger": True,
+                    "trigger_type": semantics.get("trigger_type", "plant_expansion"),
+                    "evidence_url": url,
+                    "evidence_title": title,
+                    "evidence_snippet": snippet,
+                    "recency": recency,
+                    "semantics": semantics,
+                    "structured_evidence": structured_facts,
+                    "hold_reason": None,
+                }
+
+            return {
+                "has_trigger": False,
+                "trigger_type": "UNVERIFIED",
+                "evidence_url": url,
+                "evidence_snippet": snippet,
+                "hold_reason": f"Trigger recency or semantics unverified ({recency.get('recency_tier', 'UNKNOWN')})",
+            }
+        finally:
+            followup_information_gain_gate.release_search_reservation(company_name, "CAPEX_EVENT", res_token)
 
 
 company_first_discovery = CompanyFirstDiscoveryService()

@@ -30,6 +30,7 @@ from services.structured_evidence_extractor import extract_structured_evidence
 from services.followup_information_gain_gate import (
     followup_information_gain_gate,
     FollowupInformationGainGate,
+    canonicalize_missing_fact,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,29 +41,16 @@ MAX_FOLLOWUP_ROUNDS = 2
 
 # Natural targeted query templates without blind static negative tails (Amendment 6)
 FOLLOWUP_TEMPLATES = {
-    "EXACT_FACILITY": '"{company_name}" plant facility location city',
-    "facility_city": '"{company_name}" plant facility location city',
-    "CURRENT_EVENT_DATE": '"{company_name}" plant commissioning commercial production',
-    "event_date": '"{company_name}" plant commissioning commercial production',
+    "FACILITY_LOCATION": '"{company_name}" plant facility location city',
+    "TRIGGER_DATE": '"{company_name}" plant commissioning commercial production date',
     "COMMISSIONING_STATUS": '"{company_name}" plant commissioning commercial production',
+    "OPERATING_STATUS": '"{company_name}" manufacturing facility operations active',
     "MACHINERY_CONTEXT": '"{company_name}" machinery installed testing metrology line',
-}
-
-FIELD_TO_FACT_MAP = {
-    "EXACT_FACILITY": "FACILITY_LOCATION",
-    "facility_city": "FACILITY_LOCATION",
-    "facility_name": "FACILITY_LOCATION",
-    "location": "FACILITY_LOCATION",
-    "city": "FACILITY_LOCATION",
-    "CURRENT_EVENT_DATE": "TRIGGER_DATE",
-    "event_date": "TRIGGER_DATE",
-    "date": "TRIGGER_DATE",
-    "COMMISSIONING_STATUS": "COMMISSIONING_STATUS",
-    "status": "COMMISSIONING_STATUS",
-    "commissioning": "COMMISSIONING_STATUS",
-    "MACHINERY_CONTEXT": "MACHINERY_CONTEXT",
-    "machinery": "MACHINERY_CONTEXT",
-    "capex": "CAPEX_EVENT",
+    "CAPEX_EVENT": '"{company_name}" manufacturing plant capex expansion',
+    "PLANT_OWNERSHIP": '"{company_name}" plant facility owner subsidiary',
+    "COMPANY_FACILITY_RELATIONSHIP": '"{company_name}" plant facility manufacturing',
+    "SUBSIDIARY_RELATIONSHIP": '"{company_name}" subsidiary parent manufacturing plant',
+    "CURRENT_OPERATIONAL_EVIDENCE": '"{company_name}" plant operational updates',
 }
 
 
@@ -80,14 +68,10 @@ class AdaptiveResearchService:
         self.gate = gate or followup_information_gain_gate
 
     def _map_field_to_missing_fact(self, field: str) -> str:
-        """Map raw missing field names to standardized MISSING_FACT taxonomy."""
-        clean = (field or "").strip()
-        if clean in FIELD_TO_FACT_MAP:
-            return FIELD_TO_FACT_MAP[clean]
-        lower = clean.lower()
-        for k, v in FIELD_TO_FACT_MAP.items():
-            if k.lower() in lower:
-                return v
+        """Map raw missing field names to standardized canonical MISSING_FACT taxonomy."""
+        canon = canonicalize_missing_fact(field)
+        if canon:
+            return canon
         return "COMMISSIONING_STATUS"
 
     def _generate_fallback_query(
@@ -179,6 +163,22 @@ class AdaptiveResearchService:
 
             # Query is approved by Gate
             query_to_run = gate_decision.suggested_query or self._generate_fallback_query(company_name, missing_fact)
+
+            # Atomic Multi-Process Search Reservation (Task 3D.1F.1 Section 4, 5, 6)
+            acquired, res_token = self.gate.acquire_search_reservation(
+                company_name=company_name,
+                missing_fact=missing_fact,
+                strategy=gate_decision.research_strategy,
+                attempt=gate_decision.prior_attempt_count + 1,
+            )
+            if not acquired:
+                logger.info(
+                    "[FOLLOWUP_SEARCH_BLOCKED_CONCURRENT] Another worker holds active reservation for (%s + %s). Skipping duplicate search.",
+                    company_name,
+                    missing_fact,
+                )
+                continue
+
             executed_queries.append(query_to_run)
 
             logger.info(

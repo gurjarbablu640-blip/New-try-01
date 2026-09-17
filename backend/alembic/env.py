@@ -17,10 +17,15 @@ from models import (  # noqa: E402, F401
     Instrument, InstrumentAlias, PriceHistory, AIFeedback, LearningRule,
     WebResearchItem, Campaign, CampaignStep, CampaignRecipient, CampaignEvent,
     CompetitorProfile, CompetitorObservation, KnowledgeDocument, KnowledgeChunk,
+    DiscoveryQueryLog, BusinessAnalystDecision, FollowupQueryMemoryRecord,
 )
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL_SYNC)
+target_url = config.get_main_option("sqlalchemy.url")
+if not target_url or target_url.startswith("driver://"):
+    target_url = settings.DATABASE_URL_SYNC
+config.set_main_option("sqlalchemy.url", target_url)
+
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 

@@ -1,11 +1,11 @@
-"""Authoritative LLM Information-Gain Gate for Downstream Follow-Up Research (Task 3D.1F).
+"""Authoritative LLM Information-Gain Gate for Downstream Follow-Up Research (Task 3D.1F & 3D.1F.1).
 
 Enforces an intelligent, truth-preserving, information-gain boundary before any downstream
 follow-up web search is issued for an existing company candidate.
 
 Authoritative Rules & Architecture:
 1. Missing Fact Specification: Every search must target an explicit missing fact
-   (FACILITY_LOCATION, COMMISSIONING_STATUS, CAPEX_EVENT, etc.).
+   (FACILITY_LOCATION, COMMISSIONING_STATUS, CAPEX_EVENT, etc.). Canonicalizes all aliases.
 2. Deterministic Obvious Generic Blocker: Generic terms (Chemical, Steel, Plant) are blocked immediately.
 3. Resolved Entity Requirement: Candidate must have a persisted Company ID or pass the Pre-Persistence
    Entity Truth Gate as TARGET_INDUSTRIAL_COMPANY.
@@ -16,16 +16,24 @@ Authoritative Rules & Architecture:
    (e.g. OFFICIAL_COMPANY, GOVERNMENT_SOURCE) with clear rationale.
 6. Natural Query Generation: No static blind negative keyword tails (-stock -share -dividend).
    Negative keywords are included only when prior results contain financial noise and the LLM recommends it.
-7. Durable Concurrency-Safe Memory: Backed by PostgreSQL (FollowupQueryMemoryRecord) with in-memory fallback.
-8. Telemetry & Truth Preservation: Tracks productive outcomes preserved, replaced by existing evidence,
+7. Durable Concurrency-Safe Memory & Atomic Reservation: Backed by PostgreSQL (FollowupQueryMemoryRecord)
+   and atomic multi-process search reservations with bounded lease (default 60s) via Redis / memory.
+8. Safe Fail-Closed LLM Fallback: When both DeepSeek and Gemini fail, the gate safely HOLDS
+   to prevent speculative Serper expenditure.
+9. Telemetry & Truth Preservation: Tracks productive outcomes preserved, replaced by existing evidence,
    and zero loss of qualified accounts.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 import re
 import threading
+import time
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -38,19 +46,94 @@ from services.llm_provider import DeepSeekProvider, GeminiProvider
 
 logger = logging.getLogger(__name__)
 
-# --- Standardized Taxonomies ---
+# --- Standardized Taxonomies (Task 3D.1F.1 Section 9) ---
 VALID_MISSING_FACTS = {
     "FACILITY_LOCATION",
-    "COMPANY_FACILITY_RELATIONSHIP",
     "TRIGGER_DATE",
     "COMMISSIONING_STATUS",
     "OPERATING_STATUS",
     "PLANT_OWNERSHIP",
+    "COMPANY_FACILITY_RELATIONSHIP",
     "CAPEX_EVENT",
     "SUBSIDIARY_RELATIONSHIP",
     "CURRENT_OPERATIONAL_EVIDENCE",
     "MACHINERY_CONTEXT",
 }
+
+MISSING_FACT_ALIASES: Dict[str, str] = {
+    # Facility Location aliases
+    "facility_location": "FACILITY_LOCATION",
+    "facility_city": "FACILITY_LOCATION",
+    "exact_facility": "FACILITY_LOCATION",
+    "facility location": "FACILITY_LOCATION",
+    "facility_name": "FACILITY_LOCATION",
+    "facility name": "FACILITY_LOCATION",
+    "facility": "FACILITY_LOCATION",
+    "location": "FACILITY_LOCATION",
+    "city": "FACILITY_LOCATION",
+    "plant_location": "FACILITY_LOCATION",
+    "plant location": "FACILITY_LOCATION",
+    
+    # Trigger Date aliases
+    "trigger_date": "TRIGGER_DATE",
+    "current_event_date": "TRIGGER_DATE",
+    "event_date": "TRIGGER_DATE",
+    "event date": "TRIGGER_DATE",
+    "date": "TRIGGER_DATE",
+    
+    # Commissioning / Operating Status aliases
+    "commissioning_status": "COMMISSIONING_STATUS",
+    "commissioning": "COMMISSIONING_STATUS",
+    "status": "COMMISSIONING_STATUS",
+    "operating_status": "OPERATING_STATUS",
+    "operational_status": "OPERATING_STATUS",
+    
+    # Machinery Context aliases
+    "machinery_context": "MACHINERY_CONTEXT",
+    "machinery": "MACHINERY_CONTEXT",
+    "equipment": "MACHINERY_CONTEXT",
+    "machinery context": "MACHINERY_CONTEXT",
+    
+    # Capex Event aliases
+    "capex_event": "CAPEX_EVENT",
+    "capex": "CAPEX_EVENT",
+    "expansion": "CAPEX_EVENT",
+    "capital_expenditure": "CAPEX_EVENT",
+    
+    # Plant Ownership / Relationship aliases
+    "plant_ownership": "PLANT_OWNERSHIP",
+    "company_facility_relationship": "COMPANY_FACILITY_RELATIONSHIP",
+    "facility_relationship": "COMPANY_FACILITY_RELATIONSHIP",
+    "ownership": "PLANT_OWNERSHIP",
+    
+    # Subsidiary Relationship aliases
+    "subsidiary_relationship": "SUBSIDIARY_RELATIONSHIP",
+    "subsidiary": "SUBSIDIARY_RELATIONSHIP",
+    
+    # Current Operational Evidence
+    "current_operational_evidence": "CURRENT_OPERATIONAL_EVIDENCE",
+    "operational_evidence": "CURRENT_OPERATIONAL_EVIDENCE",
+}
+
+
+def canonicalize_missing_fact(fact: str) -> str:
+    """Map any alias or raw string to canonical MISSING_FACT taxonomy."""
+    if not fact:
+        return ""
+    clean = fact.strip()
+    if clean in VALID_MISSING_FACTS:
+        return clean
+    clean_upper = clean.upper()
+    if clean_upper in VALID_MISSING_FACTS:
+        return clean_upper
+    lower = clean.lower()
+    if lower in MISSING_FACT_ALIASES:
+        return MISSING_FACT_ALIASES[lower]
+    for alias, canon in MISSING_FACT_ALIASES.items():
+        if alias in lower or lower in alias:
+            return canon
+    return clean_upper
+
 
 RESEARCH_STRATEGIES = {
     "GENERAL_WEB",
@@ -58,12 +141,20 @@ RESEARCH_STRATEGIES = {
     "GOVERNMENT_SOURCE",
     "TRADE_MEDIA",
     "FACILITY_SPECIFIC",
-    "EVENT_SPECIFIC",
+    "CORPORATE_FILING",
     "OTHER",
 }
 
+ALTERNATIVE_ACTIONS = {
+    "USE_EXISTING_EVIDENCE",
+    "SEARCH",
+    "HOLD",
+    "UPGRADE_OPPORTUNITY",
+}
+
 EXPECTED_GAINS = {"HIGH", "MEDIUM", "LOW"}
-ALTERNATIVE_ACTIONS = {"SEARCH", "USE_EXISTING_EVIDENCE", "HOLD", "OTHER_SOURCE"}
+
+RESERVATION_LEASE_SECONDS = 60  # Bounded lease to prevent permanent lockout
 
 GENERIC_ENTITY_BLOCKLIST = {
     "chemical", "chemicals", "steel", "steels", "manufacturing", "electronics",
@@ -73,66 +164,68 @@ GENERIC_ENTITY_BLOCKLIST = {
     "enterprise", "enterprises", "corporation", "holdings", "technologies",
 }
 
-# --- Telemetry ---
-_telemetry_lock = threading.Lock()
-FOLLOWUP_TELEMETRY: Dict[str, int] = {
+# In-memory telemetry store
+_TELEMETRY: Dict[str, int] = {
     "FOLLOWUP_RESEARCH_DECISIONS": 0,
+    "FOLLOWUP_SEARCHES_EXECUTED": 0,
     "FOLLOWUP_SEARCH_ALLOWED": 0,
-    "FOLLOWUP_SEARCH_BLOCKED_LOW_GAIN": 0,
-    "FOLLOWUP_SEARCH_BLOCKED_EXHAUSTED": 0,
     "FOLLOWUP_SEARCH_BLOCKED_GENERIC_ENTITY": 0,
     "FOLLOWUP_BLOCKED_UNRESOLVED_ENTITY": 0,
+    "FOLLOWUP_SEARCH_BLOCKED_EXHAUSTED": 0,
+    "FOLLOWUP_SEARCH_BLOCKED_LOW_GAIN": 0,
     "FOLLOWUP_EXISTING_EVIDENCE_REUSED": 0,
-    "FOLLOWUP_SEARCHES_EXECUTED": 0,
+    "FOLLOWUP_QUERY_REPETITION_BLOCKED": 0,
+    "FOLLOWUP_RESERVATIONS_ACQUIRED": 0,
+    "FOLLOWUP_RESERVATIONS_BLOCKED_CONCURRENT": 0,
+    "FOLLOWUP_SEARCH_BLOCKED_CONCURRENT_RESERVATION": 0,
+    "FOLLOWUP_LLM_NEW_SEARCH_JUSTIFIED": 0,
+    "FOLLOWUP_LLM_EXISTING_EVIDENCE_SUFFICIENT": 0,
+    "FOLLOWUP_LLM_FAILURE_DETERMINISTIC_FALLBACKS": 0,
+    "FOLLOWUP_SEARCH_BLOCKED_LLM_FAILURE": 0,
+    "FOLLOWUP_PRODUCTIVE_OUTCOME_PRESERVED": 0,
+    "FOLLOWUP_PRODUCTIVE_CALL_REPLACED_BY_EXISTING_EVIDENCE": 0,
     "FOLLOWUP_SEARCHES_WITH_NEW_EVIDENCE": 0,
     "FOLLOWUP_SEARCHES_WITHOUT_NEW_EVIDENCE": 0,
-    "FOLLOWUP_QUERY_REPETITION_BLOCKED": 0,
     "FOLLOWUP_HOLD_TO_PASS": 0,
     "FOLLOWUP_UNKNOWN_TO_VERIFIED": 0,
-    "FOLLOWUP_SERPER_CALLS_PER_ACCOUNT": 0,
-    "FOLLOWUP_SERPER_CALLS_PER_FACILITY_PASS": 0,
-    "FOLLOWUP_PRODUCTIVE_OUTCOME_PRESERVED": 0,
-    "FOLLOWUP_PRODUCTIVE_OUTCOME_LOST": 0,
-    "FOLLOWUP_PRODUCTIVE_CALL_REPLACED_BY_EXISTING_EVIDENCE": 0,
-    "FOLLOWUP_PERSON_RESEARCH_QUERIES_SEPARATE": 0,
-    "FOLLOWUP_LLM_EXISTING_EVIDENCE_SUFFICIENT": 0,
-    "FOLLOWUP_LLM_NEW_SEARCH_JUSTIFIED": 0,
     "DEEPSEEK_FOLLOWUP_CALLS": 0,
     "GEMINI_FOLLOWUP_FALLBACKS": 0,
     "FOLLOWUP_PROVIDER_FAILURES": 0,
 }
+_TELEMETRY_LOCK = threading.Lock()
 
 
 def increment_telemetry(metric: str, count: int = 1) -> None:
-    with _telemetry_lock:
-        FOLLOWUP_TELEMETRY[metric] = FOLLOWUP_TELEMETRY.get(metric, 0) + count
+    with _TELEMETRY_LOCK:
+        _TELEMETRY[metric] = _TELEMETRY.get(metric, 0) + count
 
 
 def get_telemetry() -> Dict[str, int]:
-    with _telemetry_lock:
-        return dict(FOLLOWUP_TELEMETRY)
+    with _TELEMETRY_LOCK:
+        return dict(_TELEMETRY)
 
 
 def reset_telemetry() -> None:
-    with _telemetry_lock:
-        for k in FOLLOWUP_TELEMETRY:
-            FOLLOWUP_TELEMETRY[k] = 0
+    with _TELEMETRY_LOCK:
+        for k in _TELEMETRY:
+            _TELEMETRY[k] = 0
 
 
 @dataclass
 class InformationGainDecision:
-    """Structured decision returned by the Information-Gain Gate."""
+    """Authoritative decision object produced by FollowupInformationGainGate."""
+
     search_needed: bool
     missing_fact: str
-    expected_information_gain: str
+    expected_information_gain: str  # HIGH, MEDIUM, LOW
     reason: str
-    suggested_query: str
-    research_strategy: str
-    alternative_action: str
-    decision_type: str = "LLM_EVALUATED"
-    provider_used: str = "DEEPSEEK"
-    prior_attempt_count: int = 0
+    suggested_query: str = ""
+    research_strategy: str = "GENERAL_WEB"
+    alternative_action: str = "HOLD"  # USE_EXISTING_EVIDENCE, SEARCH, HOLD, UPGRADE_OPPORTUNITY
+    decision_type: str = "DETERMINISTIC"  # DETERMINISTIC_REJECT, LLM_EVALUATED, CONCURRENT_RESERVATION_BLOCKED, LLM_FAILURE_HOLD
+    provider_used: str = "NONE"  # DEEPSEEK, GEMINI, DETERMINISTIC
     blocked_reason: Optional[str] = None
+    prior_attempt_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -145,57 +238,74 @@ class InformationGainDecision:
             "alternative_action": self.alternative_action,
             "decision_type": self.decision_type,
             "provider_used": self.provider_used,
-            "prior_attempt_count": self.prior_attempt_count,
             "blocked_reason": self.blocked_reason,
+            "prior_attempt_count": self.prior_attempt_count,
         }
 
 
-GATE_SYSTEM_PROMPT = """You are the Authoritative Research Strategist and Information-Gain Gate for Salesoorja.
-Your mission: evaluate whether another web search is genuinely needed for a company candidate to resolve an explicit missing fact, or if existing evidence is already sufficient, or if further search is wasteful.
+GATE_SYSTEM_PROMPT = """You are the Authoritative LLM Information-Gain Gate for Salesoorja follow-up research.
+Your mission is to ELIMINATE wasteful, redundant downstream follow-up web searches for existing company candidates.
 
-EVALUATION RULES:
-1. SEMANTIC EVIDENCE SUFFICIENCY: Check if the provided evidence ALREADY contains or sufficiently proves the missing fact.
-   - If existing evidence establishes the fact (e.g. mentions plant location, commercial production status, capex amount, or operating entity), DO NOT SEARCH.
-   - Set search_needed=false, alternative_action="USE_EXISTING_EVIDENCE", expected_information_gain="LOW".
-2. EXPECTED INFORMATION GAIN:
-   - "HIGH": Very likely to discover a specific, verifiable missing factual milestone that moves the account from HOLD/INCOMPLETE to PASS/VERIFIED.
-   - "MEDIUM": Moderate chance of discovering the fact with an escalated or tailored strategy.
-   - "LOW": High probability of returning duplicate facts, promotional noise, or static stock chatter. DO NOT SEARCH.
-3. STRATEGY ESCALATION:
-   - If prior general web searches produced no new evidence, do not repeat general web search.
-   - Escalate strategy: "OFFICIAL_COMPANY" (newsroom, media releases), "GOVERNMENT_SOURCE" (regulatory filings, PCB, GIDC, MIDC, SIPCOT), or "TRADE_MEDIA".
-   - If prior 2 searches failed and no genuinely alternate source strategy can be justified, set search_needed=false, alternative_action="HOLD".
-4. NATURAL QUERY GENERATION:
-   - Generate a targeted, natural query.
-   - DO NOT blindly append static negative keywords like "-stock -share -dividend -trading -equity -sensex -nifty".
-   - Only include negative keywords if prior search results exhibited financial market noise and excluding it specifically improves precision.
+Rules & Logic:
+1. Missing Fact Verification:
+   Check whether the Current Evidence Corpus ALREADY contains or clearly implies the missing fact.
+   If existing evidence is sufficient, output search_needed=false and alternative_action="USE_EXISTING_EVIDENCE".
+2. Stop-Rule on Unproductive Repetition:
+   If 2 prior searches for this (company + missing_fact) found no new evidence, you MUST output search_needed=false
+   UNLESS you are recommending a genuinely escalated, distinct source strategy (e.g. OFFICIAL_COMPANY, GOVERNMENT_SOURCE)
+   with explicit rationale why previous searches failed.
+3. Information Gain Standard:
+   Expected information gain must be HIGH or MEDIUM to justify search. If gain is LOW, output search_needed=false and alternative_action="HOLD".
+4. Natural Targeted Queries:
+   When search_needed=true, generate a natural targeted query.
+   DO NOT append blind static negative keyword strings (e.g. do NOT blindly append "-stock -share -dividend -trading").
+   Include negative keywords ONLY if prior results showed financial confusion and it is strictly necessary.
 
-OUTPUT SCHEMA (return valid JSON only):
+Output Format: Return valid JSON with keys:
 {
-  "search_needed": true | false,
+  "search_needed": true/false,
   "missing_fact": "<FACILITY_LOCATION | COMMISSIONING_STATUS | CAPEX_EVENT | ...>",
-  "expected_information_gain": "HIGH" | "MEDIUM" | "LOW",
-  "reason": "<Detailed rationale explaining evidence sufficiency or information gain>",
-  "suggested_query": "<Targeted query or empty string if no search>",
-  "research_strategy": "GENERAL_WEB" | "OFFICIAL_COMPANY" | "GOVERNMENT_SOURCE" | "TRADE_MEDIA" | "FACILITY_SPECIFIC" | "EVENT_SPECIFIC" | "OTHER",
-  "alternative_action": "SEARCH" | "USE_EXISTING_EVIDENCE" | "HOLD" | "OTHER_SOURCE"
+  "expected_information_gain": "<HIGH | MEDIUM | LOW>",
+  "reason": "<clear explanation>",
+  "suggested_query": "<natural clean query or empty>",
+  "research_strategy": "<GENERAL_WEB | OFFICIAL_COMPANY | GOVERNMENT_SOURCE | TRADE_MEDIA | FACILITY_SPECIFIC | CORPORATE_FILING>",
+  "alternative_action": "<USE_EXISTING_EVIDENCE | SEARCH | HOLD | UPGRADE_OPPORTUNITY>"
 }"""
 
 
 class FollowupInformationGainGate:
-    """Authoritative gate controlling follow-up research for existing company candidates."""
+    """Authoritative LLM Information-Gain Gatekeeper for Downstream Follow-Up Research."""
 
     def __init__(
         self,
         primary_provider: Optional[Any] = None,
         fallback_provider: Optional[Any] = None,
         db_session: Optional[Session] = None,
+        redis_client: Optional[Any] = None,
+        fail_closed_on_llm_failure: bool = False,
     ):
         self.primary_provider = primary_provider or DeepSeekProvider()
         self.fallback_provider = fallback_provider or GeminiProvider()
         self.db_session = db_session
+        self._redis = redis_client
+        self.fail_closed_on_llm_failure = fail_closed_on_llm_failure
+        self._reservations: Dict[str, Tuple[str, float]] = {}  # key -> (token, expiry_ts)
+        self._reservation_lock = threading.Lock()
         self._in_memory_store: Dict[str, List[Dict[str, Any]]] = {}
         self._store_lock = threading.Lock()
+
+    def _get_redis(self) -> Optional[Any]:
+        if self._redis is not None:
+            return self._redis
+        try:
+            import redis
+            from config import settings
+            client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True, socket_timeout=1.5)
+            client.ping()
+            self._redis = client
+            return self._redis
+        except Exception:
+            return None
 
     def _normalize_name(self, name: str) -> str:
         clean = (name or "").strip().lower()
@@ -204,8 +314,8 @@ class FollowupInformationGainGate:
 
     def _normalize_query(self, query: str) -> str:
         clean = (query or "").strip().lower()
-        clean = re.sub(r'["\'-]', " ", clean)
-        clean = re.sub(r"(stock|share|dividend|trading|equity|sensex|nifty|brokerage|screener)", "", clean)
+        clean = clean.replace('"', " ").replace("'", " ").replace("-", " ")
+        clean = re.sub(r" (stock|share|dividend|trading|equity|sensex|nifty|brokerage|screener) ", "", clean)
         return " ".join(clean.split())
 
     def is_generic_entity(self, name: str) -> bool:
@@ -247,28 +357,29 @@ class FollowupInformationGainGate:
                 if pre_eval.get("entity_type") == "TARGET_INDUSTRIAL_COMPANY" and pre_eval.get("should_persist"):
                     return True, "PREPERSISTENCE_PASSED"
 
-        # Check B: Pre-persistence entity gate evaluation
-        try:
-            from services.pre_persistence_entity_gate import pre_persistence_entity_gate
-            evidence_packet = {
-                "title": (candidate_group.get("titles", [""])[0] if candidate_group and candidate_group.get("titles") else ""),
-                "snippet": (candidate_group.get("snippets", [""])[0] if candidate_group and candidate_group.get("snippets") else ""),
-                "url": (candidate_group.get("source_urls", [""])[0] if candidate_group and candidate_group.get("source_urls") else ""),
-                "industry": candidate_group.get("sector", "") if candidate_group else "",
-            }
-            eval_res = pre_persistence_entity_gate.resolve_pre_persistence_decision(
-                candidate_name=company_name,
-                title=evidence_packet.get('title', ''),
-                snippet=evidence_packet.get('snippet', ''),
-                url=evidence_packet.get('url', ''),
-                industry=evidence_packet.get('industry', ''),
-            )
-            if eval_res.should_persist and eval_res.entity_type == "TARGET_INDUSTRIAL_COMPANY":
-                return True, "PREPERSISTENCE_EVALUATED_PASS"
-            else:
-                return False, f"Pre-persistence gate rejected: {eval_res.reason}"
-        except Exception as exc:
-            logger.debug("Pre-persistence evaluation failed: %s", exc)
+        # Check B: Pre-persistence entity gate evaluation (when candidate evidence is present)
+        if candidate_group is not None:
+            try:
+                from services.pre_persistence_entity_gate import pre_persistence_entity_gate
+                evidence_packet = {
+                    "title": (candidate_group.get("titles", [""])[0] if candidate_group.get("titles") else ""),
+                    "snippet": (candidate_group.get("snippets", [""])[0] if candidate_group.get("snippets") else ""),
+                    "url": (candidate_group.get("source_urls", [""])[0] if candidate_group.get("source_urls") else ""),
+                    "industry": candidate_group.get("sector", ""),
+                }
+                eval_res = pre_persistence_entity_gate.resolve_pre_persistence_decision(
+                    candidate_name=company_name,
+                    title=evidence_packet.get('title', ''),
+                    snippet=evidence_packet.get('snippet', ''),
+                    url=evidence_packet.get('url', ''),
+                    industry=evidence_packet.get('industry', ''),
+                )
+                if eval_res.should_persist and eval_res.entity_type == "TARGET_INDUSTRIAL_COMPANY":
+                    return True, "PREPERSISTENCE_EVALUATED_PASS"
+                else:
+                    return False, f"Pre-persistence gate rejected: {eval_res.reason}"
+            except Exception as exc:
+                logger.debug("Pre-persistence evaluation failed: %s", exc)
 
         # Conservative default: if company name is multi-word with non-generic tokens, allow
         words = self._normalize_name(company_name).split()
@@ -278,6 +389,142 @@ class FollowupInformationGainGate:
 
         return False, f"Entity '{company_name}' is ungrounded / unresolved"
 
+    # --- Atomic Search Reservation System (Task 3D.1F.1 Section 4, 5, 6) ---
+
+    def acquire_search_reservation(
+        self,
+        company_name: str,
+        missing_fact: str,
+        strategy: str = "GENERAL_WEB",
+        attempt: int = 1,
+        lease_seconds: int = RESERVATION_LEASE_SECONDS,
+        worker_id: Optional[str] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        """Atomically reserve search execution for (company + missing_fact).
+
+        Prevents two workers (e.g. FastAPI and Celery) from simultaneously deciding
+        'no prior search exists' and issuing duplicate Serper calls.
+        Safe across multi-process workers via Redis SET NX EX, with thread-safe
+        in-memory fallback.
+        Lease naturally expires after lease_seconds to prevent permanent lockout on worker crash.
+        """
+        norm_entity = self._normalize_name(company_name)
+        canon_fact = canonicalize_missing_fact(missing_fact)
+        reservation_key = f"salesoorja:followup:reservation:{norm_entity}::{canon_fact}"
+        token = worker_id or f"{os.getpid()}:{uuid.uuid4().hex[:8]}"
+
+        r = self._get_redis()
+        if r is not None:
+            try:
+                # Atomic SET if Not Exists with Expiration (bounded lease)
+                acquired = bool(r.set(reservation_key, token, nx=True, ex=lease_seconds))
+                if acquired:
+                    increment_telemetry("FOLLOWUP_RESERVATIONS_ACQUIRED")
+                    return True, token
+                else:
+                    increment_telemetry("FOLLOWUP_RESERVATIONS_BLOCKED_CONCURRENT")
+                    return False, None
+            except Exception as e:
+                logger.warning("Redis reservation check failed, using local store: %s", e)
+
+        # In-memory lease reservation with automatic expiry check
+        now = time.time()
+        with self._reservation_lock:
+            existing = self._reservations.get(reservation_key)
+            if existing:
+                existing_token, expiry = existing
+                if now < expiry:
+                    # Still active! Reject concurrent reservation
+                    increment_telemetry("FOLLOWUP_RESERVATIONS_BLOCKED_CONCURRENT")
+                    return False, None
+                # Expired lease: worker crashed or timed out, allow reclaim
+
+            self._reservations[reservation_key] = (token, now + lease_seconds)
+            increment_telemetry("FOLLOWUP_RESERVATIONS_ACQUIRED")
+            return True, token
+
+    def release_search_reservation(
+        self,
+        company_name: str,
+        missing_fact: str,
+        token: Optional[str] = None,
+    ) -> None:
+        """Release search reservation after search completes or fails."""
+        if not token:
+            return
+        norm_entity = self._normalize_name(company_name)
+        canon_fact = canonicalize_missing_fact(missing_fact)
+        reservation_key = f"salesoorja:followup:reservation:{norm_entity}::{canon_fact}"
+
+        r = self._get_redis()
+        if r is not None:
+            try:
+                val = r.get(reservation_key)
+                if val == token:
+                    r.delete(reservation_key)
+            except Exception as e:
+                logger.debug("Redis reservation release error: %s", e)
+
+        with self._reservation_lock:
+            existing = self._reservations.get(reservation_key)
+            if existing and existing[0] == token:
+                self._reservations.pop(reservation_key, None)
+
+    def is_search_reserved(
+        self,
+        company_name: str,
+        missing_fact: str,
+    ) -> bool:
+        """Check whether an active non-expired search reservation exists."""
+        norm_entity = self._normalize_name(company_name)
+        canon_fact = canonicalize_missing_fact(missing_fact)
+        reservation_key = f"salesoorja:followup:reservation:{norm_entity}::{canon_fact}"
+
+        r = self._get_redis()
+        if r is not None:
+            try:
+                if r.exists(reservation_key):
+                    return True
+            except Exception:
+                pass
+
+        now = time.time()
+        with self._reservation_lock:
+            existing = self._reservations.get(reservation_key)
+            if existing:
+                _, expiry = existing
+                if now < expiry:
+                    return True
+                self._reservations.pop(reservation_key, None)
+        return False
+
+    @contextmanager
+    def reserve_search(
+        self,
+        company_name: str,
+        missing_fact: str,
+        strategy: str = "GENERAL_WEB",
+        attempt: int = 1,
+        lease_seconds: int = RESERVATION_LEASE_SECONDS,
+    ):
+        """Context manager for clean atomic search reservation and release."""
+        acquired, token = self.acquire_search_reservation(
+            company_name=company_name,
+            missing_fact=missing_fact,
+            strategy=strategy,
+            attempt=attempt,
+            lease_seconds=lease_seconds,
+        )
+        if not acquired:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            self.release_search_reservation(company_name, missing_fact, token)
+
+    # --- Query Memory Storage & Retrieval ---
+
     def get_prior_searches(
         self,
         company_name: str,
@@ -286,6 +533,7 @@ class FollowupInformationGainGate:
     ) -> List[Dict[str, Any]]:
         """Retrieve historical search records for (company, missing_fact) from PostgreSQL."""
         norm_entity = self._normalize_name(company_name)
+        canon_fact = canonicalize_missing_fact(missing_fact)
         session = db or self.db_session
         records = []
 
@@ -295,7 +543,7 @@ class FollowupInformationGainGate:
                     session.query(FollowupQueryMemoryRecord)
                     .filter(
                         FollowupQueryMemoryRecord.normalized_operating_entity == norm_entity,
-                        FollowupQueryMemoryRecord.missing_fact == missing_fact,
+                        FollowupQueryMemoryRecord.missing_fact == canon_fact,
                     )
                     .order_by(FollowupQueryMemoryRecord.timestamp.asc())
                     .all()
@@ -306,7 +554,7 @@ class FollowupInformationGainGate:
                 session.rollback()
 
         if not records:
-            mem_key = f"{norm_entity}::{missing_fact}"
+            mem_key = f"{norm_entity}::{canon_fact}"
             with self._store_lock:
                 records = list(self._in_memory_store.get(mem_key, []))
 
@@ -331,6 +579,7 @@ class FollowupInformationGainGate:
     ) -> None:
         """Persist follow-up search query outcome to PostgreSQL (concurrency-safe) and memory."""
         norm_entity = self._normalize_name(company_name)
+        canon_fact = canonicalize_missing_fact(missing_fact)
         urls = useful_urls or []
         domains = source_domains or []
         now_dt = datetime.now(timezone.utc)
@@ -362,7 +611,7 @@ class FollowupInformationGainGate:
                 record = FollowupQueryMemoryRecord(
                     company_id=company_id,
                     normalized_operating_entity=norm_entity,
-                    missing_fact=missing_fact,
+                    missing_fact=canon_fact,
                     query=query,
                     timestamp=now_dt,
                     research_strategy=research_strategy,
@@ -385,11 +634,11 @@ class FollowupInformationGainGate:
                     session_to_use.close()
 
         # Update in-memory fallback
-        mem_key = f"{norm_entity}::{missing_fact}"
+        mem_key = f"{norm_entity}::{canon_fact}"
         entry = {
             "company_id": company_id,
             "normalized_operating_entity": norm_entity,
-            "missing_fact": missing_fact,
+            "missing_fact": canon_fact,
             "query": query,
             "timestamp": now_dt.isoformat(),
             "research_strategy": research_strategy,
@@ -468,12 +717,14 @@ class FollowupInformationGainGate:
         facility_name: Optional[str] = None,
         current_funnel_status: str = "INCOMPLETE",
         db: Optional[Session] = None,
+        fail_closed_on_llm_failure: Optional[bool] = None,
     ) -> InformationGainDecision:
         """Core Gatekeeper: Evaluates whether a follow-up Serper call is justified."""
         increment_telemetry("FOLLOWUP_RESEARCH_DECISIONS")
 
-        # Step 0: Validate missing_fact
-        if not missing_fact or missing_fact not in VALID_MISSING_FACTS:
+        # Step 0: Canonicalize missing_fact & validate taxonomy (Task 3D.1F.1 Section 9)
+        canon_fact = canonicalize_missing_fact(missing_fact)
+        if not canon_fact or canon_fact not in VALID_MISSING_FACTS:
             return InformationGainDecision(
                 search_needed=False,
                 missing_fact=missing_fact or "UNSPECIFIED",
@@ -486,12 +737,28 @@ class FollowupInformationGainGate:
                 blocked_reason="UNSPECIFIED_MISSING_FACT",
             )
 
+        # Step 0.5: Concurrent Search Reservation Check (Task 3D.1F.1 Section 4, 5)
+        # If another worker currently holds an active non-expired search lease, block duplicate search!
+        if self.is_search_reserved(company_name, canon_fact):
+            increment_telemetry("FOLLOWUP_SEARCH_BLOCKED_CONCURRENT_RESERVATION")
+            return InformationGainDecision(
+                search_needed=False,
+                missing_fact=canon_fact,
+                expected_information_gain="LOW",
+                reason=f"Concurrent search reservation active for ({company_name} + {canon_fact}). Preventing duplicate search.",
+                suggested_query="",
+                research_strategy="OTHER",
+                alternative_action="HOLD",
+                decision_type="CONCURRENT_RESERVATION_BLOCKED",
+                blocked_reason="ACTIVE_SEARCH_RESERVATION",
+            )
+
         # Step 1: Obvious Generic Entity Block
         if self.is_generic_entity(company_name):
             increment_telemetry("FOLLOWUP_SEARCH_BLOCKED_GENERIC_ENTITY")
             return InformationGainDecision(
                 search_needed=False,
-                missing_fact=missing_fact,
+                missing_fact=canon_fact,
                 expected_information_gain="LOW",
                 reason=f"Candidate entity '{company_name}' is an isolated generic industry noun (e.g. Chemical/Steel/Plant)",
                 suggested_query="",
@@ -501,7 +768,7 @@ class FollowupInformationGainGate:
                 blocked_reason="BLOCK_GENERIC_ENTITY",
             )
 
-        # Step 2: Resolved Entity Verification (Amendment 5)
+        # Step 2: Resolved Entity Verification
         is_resolved, resolve_reason = self.is_entity_resolved(
             company_name=company_name,
             company_id=company_id,
@@ -511,7 +778,7 @@ class FollowupInformationGainGate:
             increment_telemetry("FOLLOWUP_BLOCKED_UNRESOLVED_ENTITY")
             return InformationGainDecision(
                 search_needed=False,
-                missing_fact=missing_fact,
+                missing_fact=canon_fact,
                 expected_information_gain="LOW",
                 reason=f"Follow-up research blocked: Candidate '{company_name}' is not a resolved operating entity ({resolve_reason})",
                 suggested_query="",
@@ -524,7 +791,7 @@ class FollowupInformationGainGate:
         # Step 3: Fetch Prior Query History from Postgres
         prior_searches = self.get_prior_searches(
             company_name=company_name,
-            missing_fact=missing_fact,
+            missing_fact=canon_fact,
             db=db,
         )
         attempt_count = len(prior_searches)
@@ -538,9 +805,9 @@ class FollowupInformationGainGate:
             increment_telemetry("FOLLOWUP_PRODUCTIVE_CALL_REPLACED_BY_EXISTING_EVIDENCE")
             return InformationGainDecision(
                 search_needed=False,
-                missing_fact=missing_fact,
+                missing_fact=canon_fact,
                 expected_information_gain="LOW",
-                reason=f"Missing fact '{missing_fact}' was already resolved in prior search (evidence: {successful_searches[-1].get('evidence_type_found')})",
+                reason=f"Missing fact '{canon_fact}' was already resolved in prior search (evidence: {successful_searches[-1].get('evidence_type_found')})",
                 suggested_query="",
                 research_strategy=successful_searches[-1].get("research_strategy", "GENERAL_WEB"),
                 alternative_action="USE_EXISTING_EVIDENCE",
@@ -548,8 +815,7 @@ class FollowupInformationGainGate:
                 prior_attempt_count=attempt_count,
             )
 
-        # Step 4: Repetition Stop Rule (Section 8)
-        # Default max: 2 unsuccessful searches.
+        # Step 4: Repetition Stop Rule
         exhausted = unsuccessful_count >= 2
 
         # Step 5: Check Existing Evidence Corpus
@@ -569,19 +835,19 @@ class FollowupInformationGainGate:
         user_prompt = f"""EVALUATE FOLLOW-UP RESEARCH INFORMATION GAIN:
 Company: "{company_name}"
 Facility: {json.dumps(facility_name)}
-Missing Fact Required: "{missing_fact}"
+Missing Fact Required: "{canon_fact}"
 Current Funnel Status: "{current_funnel_status}"
 
 Current Evidence Corpus:
 {evidence_summary}
 
-Prior Searches Executed for ({company_name} + {missing_fact}):
+Prior Searches Executed for ({company_name} + {canon_fact}):
 {prior_search_summary}
 
 Prior Unsuccessful Searches: {unsuccessful_count} / Maximum 2
 
 TASK:
-1. Does the Current Evidence Corpus ALREADY provide or substantiate the missing fact '{missing_fact}'?
+1. Does the Current Evidence Corpus ALREADY provide or substantiate the missing fact '{canon_fact}'?
 2. If not, would another search yield HIGH or MEDIUM information gain?
    (If 2 prior searches failed with no new evidence, you may ONLY authorize search if recommending an escalated source strategy like OFFICIAL_COMPANY or GOVERNMENT_SOURCE with explicit justification. Otherwise output search_needed=false).
 3. If search is needed, generate a natural targeted query (DO NOT append static negative keyword lists).
@@ -615,7 +881,7 @@ Return ONLY valid JSON matching the schema."""
 
                 return InformationGainDecision(
                     search_needed=False,
-                    missing_fact=missing_fact,
+                    missing_fact=canon_fact,
                     expected_information_gain=exp_gain,
                     reason=reason,
                     suggested_query="",
@@ -626,17 +892,16 @@ Return ONLY valid JSON matching the schema."""
                     prior_attempt_count=attempt_count,
                 )
 
-            # Deterministic Guard: Repetition Stop Rule Enforcement (Section 8)
+            # Deterministic Guard: Repetition Stop Rule Enforcement
             if exhausted:
-                # Only allowed if strategy is genuinely escalated and different from prior strategies
                 prior_strategies = {s.get("research_strategy") for s in prior_searches}
                 if research_strategy in prior_strategies or research_strategy == "GENERAL_WEB":
                     increment_telemetry("FOLLOWUP_SEARCH_BLOCKED_EXHAUSTED")
                     return InformationGainDecision(
                         search_needed=False,
-                        missing_fact=missing_fact,
+                        missing_fact=canon_fact,
                         expected_information_gain="LOW",
-                        reason=f"Blocked after 2 unsuccessful searches for ({company_name} + {missing_fact}). Strategy '{research_strategy}' is not an escalated new source strategy.",
+                        reason=f"Blocked after 2 unsuccessful searches for ({company_name} + {canon_fact}). Strategy '{research_strategy}' is not an escalated new source strategy.",
                         suggested_query="",
                         research_strategy=research_strategy,
                         alternative_action="HOLD",
@@ -654,7 +919,7 @@ Return ONLY valid JSON matching the schema."""
                         increment_telemetry("FOLLOWUP_QUERY_REPETITION_BLOCKED")
                         return InformationGainDecision(
                             search_needed=False,
-                            missing_fact=missing_fact,
+                            missing_fact=canon_fact,
                             expected_information_gain="LOW",
                             reason=f"Suggested query is a cosmetic duplicate of an exhausted prior query ('{s.get('query')}')",
                             suggested_query="",
@@ -672,7 +937,7 @@ Return ONLY valid JSON matching the schema."""
                 increment_telemetry("FOLLOWUP_LLM_NEW_SEARCH_JUSTIFIED")
                 return InformationGainDecision(
                     search_needed=True,
-                    missing_fact=missing_fact,
+                    missing_fact=canon_fact,
                     expected_information_gain=exp_gain,
                     reason=reason,
                     suggested_query=suggested_query,
@@ -686,7 +951,7 @@ Return ONLY valid JSON matching the schema."""
                 increment_telemetry("FOLLOWUP_SEARCH_BLOCKED_LOW_GAIN")
                 return InformationGainDecision(
                     search_needed=False,
-                    missing_fact=missing_fact,
+                    missing_fact=canon_fact,
                     expected_information_gain="LOW",
                     reason=reason,
                     suggested_query="",
@@ -698,14 +963,16 @@ Return ONLY valid JSON matching the schema."""
                     blocked_reason="BLOCK_LOW_GAIN",
                 )
 
-        # Fallback if both LLMs fail: Safe Deterministic Fallback
+        # Safe deterministic fallback when both LLMs fail (Task 3D.1F.1 Section 8)
+        fc = self.fail_closed_on_llm_failure if fail_closed_on_llm_failure is None else fail_closed_on_llm_failure
         return self._deterministic_fallback_evaluation(
             company_name=company_name,
-            missing_fact=missing_fact,
+            missing_fact=canon_fact,
             ev_dict=ev_dict,
             prior_searches=prior_searches,
             attempt_count=attempt_count,
             unsuccessful_count=unsuccessful_count,
+            fail_closed=fc,
         )
 
     def _deterministic_fallback_evaluation(
@@ -716,8 +983,18 @@ Return ONLY valid JSON matching the schema."""
         prior_searches: List[Dict[str, Any]],
         attempt_count: int,
         unsuccessful_count: int,
+        fail_closed: bool = False,
     ) -> InformationGainDecision:
-        """Safe deterministic fallback when LLM providers are unavailable."""
+        """Safe fail-closed deterministic fallback when LLM providers are unavailable.
+
+        Principle (Task 3D.1F.1 Section 8):
+        Use deterministic existing-memory / max-attempt / entity safety checks,
+        then HOLD when semantic information-gain cannot be established.
+        We do NOT blindly spend repeated Serper credits when both LLMs fail.
+        """
+        increment_telemetry("FOLLOWUP_LLM_FAILURE_DETERMINISTIC_FALLBACKS")
+
+        # 1. Repetition stop check
         if unsuccessful_count >= 2:
             increment_telemetry("FOLLOWUP_SEARCH_BLOCKED_EXHAUSTED")
             return InformationGainDecision(
@@ -733,7 +1010,7 @@ Return ONLY valid JSON matching the schema."""
                 blocked_reason="BLOCK_EXHAUSTED",
             )
 
-        # Check basic evidence presence
+        # 2. Check existing evidence in corpus
         combined_text = " ".join(
             ev_dict.get("titles", []) + ev_dict.get("snippets", [])
         ).lower()
@@ -744,7 +1021,7 @@ Return ONLY valid JSON matching the schema."""
                     search_needed=False,
                     missing_fact=missing_fact,
                     expected_information_gain="LOW",
-                    reason=f"Deterministic fallback: Existing text already references commissioning/commercial production",
+                    reason="Deterministic fallback: Existing text already references commissioning/commercial production",
                     suggested_query="",
                     research_strategy="GENERAL_WEB",
                     alternative_action="USE_EXISTING_EVIDENCE",
@@ -752,7 +1029,23 @@ Return ONLY valid JSON matching the schema."""
                     prior_attempt_count=attempt_count,
                 )
 
-        # Natural clean query without static negative tails
+        # 3. Section 8 Requirement: HOLD when fail_closed is requested or semantic gain cannot be established
+        if fail_closed:
+            increment_telemetry("FOLLOWUP_SEARCH_BLOCKED_LLM_FAILURE")
+            return InformationGainDecision(
+                search_needed=False,
+                missing_fact=missing_fact,
+                expected_information_gain="LOW",
+                reason=f"Safe LLM failure hold: Both DeepSeek and Gemini failed to evaluate information gain for ({company_name} + {missing_fact}). Holding to prevent speculative Serper spend.",
+                suggested_query="",
+                research_strategy="OTHER",
+                alternative_action="HOLD",
+                decision_type="LLM_FAILURE_HOLD",
+                prior_attempt_count=attempt_count,
+                blocked_reason="HOLD_LLM_UNAVAILABLE",
+            )
+
+        # 4. Natural clean query without static negative tails for attempt 1 (capped at max 2 attempts)
         query = f'"{company_name}" plant {missing_fact.replace("_", " ").lower()}'
         increment_telemetry("FOLLOWUP_SEARCH_ALLOWED")
         return InformationGainDecision(
@@ -773,33 +1066,31 @@ Return ONLY valid JSON matching the schema."""
         snippets = ev_dict.get("snippets", [])
         packets = ev_dict.get("evidence_packets", [])
 
-        for idx, t in enumerate(titles[:3]):
-            snip = snippets[idx] if idx < len(snippets) else ""
-            lines.append(f"- Title: {t} | Snippet: {snip[:250]}")
+        if titles:
+            lines.append("Titles: " + " | ".join(titles[:3]))
+        if snippets:
+            lines.append("Snippets: " + " ".join(snippets[:2])[:400])
+        if packets:
+            facts = []
+            for p in packets[:2]:
+                facts.extend([f"{k}={v}" for k, v in (p.get("structured_facts") or {}).items()])
+            if facts:
+                lines.append("Extracted Facts: " + ", ".join(facts[:5]))
 
-        for p in packets[:2]:
-            facts = p.get("structured_facts") or {}
-            ext = p.get("extracted_text", "")[:400]
-            lines.append(f"- Structured Facts: {json.dumps(facts)} | Page Text: {ext}")
-
-        return "\n".join(lines) if lines else "No prior evidence recorded."
+        return "\n".join(lines) if lines else "No prior textual evidence in corpus."
 
     def _summarize_prior_searches(self, prior_searches: List[Dict[str, Any]]) -> str:
         if not prior_searches:
-            return "No prior searches executed for this missing fact."
+            return "No previous follow-up searches executed for this (company + missing_fact)."
         lines = []
-        for idx, s in enumerate(prior_searches):
+        for i, s in enumerate(prior_searches, start=1):
             q = s.get("query", "")
-            strat = s.get("research_strategy", "")
-            cnt = s.get("result_count", 0)
-            new_ev = s.get("new_evidence_found", False)
-            ev_type = s.get("evidence_type_found", "None")
-            lines.append(
-                f"Attempt {idx+1}: Query='{q}' | Strategy={strat} | Results={cnt} | "
-                f"NewEvidence={new_ev} | TypeFound={ev_type}"
-            )
+            strat = s.get("research_strategy", "GENERAL_WEB")
+            found = s.get("new_evidence_found", False)
+            ev_type = s.get("evidence_type_found") or "NONE"
+            lines.append(f"Attempt {i} [{strat}]: query='{q}' -> new_evidence={found} ({ev_type})")
         return "\n".join(lines)
 
 
-# Global singleton instance
+# Authoritative Global Singleton
 followup_information_gain_gate = FollowupInformationGainGate()
