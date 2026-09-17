@@ -1,0 +1,13 @@
+.env
+.env.*
+.env.local
+.env.production
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+tests/.tmp/
+pytest_basetemp/
+data/runtime_state/
+.git
+.gitignore
