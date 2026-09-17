@@ -10,7 +10,7 @@ services:
 
   # FASTAPI BACKEND (Isolated production image, no source bind, no reload)
   backend:
-    image: salesoorja-backend:prod-0188715
+    image: salesoorja-backend:phase2-rc2-47f807b
     container_name: salesoorja-backend
     restart: unless-stopped
     env_file:
@@ -28,7 +28,7 @@ services:
       DEBUG: "False"
       CORS_ORIGINS: ${CORS_ORIGINS}
       REDIFF_SYSTEM_PATH: /rediff-system
-      SALESOORJA_BUILD_SHA: "0188715d87a642297fc9e7857e3bd9dca7853065"
+      SALESOORJA_BUILD_SHA: "47f807bb9007f59d57a2bf85d68aa4a8f90c48cf"
     volumes:
       - type: bind
         source: ${REDIFF_SYSTEM_PATH}
@@ -45,7 +45,7 @@ services:
 
   # CELERY WORKER (Isolated production image, no source bind)
   celery-worker:
-    image: salesoorja-backend:prod-0188715
+    image: salesoorja-backend:phase2-rc2-47f807b
     container_name: salesoorja-celery-worker
     restart: unless-stopped
     env_file:
@@ -62,7 +62,7 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: "False"
       REDIFF_SYSTEM_PATH: /rediff-system
-      SALESOORJA_BUILD_SHA: "0188715d87a642297fc9e7857e3bd9dca7853065"
+      SALESOORJA_BUILD_SHA: "47f807bb9007f59d57a2bf85d68aa4a8f90c48cf"
     volumes:
       - type: bind
         source: ${REDIFF_SYSTEM_PATH}
@@ -75,7 +75,7 @@ services:
 
   # CELERY BEAT (Isolated production image, no source bind)
   celery-beat:
-    image: salesoorja-backend:prod-0188715
+    image: salesoorja-backend:phase2-rc2-47f807b
     container_name: salesoorja-celery-beat
     restart: unless-stopped
     env_file:
@@ -87,7 +87,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY}
-      SALESOORJA_BUILD_SHA: "0188715d87a642297fc9e7857e3bd9dca7853065"
+      SALESOORJA_BUILD_SHA: "47f807bb9007f59d57a2bf85d68aa4a8f90c48cf"
     volumes:
       - runtime_data:/app/data/runtime_state
     networks:
