@@ -992,18 +992,14 @@ def enrich_candidate_via_apollo(
             ),
         }
 
-    if candidate_record.verification_confidence < APOLLO_ELIGIBLE_THRESHOLD:
-        return {
-            "status": "SKIPPED",
-            "reason": f"Confidence {candidate_record.verification_confidence:.2f} below Apollo threshold {APOLLO_ELIGIBLE_THRESHOLD}",
-        }
-
     # Phase 8: Apollo Request Idempotency & Dedup Protection
     if candidate_record.apollo_enrichment_status in ("ENRICHED", "NO_RESULT") and candidate_record.enriched_at:
         age_hours = (datetime.utcnow() - candidate_record.enriched_at).total_seconds() / 3600.0
         if age_hours < 720.0:  # 30-day protection window
+            call_type = "REUSED_EXISTING_APOLLO_RESULT" if candidate_record.apollo_email else "DEDUP_SKIPPED"
             return {
                 "status": "SKIPPED_DEDUPLICATED",
+                "call_type": call_type,
                 "reason": f"Candidate already enriched {age_hours:.1f}h ago (status: {candidate_record.apollo_enrichment_status}); credit protected by dedup window.",
                 "email": candidate_record.apollo_email,
                 "email_confidence": candidate_record.apollo_email_confidence,
@@ -1015,6 +1011,7 @@ def enrich_candidate_via_apollo(
         company_name=company_name,
         title=candidate_record.candidate_title,
     )
+    result["call_type"] = "NEW_APOLLO_NETWORK_CALL"
 
     # Update candidate record
     candidate_record.apollo_enrichment_status = result.get("status", "ERROR")
@@ -1604,6 +1601,8 @@ def run_full_discovery_pipeline(
             and (not active_signal.expires_at or active_signal.expires_at >= datetime.utcnow())
         )
     }
+    from services.person_enrichment_eligibility_gate import get_enrichment_eligibility_gate
+    _enrichment_gate = get_enrichment_eligibility_gate()
     apollo_gate_results: Dict[int, Tuple[bool, str]] = {}
     apollo_eligible = []
     for candidate in verified_candidates:
@@ -1611,17 +1610,26 @@ def run_full_discovery_pipeline(
             (candidate.candidate_name.casefold(), (candidate.candidate_title or "").casefold()),
             {},
         )
-        eligible, reason = is_apollo_eligible_lead(
-            {
+        _gate_decision = _enrichment_gate.evaluate(
+            candidate={
                 "composite_score": float(raw.get("person_score") or 0) / 100.0,
+                "candidate_name": candidate.candidate_name,
+                "candidate_title": candidate.candidate_title or "",
                 "current_employment": raw.get("current_employment"),
+                "current_employment_verified": str(raw.get("current_employment") or "").upper() == "VERIFIED",
                 "facility_relationship": raw.get("facility_relationship"),
                 "authority_class": raw.get("authority_class"),
             },
-            facility_info,
-            trigger_info,
-            {"evidence_level": "NOT_FOUND"},
+            facility_info=facility_info,
+            trigger_info=trigger_info,
             opportunity_icp_score=float(company.icp_score or 0),
+            contact_info={"evidence_level": "NOT_FOUND"},
+        )
+        eligible = _gate_decision.enrich_contact
+        reason = _gate_decision.reason
+        logger.info(
+            "[ENRICHMENT_GATE] Candidate: %s | Eligible: %s | Confidence: %s | Reason: %s",
+            candidate.candidate_name, eligible, _gate_decision.authority_confidence, reason,
         )
         apollo_gate_results[candidate.id] = (eligible, reason)
         raw["ready_for_contact_enrichment"] = eligible
@@ -1645,8 +1653,6 @@ def run_full_discovery_pipeline(
             for candidate in verified_candidates
         ],
     }
-
-    from services.person_intelligence_service import run_contact_fallback_ladder
 
     apollo_results = []
     ladder_candidates = []
@@ -1711,20 +1717,32 @@ def run_full_discovery_pipeline(
 
     if apollo_eligible:
         report_progress("apollo_enrichment", f"Enriching {len(apollo_eligible)} qualified contact candidates")
-    contact_ladder = run_contact_fallback_ladder(
-        ladder_candidates,
+    from services.contact_waterfall_service import ContactWaterfallService
+    waterfall_svc = ContactWaterfallService(
         enrich_fn=enrich_ladder_candidate,
-        max_attempts=min(max_apollo_enrichments, 3),
+        max_candidates=min(max_apollo_enrichments, 3),
+    )
+    waterfall_result = waterfall_svc.run(
+        candidates=ladder_candidates,
+        facility_info=facility_info,
+        trigger_info=trigger_info,
+        opportunity_icp_score=float(company.icp_score or 0),
+        contact_info={"evidence_level": "NOT_FOUND"},
     )
     db.commit()
 
     stages["apollo"] = {
-        "status": contact_ladder["status"],
+        "status": waterfall_result.status,
         "eligible_count": len(apollo_eligible),
         "enriched_count": sum(1 for r in apollo_results if r["status"] == "ENRICHED"),
         "results": apollo_results,
-        "attempts": contact_ladder["attempts"],
+        "attempts": waterfall_result.attempts,
         "max_candidate_attempts": 3,
+        "send_ready": waterfall_result.send_ready,
+        "email": waterfall_result.email,
+        "new_apollo_calls": waterfall_result.new_apollo_calls,
+        "reused_apollo_results": waterfall_result.reused_apollo_results,
+        "dedup_skips": waterfall_result.dedup_skips,
     }
 
     # ── 8. Email Status ───────────────────────────────────────────────

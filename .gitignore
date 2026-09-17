@@ -78,3 +78,5 @@ scripts/coderabbit/*.exe
 *.p12
 *.pfx
 *.cert
+
+.system_generated/
