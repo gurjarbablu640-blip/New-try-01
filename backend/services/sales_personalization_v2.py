@@ -292,11 +292,8 @@ class SalesPersonalizationV2Engine:
         quality_score = self._compute_quality_score(raw_body, word_count, persona, record)
 
         # Clean final body with exact sales signature
-        clean_body = raw_body.rstrip()
-        if "best regards" not in clean_body.lower() and "warm regards" not in clean_body.lower():
-            full_body = clean_body + SALES_SIGNATURE
-        else:
-            full_body = clean_body
+        clean_body = re.split(r"\n+(?:best regards|warm regards|regards)", raw_body, flags=re.IGNORECASE)[0].rstrip()
+        full_body = clean_body + "\n\n" + SALES_SIGNATURE.strip()
 
         return PersonalizationV2Result(
             status="VALIDATED",
