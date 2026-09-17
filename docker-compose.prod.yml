@@ -1,0 +1,115 @@
+# ============================================================
+# SALESOORJA PRODUCTION COMPOSE SPECIFICATION
+# Runtime is 100% isolated from local development mounts.
+# Code is baked into immutable Docker images (0188715 base).
+# Uvicorn runs without --reload.
+# Connects to existing network: new-try-01_default
+# ============================================================
+
+services:
+
+  # FASTAPI BACKEND (Isolated production image, no source bind, no reload)
+  backend:
+    image: salesoorja-backend:prod-0188715
+    container_name: salesoorja-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY}
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: "False"
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      REDIFF_SYSTEM_PATH: /rediff-system
+      SALESOORJA_BUILD_SHA: "0188715d87a642297fc9e7857e3bd9dca7853065"
+    volumes:
+      - type: bind
+        source: ${REDIFF_SYSTEM_PATH}
+        target: /rediff-system
+        read_only: true
+      - runtime_data:/app/data/runtime_state
+    networks:
+      - default
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        uvicorn main:app --host 0.0.0.0 --port 8000
+      "
+
+  # CELERY WORKER (Isolated production image, no source bind)
+  celery-worker:
+    image: salesoorja-backend:prod-0188715
+    container_name: salesoorja-celery-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY}
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: "False"
+      REDIFF_SYSTEM_PATH: /rediff-system
+      SALESOORJA_BUILD_SHA: "0188715d87a642297fc9e7857e3bd9dca7853065"
+    volumes:
+      - type: bind
+        source: ${REDIFF_SYSTEM_PATH}
+        target: /rediff-system
+        read_only: true
+      - runtime_data:/app/data/runtime_state
+    networks:
+      - default
+    command: celery -A celery_app.celery_app worker --loglevel=info --concurrency=2
+
+  # CELERY BEAT (Isolated production image, no source bind)
+  celery-beat:
+    image: salesoorja-backend:prod-0188715
+    container_name: salesoorja-celery-beat
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY}
+      SALESOORJA_BUILD_SHA: "0188715d87a642297fc9e7857e3bd9dca7853065"
+    volumes:
+      - runtime_data:/app/data/runtime_state
+    networks:
+      - default
+    command: celery -A celery_app.celery_app beat --loglevel=info
+
+  # FRONTEND (Isolated production image, no source bind)
+  frontend:
+    image: salesoorja-frontend:prod-0188715
+    container_name: salesoorja-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    networks:
+      - default
+
+networks:
+  default:
+    name: new-try-01_default
+    external: true
+
+volumes:
+  runtime_data:
+    name: salesoorja_runtime_data
+    external: true
