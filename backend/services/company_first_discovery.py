@@ -138,13 +138,55 @@ class CompanyFirstDiscoveryService:
     ) -> Dict[str, Any]:
         """Perform bounded follow-up Serper search to check if company has an active current trigger.
 
+        Guarded by Authoritative LLM Information-Gain Gate (Task 3D.1F).
         Strict Safety: Static company without verified current trigger is HELD and NEVER outreach-ready.
         """
-        query = f'"{company_name}" (expansion OR capex OR "new plant" OR commissioned OR inaugurated) "{geography}" -stock'
+        from services.followup_information_gain_gate import followup_information_gain_gate
+
+        # Gate Evaluation: Block generic/unresolved entities or queries with low gain
+        gate_decision = followup_information_gain_gate.evaluate_followup_search(
+            company_name=company_name,
+            missing_fact="CAPEX_EVENT",
+            current_evidence={"sector": sector, "geography": geography},
+            current_funnel_status="INCOMPLETE",
+            db=db,
+        )
+
+        if not gate_decision.search_needed or gate_decision.expected_information_gain not in {"HIGH", "MEDIUM"}:
+            logger.info(
+                "[COMPANY_FIRST_GATE_BLOCKED] Company: %s | Gain: %s | Action: %s | Reason: %s",
+                company_name,
+                gate_decision.expected_information_gain,
+                gate_decision.alternative_action,
+                gate_decision.reason,
+            )
+            return {
+                "has_trigger": False,
+                "trigger_type": "NONE",
+                "evidence_url": None,
+                "evidence_snippet": None,
+                "hold_reason": gate_decision.blocked_reason or "STATIC_MANUFACTURER_NO_CURRENT_TRIGGER",
+            }
+
+        # Natural targeted query generated without static negative tails (-stock)
+        query = gate_decision.suggested_query or f'"{company_name}" (expansion OR capex OR "new plant" OR commissioned OR inaugurated) "{geography}"'
         search_res = self.router.search(query, num_results=5, db=db)
         results = search_res.get("results", []) or []
 
         if not results:
+            followup_information_gain_gate.record_search_outcome(
+                company_name=company_name,
+                missing_fact="CAPEX_EVENT",
+                query=query,
+                research_strategy=gate_decision.research_strategy,
+                result_count=0,
+                new_evidence_found=False,
+                evidence_type_found=None,
+                funnel_state_before="INCOMPLETE",
+                funnel_state_after="HOLD",
+                llm_reasoning=gate_decision.reason,
+                db=db,
+            )
             return {
                 "has_trigger": False,
                 "trigger_type": "NONE",

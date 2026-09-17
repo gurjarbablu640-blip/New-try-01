@@ -24,6 +24,7 @@ from models.discovery_query_log import DiscoveryQueryLog
 from models.business_analyst_decision import BusinessAnalystDecision
 from models.funnel_work_item import FunnelWorkItem
 from models.research_evidence import ResearchEvidenceRecord
+from models.followup_query_memory import FollowupQueryMemoryRecord
 
 __all__ = [
     "Company", "Person", "CompanyWebsiteIntel", "CompanyIntentSignal", "OutreachDraft",
@@ -37,6 +38,6 @@ __all__ = [
     "CallRecord", "CompanyBeliefState", "SignalEvidenceNode",
     "NABLLabScope", "NABLScopeParameter",
     "DecisionMakerCandidate", "DiscoveryQueryLog", "BusinessAnalystDecision",
-    "FunnelWorkItem", "ResearchEvidenceRecord",
+    "FunnelWorkItem", "ResearchEvidenceRecord", "FollowupQueryMemoryRecord",
 ]
 

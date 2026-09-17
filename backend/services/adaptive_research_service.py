@@ -1,15 +1,21 @@
-"""Adaptive Targeted Research Service for Salesoorja Discovery Intelligence.
+"""Adaptive Targeted Research Service for Salesoorja Discovery Intelligence (Task 3D.1F).
 
 Triggered for PROMISING_BUT_INCOMPLETE opportunities to perform
-bounded, focused follow-up searches (cap <= 2 searches per company) to
-resolve missing facility locations, operational statuses, or commissioning dates.
-Fetches top candidate result page, extracts structured facts, aggregates evidence,
-and re-reasons with Opportunity Reasoner.
+bounded, focused follow-up searches guarded by the Authoritative
+LLM Information-Gain Gate.
+
+Key Behaviors:
+- Resolves missing facility locations, operational statuses, or commissioning dates.
+- Gates every search via FollowupInformationGainGate (DeepSeek primary / Gemini fallback).
+- Reuses existing evidence if already sufficient (USE_EXISTING_EVIDENCE).
+- Enforces repetition stop rule (max 2 unsuccessful searches).
+- Generates natural targeted queries without blind static negative keywords.
+- Persists outcome to concurrency-safe PostgreSQL memory.
 """
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from services.opportunity_reasoner import (
     opportunity_reasoner,
@@ -21,6 +27,10 @@ from services.research_provider import ResearchProviderRouter
 from services.page_content_fetcher import page_content_fetcher, STATUS_FETCH_SUCCESS
 from services.search_result_triage import triage_and_rank_results
 from services.structured_evidence_extractor import extract_structured_evidence
+from services.followup_information_gain_gate import (
+    followup_information_gain_gate,
+    FollowupInformationGainGate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,97 +38,74 @@ FOLLOWUP_SEARCH_CAP = 2
 MAX_FOLLOWUP_CALLS = 2
 MAX_FOLLOWUP_ROUNDS = 2
 
+# Natural targeted query templates without blind static negative tails (Amendment 6)
 FOLLOWUP_TEMPLATES = {
-    "EXACT_FACILITY": '"{company_name}" plant facility location city new -stock -share -dividend -trading',
-    "facility_city": '"{company_name}" plant facility location city new -stock -share -dividend -trading',
-    "CURRENT_EVENT_DATE": '"{company_name}" plant commissioning commercial production -stock -share -dividend -trading',
-    "event_date": '"{company_name}" plant commissioning commercial production -stock -share -dividend -trading',
-    "COMMISSIONING_STATUS": '"{company_name}" plant commissioning commercial production -stock -share -dividend -trading',
-    "MACHINERY_CONTEXT": '"{company_name}" machinery installed testing metrology line -stock -share',
+    "EXACT_FACILITY": '"{company_name}" plant facility location city',
+    "facility_city": '"{company_name}" plant facility location city',
+    "CURRENT_EVENT_DATE": '"{company_name}" plant commissioning commercial production',
+    "event_date": '"{company_name}" plant commissioning commercial production',
+    "COMMISSIONING_STATUS": '"{company_name}" plant commissioning commercial production',
+    "MACHINERY_CONTEXT": '"{company_name}" machinery installed testing metrology line',
+}
+
+FIELD_TO_FACT_MAP = {
+    "EXACT_FACILITY": "FACILITY_LOCATION",
+    "facility_city": "FACILITY_LOCATION",
+    "facility_name": "FACILITY_LOCATION",
+    "location": "FACILITY_LOCATION",
+    "city": "FACILITY_LOCATION",
+    "CURRENT_EVENT_DATE": "TRIGGER_DATE",
+    "event_date": "TRIGGER_DATE",
+    "date": "TRIGGER_DATE",
+    "COMMISSIONING_STATUS": "COMMISSIONING_STATUS",
+    "status": "COMMISSIONING_STATUS",
+    "commissioning": "COMMISSIONING_STATUS",
+    "MACHINERY_CONTEXT": "MACHINERY_CONTEXT",
+    "machinery": "MACHINERY_CONTEXT",
+    "capex": "CAPEX_EVENT",
 }
 
 
 class AdaptiveResearchService:
-    """Executes bounded follow-up research to ground promising but incomplete leads."""
+    """Executes bounded follow-up research guarded by LLM Information-Gain Gate."""
 
-    def __init__(self, router=None, reasoner=None):
+    def __init__(
+        self,
+        router: Optional[Any] = None,
+        reasoner: Optional[Any] = None,
+        gate: Optional[FollowupInformationGainGate] = None,
+    ):
         self.router = router or ResearchProviderRouter()
         self.reasoner = reasoner or opportunity_reasoner
+        self.gate = gate or followup_information_gain_gate
 
-    def _generate_targeted_queries(
+    def _map_field_to_missing_fact(self, field: str) -> str:
+        """Map raw missing field names to standardized MISSING_FACT taxonomy."""
+        clean = (field or "").strip()
+        if clean in FIELD_TO_FACT_MAP:
+            return FIELD_TO_FACT_MAP[clean]
+        lower = clean.lower()
+        for k, v in FIELD_TO_FACT_MAP.items():
+            if k.lower() in lower:
+                return v
+        return "COMMISSIONING_STATUS"
+
+    def _generate_fallback_query(
         self,
-        candidate_group: Dict[str, Any],
-        missing_fields: List[str],
-        geography: str = "",
-    ) -> List[str]:
-        """Generate deterministic queries based on specific missing factual fields."""
-        company_name = candidate_group.get("company_name", "Unknown")
-        target_queries: List[str] = []
-        for field in missing_fields:
-            template = FOLLOWUP_TEMPLATES.get(field)
-            if template:
-                q = template.format(company_name=company_name)
-                if q not in target_queries:
-                    target_queries.append(q)
-            elif any(k in field.lower() for k in ("facility", "city", "location")):
-                q = f'"{company_name}" plant facility location city new -stock -share -dividend -trading'
-                if q not in target_queries:
-                    target_queries.append(q)
-            elif any(k in field.lower() for k in ("date", "status", "commission")):
-                q = f'"{company_name}" plant commissioning commercial production -stock -share -dividend -trading'
-                if q not in target_queries:
-                    target_queries.append(q)
-            elif any(k in field.lower() for k in ("machinery", "equipment")):
-                q = f'"{company_name}" machinery installed testing metrology line -stock -share'
-                if q not in target_queries:
-                    target_queries.append(q)
-
-        if not target_queries:
-            target_queries.append(
-                f'"{company_name}" manufacturing plant facility "commissioning" OR "expansion" -stock -share'
-            )
-        return target_queries[:MAX_FOLLOWUP_CALLS]
-
-    def _aggregate_evidence(
-        self,
-        existing_packets: List[Dict[str, Any]],
-        new_results: List[Dict[str, Any]],
-        company_name: str = "",
-    ) -> List[Dict[str, Any]]:
-        """Aggregate evidence packets with syndication deduplication."""
-        aggregated = list(existing_packets)
-        seen_domains = set()
-        for p in aggregated:
-            u = p.get("url") or ""
-            if "/" in u:
-                parts = u.split("/")
-                if len(parts) > 2:
-                    seen_domains.add(parts[2].replace("www.", "").lower())
-
-        for item in new_results:
-            url = str(item.get("url") or "")
-            domain = url.split("/")[2].replace("www.", "").lower() if "/" in url and len(url.split("/")) > 2 else ""
-            is_duplicate = False
-            item_title = (item.get("title") or "").casefold().strip()
-            for p in aggregated:
-                p_title = (p.get("title") or "").casefold().strip()
-                if item_title and p_title and (item_title in p_title or p_title in item_title):
-                    is_duplicate = True
-                    break
-
-            indep_count = 0 if (is_duplicate or (domain and domain in seen_domains)) else 1
-            if domain:
-                seen_domains.add(domain)
-
-            aggregated.append({
-                "url": url,
-                "title": item.get("title") or "",
-                "snippet": item.get("snippet") or "",
-                "extracted_text": item.get("snippet") or "",
-                "structured_facts": {"company": company_name},
-                "independent_source_count": indep_count,
-            })
-        return aggregated
+        company_name: str,
+        missing_fact: str,
+    ) -> str:
+        """Generate clean, natural fallback query without static negative keyword tails."""
+        template = FOLLOWUP_TEMPLATES.get(missing_fact)
+        if template:
+            return template.format(company_name=company_name)
+        if missing_fact == "FACILITY_LOCATION":
+            return f'"{company_name}" plant facility location city'
+        elif missing_fact in {"TRIGGER_DATE", "COMMISSIONING_STATUS"}:
+            return f'"{company_name}" plant commissioning commercial production'
+        elif missing_fact == "CAPEX_EVENT":
+            return f'"{company_name}" manufacturing plant capex expansion'
+        return f'"{company_name}" manufacturing plant facility commissioning'
 
     def conduct_targeted_research(
         self,
@@ -128,7 +115,7 @@ class AdaptiveResearchService:
         geography: str = "",
         db: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        """Conduct targeted searches to resolve missing fields for an incomplete opportunity."""
+        """Conduct targeted searches to resolve missing fields, gated by Information-Gain Gate."""
         company_name = candidate_group.get("company_name", "Unknown")
         missing_fields = initial_assessment.get("missing_fields") or []
 
@@ -147,12 +134,6 @@ class AdaptiveResearchService:
             missing_fields,
         )
 
-        target_queries = self._generate_targeted_queries(
-            candidate_group=candidate_group,
-            missing_fields=missing_fields,
-            geography=geography,
-        )
-
         merged_candidate = dict(candidate_group)
         merged_titles = list(merged_candidate.get("titles", []))
         merged_snippets = list(merged_candidate.get("snippets", []))
@@ -160,26 +141,78 @@ class AdaptiveResearchService:
         merged_dates = list(merged_candidate.get("dates", []))
         evidence_packets = list(merged_candidate.get("evidence_packets", []))
 
-        executed_queries = []
+        executed_queries: List[str] = []
         pages_fetched_count = 0
+        existing_facts_count = sum(len(p.get("structured_facts") or {}) for p in evidence_packets)
 
-        for q in target_queries:
-            executed_queries.append(q)
+        # Iterate over missing fields, evaluating each through Information-Gain Gate
+        for raw_field in missing_fields[:MAX_FOLLOWUP_CALLS]:
+            missing_fact = self._map_field_to_missing_fact(raw_field)
+
+            # Gate Decision: Ask DeepSeek / Gemini whether search is justified
+            gate_decision = self.gate.evaluate_followup_search(
+                company_name=company_name,
+                missing_fact=missing_fact,
+                current_evidence={
+                    "titles": merged_titles,
+                    "snippets": merged_snippets,
+                    "source_urls": merged_urls,
+                    "evidence_packets": evidence_packets,
+                },
+                candidate_group=merged_candidate,
+                company_id=merged_candidate.get("company_id"),
+                facility_name=merged_candidate.get("facility"),
+                current_funnel_status=current_cls,
+                db=db,
+            )
+
+            if not gate_decision.search_needed or gate_decision.expected_information_gain not in {"HIGH", "MEDIUM"}:
+                logger.info(
+                    "[FOLLOWUP_RESEARCH_BLOCKED] Company: %s | Fact: %s | Gain: %s | Action: %s | Reason: %s",
+                    company_name,
+                    missing_fact,
+                    gate_decision.expected_information_gain,
+                    gate_decision.alternative_action,
+                    gate_decision.reason,
+                )
+                continue
+
+            # Query is approved by Gate
+            query_to_run = gate_decision.suggested_query or self._generate_fallback_query(company_name, missing_fact)
+            executed_queries.append(query_to_run)
+
+            logger.info(
+                "[FOLLOWUP_SEARCH_EXECUTING] Company: %s | Fact: %s | Strategy: %s | Query: %s",
+                company_name,
+                missing_fact,
+                gate_decision.research_strategy,
+                query_to_run,
+            )
+
+            new_results_for_query: List[Dict[str, Any]] = []
+            useful_urls: List[str] = []
+            source_domains: Set[str] = set()
+
             try:
                 search_res = self.router.search(
-                    query=q,
+                    query=query_to_run,
                     num_results=3,
                     db=db,
                     use_cache=False,
                 )
                 raw_followup = search_res.get("results", []) or []
-                # Triage top results
                 triaged = triage_and_rank_results(raw_followup, max_to_fetch=1)
+
                 for item in triaged:
                     url = str(item.get("url") or "")
                     title = str(item.get("title") or "")
                     snippet = str(item.get("snippet") or "")
                     date_val = str((item.get("metadata") or {}).get("date") or "")
+
+                    if url:
+                        useful_urls.append(url)
+                        if "/" in url and len(url.split("/")) > 2:
+                            source_domains.add(url.split("/")[2].replace("www.", ""))
 
                     if url and url not in merged_urls:
                         merged_urls.append(url)
@@ -207,9 +240,40 @@ class AdaptiveResearchService:
                             source_type=fetch_res.get("source_type", "SECONDARY"),
                         )
                         evidence_packets.append(packet)
+                        new_results_for_query.append(packet)
+
+                # Determine if material new evidence was found
+                current_facts_count = sum(len(p.get("structured_facts") or {}) for p in evidence_packets)
+                has_new_facts = current_facts_count > existing_facts_count
+                has_new_urls = bool(useful_urls and any(u not in candidate_group.get("source_urls", []) for u in useful_urls))
+                has_material_evidence = has_new_facts or (len(raw_followup) > 0 and has_new_urls)
+                evidence_type = "STRUCTURED_FACTS" if has_new_facts else ("CORROBORATING_URL" if has_material_evidence else "NONE")
+
+                # Persist outcome to PostgreSQL memory
+                self.gate.record_search_outcome(
+                    company_name=company_name,
+                    missing_fact=missing_fact,
+                    query=query_to_run,
+                    research_strategy=gate_decision.research_strategy,
+                    result_count=len(raw_followup),
+                    useful_urls=useful_urls,
+                    new_evidence_found=has_material_evidence,
+                    evidence_type_found=evidence_type,
+                    source_domains=list(source_domains),
+                    funnel_state_before=current_cls,
+                    funnel_state_after=None,  # Updated after re-reasoning
+                    llm_reasoning=gate_decision.reason,
+                    company_id=merged_candidate.get("company_id"),
+                    db=db,
+                )
+
+                existing_facts_count = current_facts_count
 
             except Exception as exc:
                 logger.warning("Targeted research search error for '%s': %s", company_name, exc)
+
+            if len(executed_queries) >= MAX_FOLLOWUP_CALLS:
+                break
 
         merged_candidate["titles"] = merged_titles
         merged_candidate["snippets"] = merged_snippets
@@ -220,14 +284,6 @@ class AdaptiveResearchService:
         # Track independent source count
         unique_domains = {url.split("/")[2].replace("www.", "") for url in merged_urls if "/" in url}
         merged_candidate["independent_source_count"] = len(unique_domains)
-
-        logger.info(
-            "[EVIDENCE_AGGREGATED] Company: %s | Total Sources: %d | Independent Domains: %d | Evidence Packets: %d",
-            company_name,
-            len(merged_urls),
-            len(unique_domains),
-            len(evidence_packets),
-        )
 
         # Re-reason with enriched, aggregated evidence
         re_assessment = self.reasoner.reason_opportunity(
@@ -240,12 +296,13 @@ class AdaptiveResearchService:
         upgraded = (final_cls == CLASSIFICATION_STRONG)
 
         logger.info(
-            "[FOLLOWUP_RESEARCH_COMPLETE] Company: %s | Result: %s -> %s (searches: %d, pages: %d)",
+            "[FOLLOWUP_RESEARCH_COMPLETE] Company: %s | Result: %s -> %s (searches: %d, pages: %d, upgraded: %s)",
             company_name,
             current_cls,
             final_cls,
             len(executed_queries),
             pages_fetched_count,
+            upgraded,
         )
 
         return {
