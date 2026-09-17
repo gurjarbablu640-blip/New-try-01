@@ -1,15 +1,22 @@
-"""Person Enrichment Eligibility Gate — Phase 2 Funnel Recovery.
-
-Replaces the hardcoded 0.85 composite-score threshold with a structured
-deterministic pre-check + LLM review so that high-authority candidates
-with verified current employment and direct facility ownership are not
-incorrectly blocked solely due to a borderline composite score (e.g. 84.0).
+"""Person Enrichment Eligibility Gate — Phase 2.3 Authority Semantics + LLM Failover.
 
 Design contract:
 - Deterministic safety checks come FIRST — mandatory hard blocks.
-- LLM (DeepSeek primary / Gemini fallback) is a secondary authority check.
-- The numeric score remains an input feature; it is NOT the sole gate.
+- LLM (DeepSeek primary / Gemini fallback via FallbackLLMProvider) is the
+  secondary authority-classification layer. DeepSeek 504/timeout/exception
+  ALWAYS triggers Gemini; both-fail → narrow deterministic fallback.
+- The numeric score is a supporting feature; it cannot replace authority semantics.
 - Returns EnrichmentEligibilityDecision with enrich_contact + full audit trail.
+
+LLM failover semantics:
+  DeepSeek success          → use DeepSeek classification
+  DeepSeek 5xx/timeout/exc  → FallbackLLMProvider automatically invokes Gemini
+  Gemini success            → use Gemini classification
+  Both fail                 → narrow deterministic fallback (NOT semantic rejection)
+
+NB: FUNCTIONALLY_RELEVANT is NOT added to APOLLO_AUTHORITY_CLASSES.
+Facility-linked QA/QC Managers may receive STRONG_PLANT_QUALITY_OWNER via
+semantic LLM review or narrow deterministic fallback; they do not auto-pass.
 """
 from __future__ import annotations
 
@@ -257,6 +264,22 @@ class PersonEnrichmentEligibilityGate:
                 score_at_decision=norm_score,
             )
 
+        # ── Step 8b: Deterministic grace window (score in [0.80, 0.85) AND strong authority) ──
+        if norm_score >= 0.80 and authority_strong:
+            risk_flags.append("borderline_score_grace_window")
+            return EnrichmentEligibilityDecision(
+                enrich_contact=True,
+                authority_confidence="MEDIUM",
+                reason=(
+                    f"Near-miss grace: score {norm_score:.2f} in [0.80, 0.85) "
+                    f"with strong authority {authority} and verified employment+facility"
+                ),
+                commercial_relevance=commercial_relevance,
+                risk_flags=risk_flags,
+                evidence_used=evidence_used,
+                score_at_decision=norm_score,
+            )
+
         # ── Step 9: Borderline zone — attempt LLM review ──────────────────
         if LLM_BORDERLINE_LOW <= norm_score < LLM_BORDERLINE_HIGH:
             llm_decision = self._llm_authority_review(
@@ -269,22 +292,69 @@ class PersonEnrichmentEligibilityGate:
             if llm_decision is not None:
                 return llm_decision
 
-        # Fallback: deterministic block for borderline without valid LLM
-        if authority_strong:
-            # Strong authority class even without score crossing threshold is passable
-            # if within [0.80, 0.85) — near-miss grace window
-            if norm_score >= 0.80:
-                risk_flags.append("borderline_score_grace_window")
+        # ── Narrow deterministic fallback (both LLMs down) ────────────────────
+        # This is SYSTEM/PROVIDER_FAILURE fallback, not a semantic rejection path.
+        # Only passes when ALL conditions are simultaneously true:
+        #   a. score >= 0.80
+        #   b. existing authority class is already in APOLLO_AUTHORITY_CLASSES (strong)
+        #      OR the title contains explicit facility-level quality ownership keywords
+        #      (QA Manager, QC Manager, Quality Head, Quality Assurance Manager, etc.)
+        #      when person_facility indicates FACILITY_FUNCTION_OWNER or stronger.
+        #   c. employment and facility already verified (checked above in steps 5–6)
+        # Score alone (>= 0.80) is NOT sufficient without the authority/title check.
+        if norm_score >= 0.80:
+            # Gate A: existing authority_class already in APOLLO set
+            if authority_strong:
+                risk_flags.append("borderline_score_grace_window_llm_down")
                 return EnrichmentEligibilityDecision(
                     enrich_contact=True,
                     authority_confidence="MEDIUM",
                     reason=(
-                        f"Near-miss grace: score {norm_score:.2f} in [0.80, 0.85) "
-                        f"with strong authority {authority} and verified employment+facility"
+                        f"Narrow deterministic fallback (LLM down): score {norm_score:.2f} >= 0.80, "
+                        f"authority {authority} already in APOLLO_AUTHORITY_CLASSES, "
+                        "verified employment+facility"
                     ),
                     commercial_relevance=commercial_relevance,
                     risk_flags=risk_flags,
                     evidence_used=evidence_used,
+                    score_at_decision=norm_score,
+                )
+
+            # Gate B: facility-linked quality ownership title check
+            # Only applies when facility_relationship is FACILITY_FUNCTION_OWNER or stronger.
+            _strong_facility_rels = {
+                "FACILITY_FUNCTION_OWNER", "FACILITY_OWNER",
+                "GROUP_FUNCTION_OWNER", "DIRECT", "STRONG",
+            }
+            _quality_ownership_keywords = [
+                "quality assurance manager", "quality control manager",
+                "qa manager", "qc manager", "manager quality",
+                "quality head", "head quality", "qa head", "qc head",
+                "plant quality", "head of quality",
+                "quality assurance & control manager",
+                "quality assurance and control manager",
+            ]
+            title_lower = (
+                candidate.get("candidate_title") or candidate.get("title") or ""
+            ).lower()
+            has_quality_ownership = any(
+                kw in title_lower for kw in _quality_ownership_keywords
+            )
+            if has_quality_ownership and person_facility in _strong_facility_rels:
+                risk_flags.append(
+                    "narrow_deterministic_facility_quality_owner_llm_down"
+                )
+                return EnrichmentEligibilityDecision(
+                    enrich_contact=True,
+                    authority_confidence="MEDIUM",
+                    reason=(
+                        f"Narrow deterministic fallback (LLM down): score {norm_score:.2f} >= 0.80, "
+                        f"title '{title_lower[:80]}' indicates facility-level quality ownership, "
+                        f"facility_relationship={person_facility}, verified employment"
+                    ),
+                    commercial_relevance="STRONG",
+                    risk_flags=risk_flags,
+                    evidence_used=evidence_used + ["narrow_deterministic_quality_ownership"],
                     score_at_decision=norm_score,
                 )
 
@@ -293,7 +363,8 @@ class PersonEnrichmentEligibilityGate:
             authority_confidence="LOW",
             reason=(
                 f"Score {norm_score:.2f} in borderline zone; authority {authority or 'UNKNOWN'} "
-                "not sufficient for Apollo spend without LLM confirmation"
+                "not sufficient for Apollo spend; LLM unavailable and narrow deterministic "
+                "fallback conditions not met"
             ),
             commercial_relevance=commercial_relevance,
             risk_flags=risk_flags + ["borderline_no_llm_confirmation"],
@@ -311,76 +382,201 @@ class PersonEnrichmentEligibilityGate:
         person_facility: str,
         evidence_used: List[str],
     ) -> Optional[EnrichmentEligibilityDecision]:
-        """Call LLM to determine if borderline candidate merits Apollo enrichment."""
+        """Call LLM to semantically classify candidate authority and decide enrichment.
+
+        Uses FallbackLLMProvider so DeepSeek 504/timeout/exception automatically
+        escalates to Gemini. Both failing returns None → narrow deterministic fallback.
+        Provider failure is SYSTEM/PROVIDER_FAILURE, NOT a semantic person rejection.
+        """
         provider, provider_name = self._get_llm_provider()
         if provider is None:
-            logger.warning("[ENRICHMENT_GATE] LLM unavailable; falling back to deterministic decision")
+            logger.warning(
+                "[ENRICHMENT_GATE] Both LLM providers unavailable; "
+                "falling back to narrow deterministic decision"
+            )
             return None
 
         name = candidate.get("candidate_name") or candidate.get("name") or "Unknown"
         title = candidate.get("candidate_title") or candidate.get("title") or "Unknown"
+        company = (
+            candidate.get("candidate_company") or candidate.get("company")
+            or candidate.get("company_name") or "Unknown"
+        )
+        facility = (
+            candidate.get("candidate_facility") or candidate.get("facility_name")
+            or candidate.get("facility") or "Unknown"
+        )
+        persona = candidate.get("persona") or candidate.get("persona_type") or "Unknown"
+        profile_evidence = (
+            candidate.get("public_profile_evidence")
+            or candidate.get("evidence")
+            or ""
+        )[:600]
 
         prompt = (
-            f"You are evaluating whether to spend Apollo contact enrichment credits on this person:\n\n"
+            "You are an authority classifier for a calibration services sales system.\n"
+            "Your task: classify this person's authority class based on structured evidence,\n"
+            "then decide if Apollo contact enrichment is warranted.\n\n"
+            "== STRUCTURED EVIDENCE ==\n"
             f"Name: {name}\n"
             f"Title: {title}\n"
-            f"Authority Class: {authority}\n"
+            f"Company: {company}\n"
+            f"Relevant Facility: {facility}\n"
             f"Facility Relationship: {person_facility}\n"
-            f"Composite Score: {norm_score:.2f} (scale 0–1)\n"
-            f"Current Employment: VERIFIED\n\n"
-            f"Context: This is a calibration services sales system targeting industrial facility managers.\n"
-            f"Apollo enrichment costs money. Criteria for YES:\n"
-            f"  - Title/authority class indicates direct ownership of metrology, quality, or calibration function\n"
-            f"  - Person has direct facility linkage (not group-only)\n"
-            f"  - Score above 0.60 with strong domain signals\n\n"
-            f"Respond with exactly one word: YES or NO, then one sentence reason."
+            f"Current Employment: VERIFIED (confirmed current role at this company)\n"
+            f"Persona Type: {persona}\n"
+            f"Composite Score: {norm_score:.2f} (scale 0.0–1.0; supporting feature only)\n"
+            f"Profile Evidence: {profile_evidence}\n\n"
+            "== AUTHORITY TAXONOMY ==\n"
+            "Classify into exactly one of these canonical classes:\n"
+            "  DIRECT_CALIBRATION_OWNER  — owns/manages calibration lab or metrology function\n"
+            "  METROLOGY_OWNER          — CMM, MSA, measurement systems ownership\n"
+            "  STRONG_PLANT_QUALITY_OWNER — QA/QC Manager or Head with facility-level quality ownership\n"
+            "                              (e.g. Quality Assurance Manager, QC Manager at a named facility)\n"
+            "  FACILITY_OWNER           — plant head, factory manager, site head with P&L/operations authority\n"
+            "  GROUP_FUNCTION_OWNER     — corporate/group quality function (multi-site scope)\n"
+            "  FUNCTIONALLY_RELEVANT    — relevant quality/ops role but without confirmed facility ownership\n"
+            "  INSUFFICIENT_AUTHORITY   — junior IC, trainee, inspector, analyst, associate\n\n"
+            "== APOLLO ENRICHMENT CRITERIA ==\n"
+            "Spend Apollo credits (YES) only when ALL are true:\n"
+            "  1. Authority class is one of: DIRECT_CALIBRATION_OWNER, METROLOGY_OWNER,\n"
+            "     STRONG_PLANT_QUALITY_OWNER, FACILITY_OWNER, GROUP_FUNCTION_OWNER\n"
+            "  2. Facility relationship is verified (DIRECT, STRONG, FACILITY_FUNCTION_OWNER, etc.)\n"
+            "  3. Current employment is VERIFIED\n"
+            "  4. The person plausibly controls or influences calibration/quality instrument decisions\n"
+            "  5. Score >= 0.60 (use as supporting signal only, not the sole determinant)\n\n"
+            "IMPORTANT: FUNCTIONALLY_RELEVANT or INSUFFICIENT_AUTHORITY → NO enrichment.\n"
+            "  Quality Engineer, Inspector, Analyst, Associate → INSUFFICIENT_AUTHORITY → NO.\n"
+            "  QA/QC Manager at a named facility → evaluate for STRONG_PLANT_QUALITY_OWNER.\n\n"
+            "== RESPONSE FORMAT ==\n"
+            "Line 1: AUTHORITY_CLASS: <one class from taxonomy above>\n"
+            "Line 2: ENRICH: YES or NO\n"
+            "Line 3: REASON: <one concise sentence>"
         )
 
         try:
             response_text = provider(prompt)
-            first_line = str(response_text or "").strip().split("\n")[0].strip().upper()
-            approved = first_line.startswith("YES")
-            reason_text = str(response_text or "").strip()
+            lines = [ln.strip() for ln in str(response_text or "").strip().split("\n") if ln.strip()]
+
+            # Parse structured response
+            classified_authority = authority  # default to existing
+            approved = False
+            reason_text = str(response_text or "").strip()[:300]
+
+            for line in lines:
+                upper = line.upper()
+                if upper.startswith("AUTHORITY_CLASS:"):
+                    raw_cls = line.split(":", 1)[1].strip().upper()
+                    # Validate against known taxonomy
+                    _valid = {
+                        "DIRECT_CALIBRATION_OWNER", "METROLOGY_OWNER",
+                        "STRONG_PLANT_QUALITY_OWNER", "FACILITY_OWNER",
+                        "GROUP_FUNCTION_OWNER", "FUNCTIONALLY_RELEVANT",
+                        "INSUFFICIENT_AUTHORITY",
+                    }
+                    if raw_cls in _valid:
+                        classified_authority = raw_cls
+                elif upper.startswith("ENRICH:"):
+                    approved = "YES" in upper
+                elif upper.startswith("REASON:"):
+                    reason_text = line.split(":", 1)[1].strip()[:300]
+
+            # Cross-check: LLM approval must only be for authority classes in APOLLO set
+            if approved and classified_authority not in APOLLO_AUTHORITY_CLASSES:
+                approved = False
+                reason_text = (
+                    f"LLM classified as {classified_authority} which is not in APOLLO_AUTHORITY_CLASSES; "
+                    "enrichment blocked by gate policy."
+                )
+
+            logger.info(
+                "[ENRICHMENT_GATE] LLM (%s) classified %r → %s | enrich=%s | reason=%s",
+                provider_name, title, classified_authority, approved, reason_text[:120],
+            )
 
             return EnrichmentEligibilityDecision(
                 enrich_contact=approved,
                 authority_confidence="HIGH" if approved else "LOW",
-                reason=f"LLM ({provider_name}) review: {reason_text[:200]}",
+                reason=f"LLM ({provider_name}) authority={classified_authority}: {reason_text}",
                 commercial_relevance="DIRECT" if approved else "WEAK",
-                risk_flags=[] if approved else ["llm_borderline_rejected"],
-                evidence_used=evidence_used + [f"llm_review={provider_name}"],
+                risk_flags=[] if approved else ["llm_authority_not_sufficient"],
+                evidence_used=evidence_used + [
+                    f"llm_review={provider_name}",
+                    f"llm_authority_class={classified_authority}",
+                ],
                 llm_used=True,
                 llm_provider=provider_name,
                 score_at_decision=norm_score,
             )
         except Exception as exc:
-            logger.warning("[ENRICHMENT_GATE] LLM review failed (%s): %s", provider_name, exc)
+            # Provider runtime failure is SYSTEM/PROVIDER_FAILURE, not a person rejection.
+            logger.warning(
+                "[ENRICHMENT_GATE] LLM runtime error (%s): %s — "
+                "treating as PROVIDER_FAILURE, not semantic rejection",
+                provider_name, exc,
+            )
             return None
 
     def _get_llm_provider(self) -> Tuple[Optional[Any], str]:
-        """Return (callable, name) for text completion. DeepSeek primary, Gemini fallback."""
+        """Return (callable, provider_name) via FallbackLLMProvider.
+
+        Uses the production-grade FallbackLLMProvider which internally routes:
+          DeepSeek (HiveProvider) → Gemini (GeminiProvider)
+
+        DeepSeek 5xx / timeout / any runtime exception causes FallbackLLMProvider
+        to retry with Gemini automatically — the gate never needs to manage
+        individual provider retry logic.
+
+        Returns (None, "") only when BOTH providers are unavailable or both raise.
+        """
         if self._llm_provider is not None:
+            # Injected provider (used in tests or explicit override).
+            # Wrap as a simple callable if it's a plain LLMProvider instance.
+            from services.llm_provider import LLMProvider as _LLMProvider
+            if isinstance(self._llm_provider, _LLMProvider):
+                def _call(prompt: str) -> str:
+                    resp = self._llm_provider.complete(
+                        system_prompt="",
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=300,
+                    )
+                    return resp.text
+                return _call, "INJECTED"
+            # Already a callable
             return self._llm_provider, "INJECTED"
 
-        # Try DeepSeek
         try:
-            from services.llm_provider import call_deepseek_completion
-            def _deepseek(prompt: str) -> str:
-                return call_deepseek_completion(prompt, max_tokens=120)
-            return _deepseek, "DEEPSEEK"
-        except Exception:
-            pass
+            from services.llm_provider import FallbackLLMProvider, DeepSeekProvider, GeminiProvider
+            fallback = FallbackLLMProvider(
+                primary=DeepSeekProvider(),
+                fallback=GeminiProvider(),
+            )
+            if not fallback.is_available():
+                logger.warning("[ENRICHMENT_GATE] No LLM provider is currently available")
+                return None, ""
 
-        # Try Gemini
-        try:
-            from services.llm_provider import call_gemini_completion
-            def _gemini(prompt: str) -> str:
-                return call_gemini_completion(prompt, max_tokens=120)
-            return _gemini, "GEMINI"
-        except Exception:
-            pass
+            # Determine which provider name to report (first available)
+            provider_name = "DEEPSEEK"
+            try:
+                from services.llm_provider import DeepSeekProvider as _DS
+                if not _DS().is_available():
+                    provider_name = "GEMINI"
+            except Exception:
+                provider_name = "FALLBACK"
 
-        return None, ""
+            def _call_via_fallback(prompt: str) -> str:
+                resp = fallback.complete(
+                    system_prompt="",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=300,
+                    temperature=0.1,
+                )
+                return resp.text
+
+            return _call_via_fallback, provider_name
+        except Exception as exc:
+            logger.warning("[ENRICHMENT_GATE] Could not initialise LLM providers: %s", exc)
+            return None, ""
 
 
 # ── Module-level singleton ─────────────────────────────────────────────────

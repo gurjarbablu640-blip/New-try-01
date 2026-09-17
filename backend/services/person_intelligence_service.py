@@ -870,7 +870,14 @@ def classify_facility_relationship(
 
 
 def classify_authority_class(title: str, snippet: str = "") -> str:
-    """Classify the person into Salesoorja priority authority hierarchy."""
+    """Classify the person into Salesoorja priority authority hierarchy.
+
+    Phase 2.3 semantics: QA/QC Manager titles are upgraded to
+    STRONG_PLANT_QUALITY_OWNER when the snippet contains facility-grounding
+    evidence (current employment, company, or facility keywords). Without
+    such evidence the title alone returns FUNCTIONALLY_RELEVANT to prevent
+    false widening of Apollo authority.
+    """
     clean = f"{title} {snippet}".lower()
     t_clean = title.lower()
 
@@ -889,22 +896,55 @@ def classify_authority_class(title: str, snippet: str = "") -> str:
     if has_junior and not has_leadership:
         return "JUNIOR_IC"
 
-    if any(w in clean for w in ["calibration lab", "calibration incharge", "head calibration"]):
+    if any(w in clean for w in ["calibration lab", "calibration incharge", "head calibration",
+                                "calibration manager", "manager calibration"]):
         return "DIRECT_CALIBRATION_OWNER"
 
     if any(w in clean for w in ["metrology", "cmm", "measurement systems"]):
         return "METROLOGY_OWNER"
 
-    if any(w in clean for w in ["plant quality", "head quality", "quality head", "qa head", "qc head", "head of quality", "director quality"]):
+    if any(w in clean for w in ["plant quality", "head quality", "quality head", "qa head",
+                                "qc head", "head of quality", "director quality"]):
         return "STRONG_PLANT_QUALITY_OWNER"
 
-    if any(w in clean for w in ["plant head", "works manager", "factory manager", "unit head", "site head"]):
+    if any(w in clean for w in ["plant head", "works manager", "factory manager",
+                                "unit head", "site head"]):
         return "FACILITY_OWNER"
 
-    if any(w in clean for w in ["corporate quality", "group quality", "vp quality", "vice president quality"]):
+    if any(w in clean for w in ["corporate quality", "group quality", "vp quality",
+                                "vice president quality"]):
         return "GROUP_FUNCTION_OWNER"
 
-    if any(w in clean for w in ["quality assurance", "quality control", "qa manager", "qc manager", "manager quality"]):
+    # Phase 2.3: QA/QC Manager titles with facility-grounding evidence in snippet
+    # are classified as STRONG_PLANT_QUALITY_OWNER.
+    # Facility-grounding signals: "currently working", "currently at", a named
+    # facility keyword, or explicit facility-type words in the snippet.
+    _qa_manager_keywords = [
+        "quality assurance manager", "quality control manager",
+        "qa manager", "qc manager", "manager quality",
+        "quality assurance & control manager",
+        "quality assurance and control manager",
+    ]
+    _facility_grounding_signals = [
+        "currently working", "currently at", "manufacturing", "plant",
+        "facility", "assembly", "factory", "production", "fal",
+    ]
+    _has_qa_manager_title = (
+        any(kw in t_clean for kw in _qa_manager_keywords)
+        or (
+            any(m in t_clean for m in ["manager", "incharge", "dgm", "agm", "gm", "lead"])
+            and any(q in t_clean for q in ["quality assurance", "quality control", "qa/qc", "qa & qc", "qa and qc"])
+        )
+    )
+    _has_facility_grounding = bool(snippet) and any(
+        sig in snippet.lower() for sig in _facility_grounding_signals
+    )
+    if _has_qa_manager_title and _has_facility_grounding:
+        return "STRONG_PLANT_QUALITY_OWNER"
+    if _has_qa_manager_title:
+        return "FUNCTIONALLY_RELEVANT"
+
+    if any(w in clean for w in ["quality assurance", "quality control"]):
         return "FUNCTIONALLY_RELEVANT"
 
     if "quality" in clean:
