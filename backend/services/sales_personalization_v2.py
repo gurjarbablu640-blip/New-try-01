@@ -9,7 +9,9 @@ Design principles:
 - Strict negative constraints: No invented equipment ownership, no ungrounded person responsibility, no fabricated SLAs, no free offers.
 - Strict event status grounding: EXISTING_FACILITY_EXPANSION cannot claim "new facility".
 - Strict date grounding: detected_at cannot masquerade as event date; year-only does not invent month/day.
-- Strict compliance grounding: Accreditation must not be represented as guaranteeing customer compliance.
+- Strict compliance grounding: Accreditation must not be represented as guaranteeing customer compliance. Kept separate from service claims.
+- Strict capability grounding: Never use "Our approved capabilities include...". Neutral wording: "Oorja can support [groups], subject to instrument, scope and range feasibility."
+- No automatic instrument expansion: Mention capability groups only (e.g. "dimensional calibration"), not ungrounded specific instruments (e.g. calipers, micrometers).
 - Low-friction industrial CTA: Suggest practical lab/onsite route or referral to colleague.
 - Word count constraint: 90–130 words excluding signature.
 - Exact professional salesperson signature:
@@ -39,16 +41,16 @@ SALES_SIGNATURE = (
 )
 SIGNATURE = "\n\n" + SALES_SIGNATURE  # Backward compatibility
 
-# ── Approved Oorja Capability Groups ──────────────────────────────────────
+# ── Approved Oorja Capability Groups (Group Names Only) ─────────────────────
 APPROVED_OORJA_CAPABILITY_GROUPS: Dict[str, str] = {
-    "ELECTRICAL": "Electrical (multimeters, insulation testers, power quality)",
-    "THERMAL": "Thermal (temperature indicators, controllers, RTDs, thermocouples)",
-    "PRESSURE": "Pressure (pressure gauges, transmitters, vacuum gauges)",
-    "DIMENSIONAL": "Dimensional (calipers, micrometers, height gauges, dial indicators)",
-    "TORQUE": "Torque (torque wrenches, torque transducers)",
-    "WEIGHING": "Weighing (balances, scales)",
-    "CT_PT": "CT/PT (current and potential transformers)",
-    "ENVIRONMENTAL_MAPPING": "Environmental Mapping (thermal & humidity mapping)",
+    "ELECTRICAL": "electrical calibration",
+    "THERMAL": "thermal calibration",
+    "PRESSURE": "pressure calibration",
+    "DIMENSIONAL": "dimensional calibration",
+    "TORQUE": "torque calibration",
+    "WEIGHING": "weighing calibration",
+    "CT_PT": "CT/PT calibration",
+    "ENVIRONMENTAL_MAPPING": "environmental mapping",
 }
 
 # ── Event / Facility Status Semantics ───────────────────────────────────────
@@ -227,6 +229,20 @@ FORBIDDEN_SPECIFIC_UNSUPPORTED_PATTERNS: List[Tuple[re.Pattern, str]] = [
         ),
         "Absolute compliance guarantee language is forbidden",
     ),
+    (
+        re.compile(
+            r"\b(?:our\s+)?approved\s+capabilities\b",
+            re.IGNORECASE,
+        ),
+        "Phrase 'approved capabilities' is forbidden without authoritative evidence proving approval status",
+    ),
+    (
+        re.compile(
+            r"\b(?:calipers|micrometers|height\s+gauges|multimeters|insulation\s+testers|power[- ]quality\s+instruments|vacuum\s+gauges|torque\s+wrenches|torque\s+transducers)\b",
+            re.IGNORECASE,
+        ),
+        "Ungrounded automatic expansion into specific instrument enumerations is forbidden",
+    ),
 ]
 
 # ── Persona matrix ─────────────────────────────────────────────────────────
@@ -266,16 +282,16 @@ PERSONA_VALUE_ANGLES: Dict[str, str] = {
     ),
 }
 
-# ── Capability groups mapping (Strictly 8 Approved Groups) ──────────────────
+# ── Capability groups mapping (Group Names Only — No Instrument Enumeration) ─
 CAPABILITY_GROUPS: Dict[str, List[str]] = {
-    "dimensional": ["Dimensional (calipers, micrometers, height gauges)"],
-    "electrical": ["Electrical (multimeters, insulation testers, power quality)"],
-    "thermal": ["Thermal (temperature indicators, RTDs, thermocouples)"],
-    "pressure": ["Pressure (pressure gauges, transmitters, vacuum gauges)"],
-    "torque": ["Torque (torque wrenches, torque transducers)"],
-    "weighing": ["Weighing (balances, scales)"],
-    "ct_pt": ["CT/PT (current and potential transformers)"],
-    "environmental_mapping": ["Environmental Mapping (thermal & humidity mapping)"],
+    "dimensional": ["dimensional calibration"],
+    "electrical": ["electrical calibration"],
+    "thermal": ["thermal calibration"],
+    "pressure": ["pressure calibration"],
+    "torque": ["torque calibration"],
+    "weighing": ["weighing calibration"],
+    "ct_pt": ["CT/PT calibration"],
+    "environmental_mapping": ["environmental mapping"],
 }
 
 INDUSTRY_CAPABILITY_MAP: Dict[str, List[str]] = {
@@ -544,19 +560,22 @@ class SalesPersonalizationV2Engine:
             "   - Do NOT invent specific dates, days, or months. If date is YEAR_ONLY or UNKNOWN, use 'recent expansion activity' or the year without invented dates.\n"
             "   - NEVER use database insertion timestamps or current date as the event date.\n"
             "3. ACCREDITATION & COMPLIANCE LANGUAGE:\n"
-            "   - Safe statement: 'Oorja is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (CC-3963), which may support calibration documentation and traceability requirements where relevant.'\n"
+            "   - Safe statement: 'Oorja is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (CC-3963).' Keep accreditation separate from capability claims. Do NOT imply all subsequently mentioned services or parameters are within accredited scope.\n"
             "   - DO NOT state or imply that accreditation 'ensures', 'guarantees', or 'secures' customer regulatory compliance, audit success, or quality pass.\n"
-            "   - All calibration support is delivered strictly subject to instrument scope and range feasibility.\n"
-            "4. CAPABILITY TRUTH:\n"
-            "   - Only mention approved Oorja capability groups provided in the prompt (maximum 1–3 groups).\n"
+            "4. CAPABILITY TRUTH & NEUTRAL SERVICE WORDING:\n"
+            "   - Never say 'Our approved capabilities include...' or similar wording.\n"
+            "   - Prefer neutral service wording: 'Oorja can support [group1], [group2] and [group3] calibration, subject to instrument, scope and range feasibility.'\n"
+            "   - Do NOT automatically expand capability groups into specific instrument examples (e.g. say 'dimensional calibration', NOT 'calipers, micrometers, height gauges'; say 'electrical calibration', NOT 'multimeters, insulation testers'). Mention capability groups only (maximum 1–3 groups).\n"
             "   - DO NOT invent unapproved capabilities such as NDT calibration, CMM alignment, optical calibration, analytical-instrument calibration, avionics calibration, or high-voltage scope.\n"
-            "5. PERSON RESPONSIBILITY GROUNDING:\n"
+            "5. INDUSTRY PROBABILITY VS CUSTOMER FACT:\n"
+            "   - Use conditional/domain-aware reasoning. Do NOT assert that the customer's facility definitely has particular instrument families merely because they are common in that industry.\n"
+            "6. PERSON RESPONSIBILITY GROUNDING:\n"
             "   - Designation indicates commercial relevance, NOT proof of calibration ownership.\n"
             "   - DO NOT say 'you manage calibration', 'your calibration team', 'you oversee CMMs', or 'your torque-tool program'.\n"
-            "6. LOW-FRICTION INDUSTRIAL CTA:\n"
+            "7. LOW-FRICTION INDUSTRIAL CTA:\n"
             "   - AVOID generic high-friction CTAs like 'Would you be open to a brief introductory call?'.\n"
             "   - Use a practical low-friction CTA (e.g. offering to review their instrument list to suggest a practical laboratory or on-site calibration route subject to scope and range feasibility, or asking to be pointed to the relevant Quality/Metrology colleague).\n"
-            "7. WORD COUNT & STRUCTURE:\n"
+            "8. WORD COUNT & STRUCTURE:\n"
             "   - Exactly 3 short paragraphs. Target body word count: 90–130 words excluding signature.\n"
             "   - DO NOT include any sign-off or signature. The system will append the exact signature block.\n"
             "   - Return output strictly in valid JSON format: {\"subject\": \"...\", \"body\": \"...\"}."
@@ -623,7 +642,7 @@ class SalesPersonalizationV2Engine:
         designation = record.get("designation") or "Leader"
         trigger = record.get("trigger") or record.get("trigger_headline") or "recent expansion activity"
         persona_angle = PERSONA_VALUE_ANGLES.get(persona, PERSONA_VALUE_ANGLES["DEFAULT"])
-        caps_str = ", ".join(capabilities) if capabilities else "Dimensional, Electrical, and Thermal"
+        caps_str = ", ".join(capabilities) if capabilities else "dimensional, electrical, and thermal calibration"
 
         facility_instruction = "Refer strictly to recent expansion activity at the existing plant. DO NOT say 'new facility' or 'new plant'."
         if event_status == EVENT_STATUS_NEW_FACILITY:
@@ -649,8 +668,8 @@ class SalesPersonalizationV2Engine:
             f"- Facility Location: {facility}\n\n"
             f"COMMERCIAL CONTEXT:\n"
             f"- Persona Value Angle: {persona_angle}\n"
-            f"- Approved Oorja Capabilities: {caps_str} (subject to scope and range feasibility; DO NOT mention NDT, CMM alignment, optical, analytical, avionics, or high-voltage)\n"
-            f"- Accreditation: Oorja is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (CC-3963), which may support documentation and traceability requirements where relevant. NEVER guarantee customer compliance.\n"
+            f"- Oorja Capabilities: {caps_str} (subject to scope and range feasibility). IMPORTANT: Never say 'Our approved capabilities include...'. Use neutral phrasing: 'Oorja can support {caps_str}, subject to instrument, scope and range feasibility.' Do NOT expand into specific instrument lists (e.g. no calipers, micrometers, multimeters).\n"
+            f"- Accreditation: Oorja is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (CC-3963). Keep accreditation statement separate from capability claims. Do NOT imply all parameters are within accredited scope, and NEVER guarantee customer compliance.\n"
             f"- CTA Directive: Low-friction industrial CTA offering to review instrument list for lab/onsite feasibility, or asking to point to the relevant Quality/Metrology colleague. AVOID 'Would you be open to a call?'.\n\n"
             f"TASK:\n"
             f"Write a 3-paragraph consultative outreach email (90–130 words excluding signature) to {first_name} referencing "
@@ -665,13 +684,13 @@ class SalesPersonalizationV2Engine:
         persona: str,
         capabilities: List[str],
     ) -> str:
-        """Deterministic body template adhering to Phase 2.1C hardening."""
+        """Deterministic body template adhering to Phase 2.1C/2.1D hardening."""
         first_name = record.get("first_name") or str(record.get("person") or "").split()[0] or "Sir/Madam"
         company = record.get("company") or "your company"
         facility = record.get("facility") or company
         trigger = record.get("trigger") or record.get("trigger_headline") or "recent expansion activity"
         value_angle = PERSONA_VALUE_ANGLES.get(persona, PERSONA_VALUE_ANGLES["DEFAULT"])
-        cap_text = ", ".join(capabilities) if capabilities else "Dimensional, Electrical, and Thermal"
+        cap_text = ", ".join(capabilities) if capabilities else "dimensional, electrical, and thermal calibration"
 
         event_status = record.get("event_status") or infer_event_status(f"{trigger} {facility}")
 
@@ -687,7 +706,7 @@ class SalesPersonalizationV2Engine:
         body = (
             f"Dear {first_name},\n\n"
             f"{opening}\n\n"
-            f"{value_angle} We support {cap_text} calibration parameters, strictly subject to instrument scope and range feasibility under NABL certificate CC-3963.\n\n"
+            f"{value_angle} Oorja can support {cap_text}, subject to instrument, scope and range feasibility.\n\n"
             f"If useful, you can share your instrument list and I can suggest a practical laboratory or on-site calibration route subject to scope and range feasibility. If this sits with another Quality or Metrology colleague, please feel free to point me to the right person."
         )
         return body

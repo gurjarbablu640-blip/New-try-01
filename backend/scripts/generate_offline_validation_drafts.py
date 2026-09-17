@@ -1,4 +1,4 @@
-"""Offline Real-Evidence Validation for Phase 2.1C Personalization Grounding.
+"""Offline Real-Evidence Validation for Phase 2.1D Personalization Grounding.
 
 Generates offline drafts for:
 1. HARMAN / Pune expansion
@@ -10,6 +10,15 @@ STRICT CONSTRAINTS:
 - NO SEND_READY DB mutation.
 - NO Apollo calls.
 - Preserves LLM-first architecture (DeepSeek primary -> Gemini fallback).
+- NO_APPROVED_CAPABILITY_LANGUAGE
+- NO_UNGROUNDED_INSTRUMENT_ENUMERATION
+- NO_COMPLIANCE_GUARANTEE
+- NO_FALSE_NEW_FACILITY
+- NO_UNSUPPORTED_PERSON_RESPONSIBILITY
+- MAX_3_CAPABILITY_GROUPS
+- DEEPSEEK_PRIMARY
+- EXACT_SIGNATURE
+- Target: 90–130 words excluding signature.
 """
 import json
 import os
@@ -95,14 +104,17 @@ def run_validation():
             else:
                 explicit_claims.append(s)
 
-        # HARMAN specific checks
-        new_fac_violation = False
-        compliance_guarantee_violation = False
+        # Specific Phase 2.1D assertions
+        has_approved_cap_lang = bool(re.search(r"\bapproved\s+capabilities\b", res.body, re.IGNORECASE))
+        has_instrument_enumeration = bool(re.search(r"\b(?:calipers|micrometers|multimeters|insulation\s+testers|vacuum\s+gauges|torque\s+wrenches)\b", res.body, re.IGNORECASE))
+        has_compliance_guarantee = bool(re.search(r"\b(?:guarantees?|ensures?)\s+(?:compliance|audit\s+success|regulatory\s+clearance)\b", res.body, re.IGNORECASE))
+        has_false_new_facility = False
         if acc["company"] == "HARMAN":
-            if re.search(r"\b(?:new\s+(?:facility|plant|site)|greenfield)\b", res.body, re.IGNORECASE):
-                new_fac_violation = True
-            if re.search(r"\b(?:guarantees?|ensures?)\s+(?:compliance|audit\s+success|regulatory\s+clearance)\b", res.body, re.IGNORECASE):
-                compliance_guarantee_violation = True
+            has_false_new_facility = bool(re.search(r"\b(?:new\s+(?:facility|plant|site)|greenfield)\b", res.body, re.IGNORECASE))
+
+        has_person_responsibility = bool(re.search(r"\b(?:you|your)\s+(?:manage|own|oversee|lead|handle)\s+(?:calibration|metrology)\b|\byour\s+(?:calibration\s+team|program)\b", res.body, re.IGNORECASE))
+        exact_signature_match = res.body.endswith(SALES_SIGNATURE.strip())
+        max_3_caps = len(res.capabilities_included) <= 3
 
         acc_summary = {
             "COMPANY": acc["company"],
@@ -118,16 +130,20 @@ def run_validation():
             "EXPLICIT_EVIDENCE_CLAIMS": explicit_claims,
             "SAFE_GENERIC_CLAIMS": safe_generic_claims,
             "UNSUPPORTED_CLAIMS": unsupported_claims,
+            "NO_APPROVED_CAPABILITY_LANGUAGE": "YES" if not has_approved_cap_lang else "NO",
+            "NO_UNGROUNDED_INSTRUMENT_ENUMERATION": "YES" if not has_instrument_enumeration else "NO",
+            "NO_COMPLIANCE_GUARANTEE": "YES" if not has_compliance_guarantee else "NO",
+            "NO_FALSE_NEW_FACILITY": "YES" if not has_false_new_facility else "NO",
+            "NO_UNSUPPORTED_PERSON_RESPONSIBILITY": "YES" if not has_person_responsibility else "NO",
+            "MAX_3_CAPABILITY_GROUPS": "YES" if max_3_caps else "NO",
+            "DEEPSEEK_PRIMARY": "YES" if res.llm_provider_used == "DEEPSEEK" else "NO",
+            "EXACT_SIGNATURE": "YES" if exact_signature_match else "NO",
             "GROUNDING_RESULT": "PASS - ZERO UNGROUNDED CLAIMS" if (not unsupported_claims and res.status == "VALIDATED") else f"FAIL - {res.violations}",
         }
 
-        if acc["company"] == "HARMAN":
-            acc_summary["NEW_FACILITY_FALSE_CLAIM"] = "YES" if new_fac_violation else "NO"
-            acc_summary["COMPLIANCE_GUARANTEE_CLAIM"] = "YES" if compliance_guarantee_violation else "NO"
-
         results.append(acc_summary)
 
-    out_file = os.path.join(os.path.dirname(__file__), "..", "..", ".system_generated", "offline_drafts_validation_phase2_1c.json")
+    out_file = os.path.join(os.path.dirname(__file__), "..", "..", ".system_generated", "offline_drafts_validation_phase2_1d.json")
     os.makedirs(os.path.dirname(out_file), exist_ok=True)
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
@@ -144,9 +160,14 @@ def run_validation():
         print(f"SUBJECT: {r['SUBJECT']}")
         print(f"WORD_COUNT: {r['WORD_COUNT']}")
         print(f"CAPABILITIES: {r['CAPABILITIES_SELECTED']}")
-        if "NEW_FACILITY_FALSE_CLAIM" in r:
-            print(f"NEW_FACILITY_FALSE_CLAIM: {r['NEW_FACILITY_FALSE_CLAIM']}")
-            print(f"COMPLIANCE_GUARANTEE_CLAIM: {r['COMPLIANCE_GUARANTEE_CLAIM']}")
+        print(f"NO_APPROVED_CAPABILITY_LANGUAGE: {r['NO_APPROVED_CAPABILITY_LANGUAGE']}")
+        print(f"NO_UNGROUNDED_INSTRUMENT_ENUMERATION: {r['NO_UNGROUNDED_INSTRUMENT_ENUMERATION']}")
+        print(f"NO_COMPLIANCE_GUARANTEE: {r['NO_COMPLIANCE_GUARANTEE']}")
+        print(f"NO_FALSE_NEW_FACILITY: {r['NO_FALSE_NEW_FACILITY']}")
+        print(f"NO_UNSUPPORTED_PERSON_RESPONSIBILITY: {r['NO_UNSUPPORTED_PERSON_RESPONSIBILITY']}")
+        print(f"MAX_3_CAPABILITY_GROUPS: {r['MAX_3_CAPABILITY_GROUPS']}")
+        print(f"DEEPSEEK_PRIMARY: {r['DEEPSEEK_PRIMARY']}")
+        print(f"EXACT_SIGNATURE: {r['EXACT_SIGNATURE']}")
         print(f"GROUNDING_RESULT: {r['GROUNDING_RESULT']}")
         print("\nBODY:\n" + r["BODY"])
 
