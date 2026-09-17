@@ -455,7 +455,12 @@ class PersonEnrichmentEligibilityGate:
         )
 
         try:
-            response_text = provider(prompt)
+            res = provider(prompt)
+            if isinstance(res, tuple):
+                response_text, actual_provider = res
+            else:
+                response_text, actual_provider = res, provider_name
+
             lines = [ln.strip() for ln in str(response_text or "").strip().split("\n") if ln.strip()]
 
             # Parse structured response
@@ -491,21 +496,21 @@ class PersonEnrichmentEligibilityGate:
 
             logger.info(
                 "[ENRICHMENT_GATE] LLM (%s) classified %r → %s | enrich=%s | reason=%s",
-                provider_name, title, classified_authority, approved, reason_text[:120],
+                actual_provider, title, classified_authority, approved, reason_text[:120],
             )
 
             return EnrichmentEligibilityDecision(
                 enrich_contact=approved,
                 authority_confidence="HIGH" if approved else "LOW",
-                reason=f"LLM ({provider_name}) authority={classified_authority}: {reason_text}",
+                reason=f"LLM ({actual_provider}) authority={classified_authority}: {reason_text}",
                 commercial_relevance="DIRECT" if approved else "WEAK",
                 risk_flags=[] if approved else ["llm_authority_not_sufficient"],
                 evidence_used=evidence_used + [
-                    f"llm_review={provider_name}",
+                    f"llm_review={actual_provider}",
                     f"llm_authority_class={classified_authority}",
                 ],
                 llm_used=True,
-                llm_provider=provider_name,
+                llm_provider=actual_provider,
                 score_at_decision=norm_score,
             )
         except Exception as exc:
@@ -518,21 +523,28 @@ class PersonEnrichmentEligibilityGate:
             return None
 
     def _get_llm_provider(self) -> Tuple[Optional[Any], str]:
-        """Return (callable, provider_name) via FallbackLLMProvider.
+        """Return (callable, provider_name) supporting DeepSeek -> Gemini failover.
 
-        Uses the production-grade FallbackLLMProvider which internally routes:
-          DeepSeek (HiveProvider) → Gemini (GeminiProvider)
-
-        DeepSeek 5xx / timeout / any runtime exception causes FallbackLLMProvider
-        to retry with Gemini automatically — the gate never needs to manage
-        individual provider retry logic.
-
-        Returns (None, "") only when BOTH providers are unavailable or both raise.
+        Handles:
+          - DeepSeek 504 Gateway Timeout -> Gemini fallback
+          - DeepSeek timeout / network exception -> Gemini fallback
+          - DeepSeek invalid structured output -> Gemini fallback
+          - Both failing -> returns (None, "") -> narrow deterministic fallback.
         """
         if self._llm_provider is not None:
             # Injected provider (used in tests or explicit override).
-            # Wrap as a simple callable if it's a plain LLMProvider instance.
-            from services.llm_provider import LLMProvider as _LLMProvider
+            from services.llm_provider import LLMProvider as _LLMProvider, FallbackLLMProvider as _Fallback
+            if isinstance(self._llm_provider, _Fallback):
+                fallback_obj = self._llm_provider
+                def _call_injected_fallback(prompt: str) -> tuple[str, str]:
+                    resp = fallback_obj.complete(
+                        system_prompt="",
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=300,
+                    )
+                    return resp.text, resp.provider.upper()
+                return _call_injected_fallback, "FALLBACK_CHAIN"
+
             if isinstance(self._llm_provider, _LLMProvider):
                 def _call(prompt: str) -> str:
                     resp = self._llm_provider.complete(
@@ -546,34 +558,54 @@ class PersonEnrichmentEligibilityGate:
             return self._llm_provider, "INJECTED"
 
         try:
-            from services.llm_provider import FallbackLLMProvider, DeepSeekProvider, GeminiProvider
-            fallback = FallbackLLMProvider(
-                primary=DeepSeekProvider(),
-                fallback=GeminiProvider(),
-            )
-            if not fallback.is_available():
-                logger.warning("[ENRICHMENT_GATE] No LLM provider is currently available")
-                return None, ""
+            from services.llm_provider import DeepSeekProvider, GeminiProvider
+            ds_provider = DeepSeekProvider()
+            gem_provider = GeminiProvider()
 
-            # Determine which provider name to report (first available)
-            provider_name = "DEEPSEEK"
-            try:
-                from services.llm_provider import DeepSeekProvider as _DS
-                if not _DS().is_available():
-                    provider_name = "GEMINI"
-            except Exception:
-                provider_name = "FALLBACK"
+            def _is_valid_output(t: str) -> bool:
+                lines = [ln.upper() for ln in str(t or "").splitlines()]
+                has_auth = any("AUTHORITY_CLASS:" in ln for ln in lines)
+                has_enrich = any("ENRICH:" in ln for ln in lines)
+                return has_auth and has_enrich
 
-            def _call_via_fallback(prompt: str) -> str:
-                resp = fallback.complete(
-                    system_prompt="",
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=300,
-                    temperature=0.1,
-                )
-                return resp.text
+            def _call_via_fallback(prompt: str) -> tuple[str, str]:
+                # 1. Primary: DeepSeek
+                if ds_provider.is_available():
+                    try:
+                        resp = ds_provider.complete(
+                            system_prompt="",
+                            messages=[{"role": "user", "content": prompt}],
+                            max_tokens=300,
+                            temperature=0.1,
+                        )
+                        if _is_valid_output(resp.text):
+                            return resp.text, "DEEPSEEK"
+                        logger.warning(
+                            "[ENRICHMENT_GATE] DeepSeek returned invalid structured output; falling back to Gemini"
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[ENRICHMENT_GATE] DeepSeek failed (%s); falling back to Gemini", exc
+                        )
 
-            return _call_via_fallback, provider_name
+                # 2. Secondary: Gemini
+                if gem_provider.is_available():
+                    try:
+                        resp = gem_provider.complete(
+                            system_prompt="",
+                            messages=[{"role": "user", "content": prompt}],
+                            max_tokens=300,
+                            temperature=0.1,
+                        )
+                        if _is_valid_output(resp.text):
+                            return resp.text, "GEMINI"
+                        logger.warning("[ENRICHMENT_GATE] Gemini returned invalid structured output")
+                    except Exception as exc:
+                        logger.warning("[ENRICHMENT_GATE] Gemini failed (%s)", exc)
+
+                raise RuntimeError("Both LLM providers failed or returned invalid structured output")
+
+            return _call_via_fallback, "FALLBACK_CHAIN"
         except Exception as exc:
             logger.warning("[ENRICHMENT_GATE] Could not initialise LLM providers: %s", exc)
             return None, ""

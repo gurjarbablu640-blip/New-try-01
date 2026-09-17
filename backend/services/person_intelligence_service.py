@@ -907,8 +907,12 @@ def classify_authority_class(title: str, snippet: str = "") -> str:
                                 "qc head", "head of quality", "director quality"]):
         return "STRONG_PLANT_QUALITY_OWNER"
 
-    if any(w in clean for w in ["plant head", "works manager", "factory manager",
-                                "unit head", "site head"]):
+    if any(w in clean for w in [
+        "plant head", "works manager", "factory manager",
+        "unit head", "site head", "facility head", "facility manager",
+        "operations head", "head operations", "head of operations",
+        "director operations", "director of operations",
+    ]):
         return "FACILITY_OWNER"
 
     if any(w in clean for w in ["corporate quality", "group quality", "vp quality",
@@ -921,9 +925,11 @@ def classify_authority_class(title: str, snippet: str = "") -> str:
     # facility keyword, or explicit facility-type words in the snippet.
     _qa_manager_keywords = [
         "quality assurance manager", "quality control manager",
-        "qa manager", "qc manager", "manager quality",
+        "qa manager", "qc manager", "quality manager", "manager quality",
         "quality assurance & control manager",
         "quality assurance and control manager",
+        "senior quality manager", "senior manager - quality", "senior manager quality",
+        "manager - quality", "manager -- quality", "manager (quality",
     ]
     _facility_grounding_signals = [
         "currently working", "currently at", "manufacturing", "plant",
@@ -932,8 +938,8 @@ def classify_authority_class(title: str, snippet: str = "") -> str:
     _has_qa_manager_title = (
         any(kw in t_clean for kw in _qa_manager_keywords)
         or (
-            any(m in t_clean for m in ["manager", "incharge", "dgm", "agm", "gm", "lead"])
-            and any(q in t_clean for q in ["quality assurance", "quality control", "qa/qc", "qa & qc", "qa and qc"])
+            any(m in t_clean for m in ["manager", "incharge", "dgm", "agm", "gm", "lead", "director", "head"])
+            and any(q in t_clean for q in ["quality assurance", "quality control", "qa/qc", "qa & qc", "qa and qc", "qa", "qc", "quality"])
         )
     )
     _has_facility_grounding = bool(snippet) and any(

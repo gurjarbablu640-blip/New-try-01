@@ -254,7 +254,7 @@ def test_llm_review_cross_validation_blocks_unauthorized_class():
 # ==============================================================================
 
 def test_fallback_llm_provider_deepseek_504_to_gemini():
-    """Simulate FallbackLLMProvider when DeepSeek throws 504 Gateway Timeout -> Gemini succeeds."""
+    """DeepSeek 504 Gateway Timeout triggers Gemini fallback."""
     from services.llm_provider import FallbackLLMProvider, LLMResponse
 
     mock_deepseek = MagicMock()
@@ -284,6 +284,129 @@ def test_fallback_llm_provider_deepseek_504_to_gemini():
     assert resp.provider == "gemini"
     mock_deepseek.complete.assert_called_once()
     mock_gemini.complete.assert_called_once()
+
+
+def test_fallback_llm_provider_deepseek_timeout_to_gemini():
+    """DeepSeek Timeout triggers Gemini fallback."""
+    from services.llm_provider import FallbackLLMProvider, LLMResponse
+
+    mock_deepseek = MagicMock()
+    mock_deepseek.is_available.return_value = True
+    mock_deepseek.complete.side_effect = TimeoutError("Request timed out after 10.0s")
+
+    mock_gemini = MagicMock()
+    mock_gemini.is_available.return_value = True
+    mock_gemini.complete.return_value = LLMResponse(
+        text="AUTHORITY_CLASS: STRONG_PLANT_QUALITY_OWNER\nENRICH: YES\nREASON: Gemini fallback on timeout.",
+        provider="gemini",
+    )
+
+    fallback_provider = FallbackLLMProvider(primary=mock_deepseek, fallback=mock_gemini)
+    resp = fallback_provider.complete("System", [{"role": "user", "content": "prompt"}])
+    assert resp.provider == "gemini"
+    assert "Gemini fallback on timeout" in resp.text
+    mock_deepseek.complete.assert_called_once()
+    mock_gemini.complete.assert_called_once()
+
+
+def test_fallback_llm_provider_deepseek_exception_to_gemini():
+    """Any DeepSeek runtime exception triggers Gemini fallback."""
+    from services.llm_provider import FallbackLLMProvider, LLMResponse
+
+    mock_deepseek = MagicMock()
+    mock_deepseek.is_available.return_value = True
+    mock_deepseek.complete.side_effect = ConnectionError("Failed to establish a new connection")
+
+    mock_gemini = MagicMock()
+    mock_gemini.is_available.return_value = True
+    mock_gemini.complete.return_value = LLMResponse(
+        text="AUTHORITY_CLASS: STRONG_PLANT_QUALITY_OWNER\nENRICH: YES\nREASON: Gemini fallback on connection error.",
+        provider="gemini",
+    )
+
+    fallback_provider = FallbackLLMProvider(primary=mock_deepseek, fallback=mock_gemini)
+    resp = fallback_provider.complete("System", [{"role": "user", "content": "prompt"}])
+    assert resp.provider == "gemini"
+    mock_gemini.complete.assert_called_once()
+
+
+def test_gate_failover_on_invalid_structured_output():
+    """When DeepSeek returns invalid text (missing AUTHORITY_CLASS/ENRICH), gate falls back to Gemini."""
+    from services.llm_provider import LLMResponse
+
+    mock_deepseek = MagicMock()
+    mock_deepseek.is_available.return_value = True
+    # DeepSeek returns 200 OK with unstructured/garbled text
+    mock_deepseek.complete.return_value = LLMResponse(
+        text="I am unable to classify this person directly as per the criteria.",
+        provider="deepseek",
+    )
+
+    mock_gemini = MagicMock()
+    mock_gemini.is_available.return_value = True
+    gemini_resp_text = (
+        "AUTHORITY_CLASS: STRONG_PLANT_QUALITY_OWNER\n"
+        "ENRICH: YES\n"
+        "REASON: Gemini provided canonical structured classification."
+    )
+    mock_gemini.complete.return_value = LLMResponse(
+        text=gemini_resp_text,
+        provider="gemini",
+    )
+
+    with patch("services.person_enrichment_eligibility_gate.PersonEnrichmentEligibilityGate._get_llm_provider") as mock_get:
+        def _fallback_caller(prompt):
+            # Check validity
+            t = mock_deepseek.complete("", [{"role": "user", "content": prompt}]).text
+            if "AUTHORITY_CLASS:" in t and "ENRICH:" in t:
+                return t, "DEEPSEEK"
+            # Fallback to Gemini
+            t2 = mock_gemini.complete("", [{"role": "user", "content": prompt}]).text
+            return t2, "GEMINI"
+
+        mock_get.return_value = (_fallback_caller, "FALLBACK_CHAIN")
+
+        gate = PersonEnrichmentEligibilityGate()
+        cand = {
+            "candidate_name": "Swathi Ramesh",
+            "candidate_title": "Quality Assurance Manager",
+            "composite_score": 0.84,
+            "authority_class": "FUNCTIONALLY_RELEVANT",
+            "current_employment": "VERIFIED",
+            "facility_relationship": "FACILITY_FUNCTION_OWNER",
+            "candidate_facility": "Vadodara C295",
+        }
+        dec = gate.evaluate(cand, {"facility_verified": True, "linkage_confidence": "DIRECT"}, {"valid_trigger": True}, 90.0)
+        assert dec.enrich_contact is True
+        assert dec.llm_provider == "GEMINI"
+        assert "STRONG_PLANT_QUALITY_OWNER" in dec.reason
+        mock_deepseek.complete.assert_called_once()
+        mock_gemini.complete.assert_called_once()
+
+
+def test_authority_preservation_plant_head():
+    """Plant Head + verified facility must be FACILITY_OWNER, never downgraded to FUNCTIONALLY_RELEVANT."""
+    snippet = "Currently working at GoodEnough Energy as Plant Head. Noida plant manufacturing facility."
+    assert classify_authority_class("Plant Head", snippet) == "FACILITY_OWNER"
+
+
+def test_authority_preservation_business_unit_head():
+    """Business Unit Head + verified facility must be FACILITY_OWNER, never GENERAL_QUALITY."""
+    snippet = "Currently working at HARMAN International as Business Unit Head. Pune manufacturing plant."
+    assert classify_authority_class("Business Unit Head", snippet) == "FACILITY_OWNER"
+
+
+def test_authority_preservation_director_of_operations():
+    """Director of Operations + verified facility must be FACILITY_OWNER."""
+    snippet = "Currently working at manufacturing facility as Director of Operations."
+    assert classify_authority_class("Director of Operations", snippet) == "FACILITY_OWNER"
+
+
+def test_authority_preservation_senior_quality_manager():
+    """Senior Quality Manager + verified facility must be STRONG_PLANT_QUALITY_OWNER, never GENERAL_QUALITY."""
+    snippet = "Currently working at HARMAN International as Senior Quality Manager. Chakan plant."
+    assert classify_authority_class("Senior Quality Manager", snippet) == "STRONG_PLANT_QUALITY_OWNER"
+    assert classify_authority_class("Senior Manager - Quality", snippet) == "STRONG_PLANT_QUALITY_OWNER"
 
 
 def test_narrow_deterministic_fallback_when_both_llms_fail():
