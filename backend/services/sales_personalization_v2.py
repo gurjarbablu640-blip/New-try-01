@@ -243,6 +243,20 @@ FORBIDDEN_SPECIFIC_UNSUPPORTED_PATTERNS: List[Tuple[re.Pattern, str]] = [
         ),
         "Ungrounded automatic expansion into specific instrument enumerations is forbidden",
     ),
+    (
+        re.compile(
+            r"\b(?:minimal\s+downtime|turnaround\s+options?|structured\s+turnaround|fast\s+turnaround|priority\s+service|guaranteed\s+traceability)\b",
+            re.IGNORECASE,
+        ),
+        "Unsupported service-performance claim (turnaround/minimal downtime/priority)",
+    ),
+    (
+        re.compile(
+            r"\b(?:acoustic|mass)\s+calibration\b|\bacoustic\s+facilities\b",
+            re.IGNORECASE,
+        ),
+        "Unsupported capability group (acoustic or mass calibration forbidden; use canonical groups)",
+    ),
 ]
 
 # ── Persona matrix ─────────────────────────────────────────────────────────
@@ -415,6 +429,30 @@ class SalesPersonalizationV2Engine:
         record: Dict[str, Any],
     ) -> PersonalizationV2Result:
         """Generate an LLM-first personalized outreach email for a qualified record."""
+        # 0. Recipient presence validation (HOLD if recipient missing or placeholder)
+        person_name = (
+            record.get("person")
+            or record.get("first_name")
+            or record.get("candidate_name")
+            or record.get("name")
+        )
+        if not person_name or not str(person_name).strip() or str(person_name).strip().lower() in {
+            "unknown", "none", "n/a", "placeholder", "sir/madam", "sir", "madam", "colleague"
+        }:
+            return PersonalizationV2Result(
+                status="HOLD",
+                subject="",
+                body="",
+                quality_score=0.0,
+                persona_used="NONE",
+                capabilities_included=[],
+                word_count=0,
+                violations=["Missing or placeholder recipient person; outreach requires verified individual"],
+                llm_provider_used="NONE",
+                event_status="UNKNOWN",
+                date_source="UNKNOWN",
+            )
+
         persona = self._resolve_persona(record)
         capabilities = self._select_capabilities(record)
 
