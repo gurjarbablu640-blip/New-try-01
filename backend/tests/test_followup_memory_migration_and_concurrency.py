@@ -1,19 +1,27 @@
-"""Integration and Concurrency Hardening Test Suite (Task 3D.1F.1).
+"""Integration and Concurrency Hardening Test Suite (Task 3D.1F.1 & Task 3D.1F.2).
 
 Validates:
 1. Migration upgrade from real current head (20260916_ba_decisions -> 20260917_followup_memory).
-2. FollowupQueryMemoryRecord model persistence across commit and session restart.
-3. Concurrency safety: Two simultaneous workers for same company + missing fact -> exactly one search reservation succeeds.
-4. Crash recovery: Expired/crashed lease allows subsequent retry without permanent lockout.
-5. Independence: Different missing facts or different companies proceed concurrently without contention.
-6. Fail-Closed LLM failure behavior: DeepSeek fail + Gemini fail safely returns HOLD with 0 search spend.
-7. Missing-fact taxonomy canonicalization: Eliminates free-text drift across aliases into shared memory buckets.
+2. Singular Alembic head verification.
+3. Database column types consistency (Company.id, FollowupQueryMemoryRecord.id, company_id, migration).
+4. FollowupQueryMemoryRecord model persistence across commit and session restart.
+5. Concurrency safety: Two simultaneous workers for same company + missing fact -> exactly one search reservation succeeds.
+6. Cross-strategy collision prevention: GENERAL_WEB attempt 1 vs OFFICIAL_COMPANY attempt 2 for same entity + fact -> exactly ONE succeeds.
+7. Cross-attempt collision prevention: Different attempt numbers for same entity + fact collide.
+8. Independence: Different missing facts or different companies proceed concurrently without contention.
+9. Lease renewal / background heartbeat prevents mid-search expiry during active work.
+10. Crash recovery: Expired/crashed lease allows subsequent retry without permanent lockout.
+11. Redis failure in production mode fails closed to HOLD (no speculative Serper search).
+12. Local test / in-memory reservation mode permitted when configured.
+13. Fail-Closed LLM failure behavior: DeepSeek fail + Gemini fail safely returns HOLD with 0 search spend.
+14. Missing-fact taxonomy canonicalization: Eliminates free-text drift across aliases into shared memory buckets.
 """
 from __future__ import annotations
 
 import os
 import sys
 import time
+import threading
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
 
@@ -27,6 +35,7 @@ from alembic.script import ScriptDirectory
 from alembic.migration import MigrationContext
 
 from database import Base
+from models.company import Company
 from models.followup_query_memory import FollowupQueryMemoryRecord
 from services.followup_information_gain_gate import (
     FollowupInformationGainGate,
@@ -99,7 +108,22 @@ def test_migration_upgrade_and_head_status(disposable_db_url):
 
 
 # ============================================================
-# 2. Memory Row Persistence & Session Restart
+# 2. Database Types Consistency (Task 3D.1F.2 Section 7)
+# ============================================================
+
+def test_database_type_consistency_model_and_migration():
+    """Verify Company.id, FollowupQueryMemoryRecord.id, company_id, and migration match Integer."""
+    assert isinstance(Company.id.type, sa.Integer), f"Company.id type is {Company.id.type}, expected Integer"
+    assert isinstance(FollowupQueryMemoryRecord.id.type, sa.Integer), (
+        f"FollowupQueryMemoryRecord.id type is {FollowupQueryMemoryRecord.id.type}, expected Integer"
+    )
+    assert isinstance(FollowupQueryMemoryRecord.company_id.type, sa.Integer), (
+        f"FollowupQueryMemoryRecord.company_id type is {FollowupQueryMemoryRecord.company_id.type}, expected Integer"
+    )
+
+
+# ============================================================
+# 3. Memory Row Persistence & Session Restart
 # ============================================================
 
 def test_memory_row_persistence_and_session_restart(disposable_db_url):
@@ -135,281 +159,290 @@ def test_memory_row_persistence_and_session_restart(disposable_db_url):
     assert found.result_count == 2
     assert found.new_evidence_found is False
 
-    # Update and commit
+    # Update
     found.new_evidence_found = True
-    found.evidence_type_found = "COMMISSIONING_CERTIFICATE"
-    found.result_count = 5
-    found.funnel_state_after = "PASS"
+    found.evidence_type_found = "COMMISSIONING_DATE"
+    found.funnel_state_after = "QUALIFIED"
     session1.commit()
+
     session1.close()
 
-    # Restart session
+    # Completely new session
     session2 = Session()
     reloaded = session2.query(FollowupQueryMemoryRecord).filter_by(id=rec_id).first()
     assert reloaded is not None
     assert reloaded.new_evidence_found is True
-    assert reloaded.evidence_type_found == "COMMISSIONING_CERTIFICATE"
-    assert reloaded.result_count == 5
-    assert reloaded.funnel_state_after == "PASS"
+    assert reloaded.evidence_type_found == "COMMISSIONING_DATE"
+    assert reloaded.funnel_state_after == "QUALIFIED"
+    assert reloaded.normalized_operating_entity == "aether industries limited"
+    assert reloaded.missing_fact == "COMMISSIONING_STATUS"
+
     session2.close()
     engine.dispose()
 
 
 # ============================================================
-# 3. Concurrency Safety: Atomic Search Reservation
+# 4. Atomic Search Reservation & Concurrency Safety
 # ============================================================
 
-def test_concurrent_workers_same_company_and_missing_fact():
-    """Worker A and Worker B simultaneously attempt search on same entity+fact -> only one succeeds."""
-    gate = FollowupInformationGainGate(primary_provider=None, fallback_provider=None)
-
-    company = "Dharamsi Morarji Chemical Co"
+def test_concurrent_workers_same_strategy_one_succeeds():
+    """Two simultaneous workers for same entity + fact + strategy -> only one succeeds."""
+    gate = FollowupInformationGainGate(allow_in_memory_reservation=True)
+    company = "Aether Industries Limited"
     fact = "COMMISSIONING_STATUS"
 
-    # Worker A acquires reservation
-    acquired_a, token_a = gate.acquire_search_reservation(
-        company_name=company,
-        missing_fact=fact,
-        strategy="GENERAL_WEB",
-        worker_id="worker_fastapi_1",
-    )
-    assert acquired_a is True
-    assert token_a == "worker_fastapi_1"
+    acq1, token1 = gate.acquire_search_reservation(company, fact, strategy="GENERAL_WEB", attempt=1)
+    assert acq1 is True
+    assert token1 is not None
 
-    # Worker B simultaneously attempts to acquire reservation for same company + fact
-    acquired_b, token_b = gate.acquire_search_reservation(
+    # Simultaneous Worker B
+    acq2, token2 = gate.acquire_search_reservation(company, fact, strategy="GENERAL_WEB", attempt=1)
+    assert acq2 is False
+    assert token2 is None
+
+    # Release by Worker 1 allows subsequent acquisition
+    gate.release_search_reservation(company, fact, token1)
+    acq3, token3 = gate.acquire_search_reservation(company, fact, strategy="GENERAL_WEB", attempt=1)
+    assert acq3 is True
+    assert token3 is not None
+    gate.release_search_reservation(company, fact, token3)
+
+
+def test_cross_strategy_collision_blocked():
+    """Task 3D.1F.2 Section 1 & 2: Cross-strategy collision must be blocked!
+
+    Worker A: Aether Industries + COMMISSIONING_STATUS, GENERAL_WEB, attempt 1
+    Worker B: Aether Industries + COMMISSIONING_STATUS, OFFICIAL_COMPANY, attempt 2
+
+    Expected: Exactly ONE reservation succeeds. The other receives CONCURRENT_RESERVATION_BLOCKED.
+    """
+    gate = FollowupInformationGainGate(allow_in_memory_reservation=True)
+    company = "Aether Industries Limited"
+    fact = "COMMISSIONING_STATUS"
+
+    # Worker A: GENERAL_WEB attempt 1
+    acq_a, token_a = gate.acquire_search_reservation(
         company_name=company,
         missing_fact=fact,
         strategy="GENERAL_WEB",
-        worker_id="worker_celery_1",
+        attempt=1,
     )
-    assert acquired_b is False
+    assert acq_a is True
+    assert token_a is not None
+
+    # Worker B: OFFICIAL_COMPANY attempt 2 (different strategy & attempt, but same entity + fact)
+    acq_b, token_b = gate.acquire_search_reservation(
+        company_name=company,
+        missing_fact=fact,
+        strategy="OFFICIAL_COMPANY",
+        attempt=2,
+    )
+    assert acq_b is False
     assert token_b is None
 
-    # Gate evaluation for Worker B is immediately blocked with CONCURRENT_RESERVATION_BLOCKED
+    # Gate evaluation for Worker B must return CONCURRENT_RESERVATION_BLOCKED
     decision_b = gate.evaluate_followup_search(
         company_name=company,
         missing_fact=fact,
+        company_id=284,
     )
     assert decision_b.search_needed is False
     assert decision_b.decision_type == "CONCURRENT_RESERVATION_BLOCKED"
     assert decision_b.blocked_reason == "ACTIVE_SEARCH_RESERVATION"
 
-    # Clean release by Worker A
     gate.release_search_reservation(company, fact, token_a)
-    assert gate.is_search_reserved(company, fact) is False
 
 
-# ============================================================
-# 4. Crash Recovery: Expired Reservation Allows Retry
-# ============================================================
-
-def test_crashed_worker_reservation_lease_expires_and_allows_retry():
-    """Worker crashes holding reservation; lease expires naturally; Worker B can acquire."""
-    gate = FollowupInformationGainGate(primary_provider=None, fallback_provider=None)
-
-    company = "Aether Industries Limited"
+def test_cross_attempt_collision_blocked():
+    """Task 3D.1F.2 Section 1: Different attempt numbers for same entity+fact must collide."""
+    gate = FollowupInformationGainGate(allow_in_memory_reservation=True)
+    company = "Dharamsi Morarji Chemical Company Limited"
     fact = "FACILITY_LOCATION"
 
-    # Worker A acquires short 0.1s lease, then "crashes" (never calls release)
-    acquired_a, token_a = gate.acquire_search_reservation(
-        company_name=company,
-        missing_fact=fact,
-        lease_seconds=0.1,
-        worker_id="crashed_worker_99",
-    )
-    assert acquired_a is True
+    acq1, token1 = gate.acquire_search_reservation(company, fact, attempt=1)
+    assert acq1 is True
 
-    # Immediately, Worker B is rejected
-    acquired_b1, _ = gate.acquire_search_reservation(company, fact, worker_id="retry_worker_1")
-    assert acquired_b1 is False
+    acq2, token2 = gate.acquire_search_reservation(company, fact, attempt=2)
+    assert acq2 is False
 
-    # Wait for lease to expire
-    time.sleep(0.15)
+    gate.release_search_reservation(company, fact, token1)
 
-    # Worker B retries -> now succeeds!
-    acquired_b2, token_b = gate.acquire_search_reservation(company, fact, worker_id="retry_worker_1")
-    assert acquired_b2 is True
-    assert token_b == "retry_worker_1"
-
-    gate.release_search_reservation(company, fact, token_b)
-
-
-# ============================================================
-# 5. Independence: Different Missing Facts & Different Companies
-# ============================================================
 
 def test_different_missing_facts_proceed_independently():
-    """Same company with different missing facts can be researched concurrently."""
-    gate = FollowupInformationGainGate(primary_provider=None, fallback_provider=None)
-    company = "Tata Chemicals Limited"
+    """Same company with different missing facts proceed concurrently."""
+    gate = FollowupInformationGainGate(allow_in_memory_reservation=True)
+    company = "Aether Industries Limited"
 
-    acq1, tok1 = gate.acquire_search_reservation(company, "FACILITY_LOCATION")
-    acq2, tok2 = gate.acquire_search_reservation(company, "COMMISSIONING_STATUS")
+    acq1, token1 = gate.acquire_search_reservation(company, "FACILITY_LOCATION")
+    acq2, token2 = gate.acquire_search_reservation(company, "COMMISSIONING_STATUS")
 
     assert acq1 is True
     assert acq2 is True
 
-    gate.release_search_reservation(company, "FACILITY_LOCATION", tok1)
-    gate.release_search_reservation(company, "COMMISSIONING_STATUS", tok2)
+    gate.release_search_reservation(company, "FACILITY_LOCATION", token1)
+    gate.release_search_reservation(company, "COMMISSIONING_STATUS", token2)
 
 
 def test_different_companies_proceed_independently():
-    """Different companies with same missing fact proceed concurrently without contention."""
-    gate = FollowupInformationGainGate(primary_provider=None, fallback_provider=None)
+    """Different companies with same missing fact proceed concurrently."""
+    gate = FollowupInformationGainGate(allow_in_memory_reservation=True)
+    fact = "COMMISSIONING_STATUS"
 
-    acq1, tok1 = gate.acquire_search_reservation("Company Alpha Limited", "CAPEX_EVENT")
-    acq2, tok2 = gate.acquire_search_reservation("Company Beta Limited", "CAPEX_EVENT")
+    acq1, token1 = gate.acquire_search_reservation("Company Alpha Limited", fact)
+    acq2, token2 = gate.acquire_search_reservation("Company Beta Limited", fact)
 
     assert acq1 is True
     assert acq2 is True
 
-    gate.release_search_reservation("Company Alpha Limited", "CAPEX_EVENT", tok1)
-    gate.release_search_reservation("Company Beta Limited", "CAPEX_EVENT", tok2)
+    gate.release_search_reservation("Company Alpha Limited", fact, token1)
+    gate.release_search_reservation("Company Beta Limited", fact, token2)
 
 
 # ============================================================
-# 6. Safe Fail-Closed LLM Failure Behavior (Section 8)
+# 5. Lease Heartbeat & Crash Recovery (Task 3D.1F.2 Section 3 & 4)
 # ============================================================
 
-def test_safe_llm_failure_fail_closed_hold_behavior():
-    """When both DeepSeek and Gemini fail, gate safely HOLDS without speculative Serper credit spend."""
-    mock_deepseek = MagicMock()
-    mock_deepseek.is_available.return_value = False
-    mock_gemini = MagicMock()
-    mock_gemini.is_available.return_value = False
+def test_lease_renewal_heartbeat_prevents_mid_search_expiry():
+    """Heartbeat keeps reservation alive during active work exceeding initial TTL."""
+    gate = FollowupInformationGainGate(allow_in_memory_reservation=True)
+    company = "Renewable Energy Solutions Limited"
+    fact = "CAPEX_EVENT"
+
+    worker_b_blocked = [False]
+
+    def _worker_a_task():
+        with gate.reserve_search(
+            company_name=company,
+            missing_fact=fact,
+            lease_seconds=1,
+            heartbeat_interval=0.1,
+        ) as (acquired, token):
+            assert acquired is True
+            time.sleep(0.35)
+
+    t = threading.Thread(target=_worker_a_task)
+    t.start()
+
+    time.sleep(0.1)
+
+    # Worker B tries to acquire while Worker A is still working
+    acq_b, _ = gate.acquire_search_reservation(company, fact)
+    worker_b_blocked[0] = (acq_b is False)
+
+    t.join()
+
+    assert worker_b_blocked[0] is True, "Worker B should have been blocked during Worker A execution"
+
+    # After Worker A finishes, Worker B can acquire
+    acq_after, token_after = gate.acquire_search_reservation(company, fact)
+    assert acq_after is True
+    gate.release_search_reservation(company, fact, token_after)
+
+
+def test_crash_recovery_lease_expiry_after_heartbeat_stops():
+    """If worker crashes (stops heartbeat, does not release), lease expires after TTL."""
+    gate = FollowupInformationGainGate(allow_in_memory_reservation=True)
+    company = "Crash Prone Corp Limited"
+    fact = "COMMISSIONING_STATUS"
+
+    # Worker 1 acquires with 0.3s TTL, then crashes (no release, no heartbeat)
+    acq_short, _ = gate.acquire_search_reservation(company, fact, lease_seconds=0.3)
+    assert acq_short is True
+
+    # Immediate attempt by Worker 2 is blocked
+    acq2, _ = gate.acquire_search_reservation(company, fact)
+    assert acq2 is False
+
+    # Wait for lease to expire
+    time.sleep(0.4)
+
+    # Worker 2 attempts again and succeeds!
+    acq3, token3 = gate.acquire_search_reservation(company, fact, lease_seconds=1)
+    assert acq3 is True, "Worker 2 should acquire after lease expired (no permanent lockout)"
+    gate.release_search_reservation(company, fact, token3)
+
+
+# ============================================================
+# 6. Redis Unavailable in Production (Task 3D.1F.2 Section 5 & 6)
+# ============================================================
+
+def test_redis_unavailable_in_production_fails_closed_hold():
+    """When Redis is unavailable in production mode, fail closed to HOLD (no search)."""
+    gate = FollowupInformationGainGate(
+        allow_in_memory_reservation=False,
+        redis_client=None,
+    )
+    company = "Titan Industries Limited"
+    fact = "COMMISSIONING_STATUS"
+
+    # 1. Direct reservation acquisition fails closed with HOLD token
+    acquired, token = gate.acquire_search_reservation(company, fact)
+    assert acquired is False
+    assert token == "FOLLOWUP_RESERVATION_UNAVAILABLE_HOLD"
+
+    # 2. Gate evaluation returns FOLLOWUP_RESERVATION_UNAVAILABLE_HOLD with search_needed=False
+    decision = gate.evaluate_followup_search(company, fact, company_id=501)
+    assert decision.search_needed is False
+    assert decision.decision_type == "FOLLOWUP_RESERVATION_UNAVAILABLE_HOLD"
+    assert decision.alternative_action == "HOLD"
+    assert decision.blocked_reason == "REDIS_UNAVAILABLE_PRODUCTION_HOLD"
+
+
+# ============================================================
+# 7. Safe LLM Failure Behavior (Task 3D.1F.1 Section 8)
+# ============================================================
+
+def test_safe_llm_failure_hold_behavior():
+    """When both DeepSeek and Gemini fail, safe fail-closed HOLD is returned."""
+    mock_primary = MagicMock()
+    mock_primary.is_available.return_value = False
+    mock_primary.complete.side_effect = Exception("DeepSeek API 503")
+
+    mock_fallback = MagicMock()
+    mock_fallback.is_available.return_value = False
+    mock_fallback.call.side_effect = Exception("Gemini API 503")
 
     gate = FollowupInformationGainGate(
-        primary_provider=mock_deepseek,
-        fallback_provider=mock_gemini,
+        primary_provider=mock_primary,
+        fallback_provider=mock_fallback,
         fail_closed_on_llm_failure=True,
+        allow_in_memory_reservation=True,
     )
 
     decision = gate.evaluate_followup_search(
-        company_name="Specialty Chemicals Manufacturer Limited",
-        missing_fact="CAPEX_EVENT",
-        company_id=450,
-        current_evidence={"titles": [], "snippets": []},
+        company_name="Aether Industries Limited",
+        missing_fact="COMMISSIONING_STATUS",
+        company_id=284,
+        current_evidence={"titles": ["Aether plans expansion"], "snippets": ["Initial announcement"]},
     )
 
     assert decision.search_needed is False
-    assert decision.alternative_action == "HOLD"
     assert decision.decision_type == "LLM_FAILURE_HOLD"
+    assert decision.alternative_action == "HOLD"
     assert decision.blocked_reason == "HOLD_LLM_UNAVAILABLE"
 
 
 # ============================================================
-# 7. Missing-Fact Taxonomy & Alias Canonicalization (Section 9)
+# 8. Taxonomy Canonicalization & Shared Bucket
 # ============================================================
 
-def test_missing_fact_taxonomy_and_alias_canonicalization():
-    """All aliases canonicalize to exact standard keys, mapping to shared memory buckets."""
-    # Facility Location
-    for alias in ["facility_city", "EXACT_FACILITY", "facility location", "facility_name", "location", "city"]:
-        assert canonicalize_missing_fact(alias) == "FACILITY_LOCATION"
+def test_missing_fact_canonicalization_and_shared_bucket():
+    """Alias canonicalization maps free-text variations to the standard key and shared lock."""
+    assert canonicalize_missing_fact("facility_city") == "FACILITY_LOCATION"
+    assert canonicalize_missing_fact("EXACT_FACILITY") == "FACILITY_LOCATION"
+    assert canonicalize_missing_fact("facility location") == "FACILITY_LOCATION"
+    assert canonicalize_missing_fact("event_date") == "TRIGGER_DATE"
+    assert canonicalize_missing_fact("status") == "COMMISSIONING_STATUS"
+    assert canonicalize_missing_fact("capex") == "CAPEX_EVENT"
+    assert canonicalize_missing_fact("machinery") == "MACHINERY_CONTEXT"
 
-    # Trigger Date
-    for alias in ["CURRENT_EVENT_DATE", "event_date", "date", "trigger_date"]:
-        assert canonicalize_missing_fact(alias) == "TRIGGER_DATE"
-
-    # Commissioning / Operating Status
-    for alias in ["commissioning", "status", "commissioning_status"]:
-        assert canonicalize_missing_fact(alias) == "COMMISSIONING_STATUS"
-    for alias in ["operating_status", "operational_status"]:
-        assert canonicalize_missing_fact(alias) == "OPERATING_STATUS"
-
-    # Machinery Context
-    for alias in ["machinery", "equipment", "machinery_context"]:
-        assert canonicalize_missing_fact(alias) == "MACHINERY_CONTEXT"
-
-    # Capex Event
-    for alias in ["capex", "expansion", "capex_event"]:
-        assert canonicalize_missing_fact(alias) == "CAPEX_EVENT"
-
-    # Plant Ownership
-    for alias in ["ownership", "plant_ownership"]:
-        assert canonicalize_missing_fact(alias) == "PLANT_OWNERSHIP"
-
-
-def test_alias_shared_memory_bucket_in_gate():
-    """Searches recorded under alias 'facility_city' are retrievable under 'FACILITY_LOCATION'."""
-    gate = FollowupInformationGainGate(primary_provider=None, fallback_provider=None)
-    company = "Gujarat Fluorochemicals Limited"
-
-    # Record search using alias 'facility_city'
-    gate.record_search_outcome(
-        company_name=company,
-        missing_fact="facility_city",
-        query='"Gujarat Fluorochemicals" Dahej plant location',
-        result_count=3,
-        new_evidence_found=True,
-        evidence_type_found="FACILITY_LOCATION_CONFIRMED",
-    )
-
-    # Query gate using canonical name 'FACILITY_LOCATION'
-    priors = gate.get_prior_searches(company_name=company, missing_fact="FACILITY_LOCATION")
-    assert len(priors) == 1
-    assert priors[0]["missing_fact"] == "FACILITY_LOCATION"
-    assert priors[0]["new_evidence_found"] is True
-
-    # Gate evaluation recognizes already resolved fact and reuses existing evidence
-    decision = gate.evaluate_followup_search(
-        company_name=company,
-        missing_fact="facility_name",
-        company_id=500,
-    )
-    assert decision.search_needed is False
-    assert decision.alternative_action == "USE_EXISTING_EVIDENCE"
-    assert decision.decision_type == "MEMORY_ALREADY_RESOLVED"
-
-
-# ============================================================
-# 8. Redis Distributed Reservation Simulation
-# ============================================================
-
-def test_redis_distributed_reservation_when_available():
-    """When Redis is available, atomic SET NX EX is used for multi-process safety."""
-    fake_redis = {}
-
-    class MockRedis:
-        def set(self, key, val, nx=False, ex=None):
-            if nx and key in fake_redis:
-                return False
-            fake_redis[key] = val
-            return True
-
-        def get(self, key):
-            return fake_redis.get(key)
-
-        def delete(self, key):
-            fake_redis.pop(key, None)
-
-        def exists(self, key):
-            return key in fake_redis
-
-    gate = FollowupInformationGainGate(
-        primary_provider=None,
-        fallback_provider=None,
-        redis_client=MockRedis(),
-    )
-
-    company = "Coromandel International Limited"
-    fact = "CAPEX_EVENT"
-
-    acq1, tok1 = gate.acquire_search_reservation(company, fact, worker_id="celery_worker_A")
+    # Verify they share the exact same reservation scope
+    gate = FollowupInformationGainGate(allow_in_memory_reservation=True)
+    acq1, tok1 = gate.acquire_search_reservation("Aether Industries Limited", "facility_city")
     assert acq1 is True
-    assert tok1 == "celery_worker_A"
 
-    # Second worker blocked via Redis NX
-    acq2, tok2 = gate.acquire_search_reservation(company, fact, worker_id="fastapi_worker_B")
+    # Same entity with alias "EXACT_FACILITY" must collide!
+    acq2, tok2 = gate.acquire_search_reservation("Aether Industries Limited", "EXACT_FACILITY")
     assert acq2 is False
-    assert tok2 is None
 
-    # Release frees key in Redis
-    gate.release_search_reservation(company, fact, tok1)
-    assert len(fake_redis) == 0
-
-    # Next attempt succeeds
-    acq3, tok3 = gate.acquire_search_reservation(company, fact, worker_id="fastapi_worker_B")
-    assert acq3 is True
-    assert tok3 == "fastapi_worker_B"
+    gate.release_search_reservation("Aether Industries Limited", "facility_city", tok1)

@@ -164,113 +164,119 @@ class AdaptiveResearchService:
             # Query is approved by Gate
             query_to_run = gate_decision.suggested_query or self._generate_fallback_query(company_name, missing_fact)
 
-            # Atomic Multi-Process Search Reservation (Task 3D.1F.1 Section 4, 5, 6)
-            acquired, res_token = self.gate.acquire_search_reservation(
+            # Atomic Multi-Process Search Reservation with Heartbeat (Task 3D.1F.1 & Task 3D.1F.2)
+            with self.gate.reserve_search(
                 company_name=company_name,
                 missing_fact=missing_fact,
                 strategy=gate_decision.research_strategy,
                 attempt=gate_decision.prior_attempt_count + 1,
-            )
-            if not acquired:
+            ) as (acquired, res_token):
+                if not acquired:
+                    hold_reason = (
+                        "REDIS_UNAVAILABLE_PRODUCTION_HOLD"
+                        if res_token == "FOLLOWUP_RESERVATION_UNAVAILABLE_HOLD"
+                        else "CONCURRENT_RESERVATION_ACTIVE"
+                    )
+                    logger.info(
+                        "[FOLLOWUP_SEARCH_BLOCKED_RESERVATION] Search reservation not acquired for (%s + %s). Reason: %s. Skipping search.",
+                        company_name,
+                        missing_fact,
+                        hold_reason,
+                    )
+                    continue
+
+                executed_queries.append(query_to_run)
+
                 logger.info(
-                    "[FOLLOWUP_SEARCH_BLOCKED_CONCURRENT] Another worker holds active reservation for (%s + %s). Skipping duplicate search.",
+                    "[FOLLOWUP_SEARCH_EXECUTING] Company: %s | Fact: %s | Strategy: %s | Query: %s",
                     company_name,
                     missing_fact,
+                    gate_decision.research_strategy,
+                    query_to_run,
                 )
-                continue
 
-            executed_queries.append(query_to_run)
+                new_results_for_query: List[Dict[str, Any]] = []
+                useful_urls: List[str] = []
+                source_domains: Set[str] = set()
 
-            logger.info(
-                "[FOLLOWUP_SEARCH_EXECUTING] Company: %s | Fact: %s | Strategy: %s | Query: %s",
-                company_name,
-                missing_fact,
-                gate_decision.research_strategy,
-                query_to_run,
-            )
-
-            new_results_for_query: List[Dict[str, Any]] = []
-            useful_urls: List[str] = []
-            source_domains: Set[str] = set()
-
-            try:
-                search_res = self.router.search(
-                    query=query_to_run,
-                    num_results=3,
-                    db=db,
-                    use_cache=False,
-                )
-                raw_followup = search_res.get("results", []) or []
-                triaged = triage_and_rank_results(raw_followup, max_to_fetch=1)
-
-                for item in triaged:
-                    url = str(item.get("url") or "")
-                    title = str(item.get("title") or "")
-                    snippet = str(item.get("snippet") or "")
-                    date_val = str((item.get("metadata") or {}).get("date") or "")
-
-                    if url:
-                        useful_urls.append(url)
-                        if "/" in url and len(url.split("/")) > 2:
-                            source_domains.add(url.split("/")[2].replace("www.", ""))
-
-                    if url and url not in merged_urls:
-                        merged_urls.append(url)
-                    if title and title not in merged_titles:
-                        merged_titles.append(title)
-                    if snippet and snippet not in merged_snippets:
-                        merged_snippets.append(snippet)
-                    if date_val and date_val not in merged_dates:
-                        merged_dates.append(date_val)
-
-                    # Bounded Page Fetch & Structured Fact Extraction
-                    fetch_res = page_content_fetcher.fetch_page(
-                        url=url,
+                try:
+                    search_res = self.router.search(
+                        query=query_to_run,
+                        num_results=3,
                         db=db,
-                        source_type="STRONG_SECONDARY" if item.get("triage_class") == "HIGH_VALUE_PRIMARY" else "SECONDARY",
+                        use_cache=False,
                     )
-                    pages_fetched_count += 1
-                    if fetch_res.get("fetch_status") == STATUS_FETCH_SUCCESS:
-                        packet = extract_structured_evidence(
+                    raw_followup = search_res.get("results", []) or []
+                    triaged = triage_and_rank_results(raw_followup, max_to_fetch=1)
+
+                    for item in triaged:
+                        url = str(item.get("url") or "")
+                        title = str(item.get("title") or "")
+                        snippet = str(item.get("snippet") or "")
+                        date_val = str((item.get("metadata") or {}).get("date") or "")
+
+                        if url:
+                            useful_urls.append(url)
+                            if "/" in url and len(url.split("/")) > 2:
+                                source_domains.add(url.split("/")[2].replace("www.", ""))
+
+                        if url and url not in merged_urls:
+                            merged_urls.append(url)
+                        if title and title not in merged_titles:
+                            merged_titles.append(title)
+                        if snippet and snippet not in merged_snippets:
+                            merged_snippets.append(snippet)
+                        if date_val and date_val not in merged_dates:
+                            merged_dates.append(date_val)
+
+                        # Bounded Page Fetch & Structured Fact Extraction
+                        fetch_res = page_content_fetcher.fetch_page(
                             url=url,
-                            title=fetch_res.get("title") or title,
-                            article_text=fetch_res.get("extracted_text", ""),
-                            publication_date=fetch_res.get("publication_date") or date_val,
-                            candidate_company=company_name,
-                            source_type=fetch_res.get("source_type", "SECONDARY"),
+                            db=db,
+                            source_type="STRONG_SECONDARY" if item.get("triage_class") == "HIGH_VALUE_PRIMARY" else "SECONDARY",
                         )
-                        evidence_packets.append(packet)
-                        new_results_for_query.append(packet)
+                        pages_fetched_count += 1
+                        if fetch_res.get("fetch_status") == STATUS_FETCH_SUCCESS:
+                            packet = extract_structured_evidence(
+                                url=url,
+                                title=fetch_res.get("title") or title,
+                                article_text=fetch_res.get("extracted_text", ""),
+                                publication_date=fetch_res.get("publication_date") or date_val,
+                                candidate_company=company_name,
+                                source_type=fetch_res.get("source_type", "SECONDARY"),
+                            )
+                            evidence_packets.append(packet)
+                            new_results_for_query.append(packet)
 
-                # Determine if material new evidence was found
-                current_facts_count = sum(len(p.get("structured_facts") or {}) for p in evidence_packets)
-                has_new_facts = current_facts_count > existing_facts_count
-                has_new_urls = bool(useful_urls and any(u not in candidate_group.get("source_urls", []) for u in useful_urls))
-                has_material_evidence = has_new_facts or (len(raw_followup) > 0 and has_new_urls)
-                evidence_type = "STRUCTURED_FACTS" if has_new_facts else ("CORROBORATING_URL" if has_material_evidence else "NONE")
+                    # Determine if material new evidence was found
+                    current_facts_count = sum(len(p.get("structured_facts") or {}) for p in evidence_packets)
+                    has_new_facts = current_facts_count > existing_facts_count
+                    has_new_urls = bool(useful_urls and any(u not in candidate_group.get("source_urls", []) for u in useful_urls))
+                    has_material_evidence = has_new_facts or (len(raw_followup) > 0 and has_new_urls)
+                    evidence_type = "STRUCTURED_FACTS" if has_new_facts else ("CORROBORATING_URL" if has_material_evidence else "NONE")
 
-                # Persist outcome to PostgreSQL memory
-                self.gate.record_search_outcome(
-                    company_name=company_name,
-                    missing_fact=missing_fact,
-                    query=query_to_run,
-                    research_strategy=gate_decision.research_strategy,
-                    result_count=len(raw_followup),
-                    useful_urls=useful_urls,
-                    new_evidence_found=has_material_evidence,
-                    evidence_type_found=evidence_type,
-                    source_domains=list(source_domains),
-                    funnel_state_before=current_cls,
-                    funnel_state_after=None,  # Updated after re-reasoning
-                    llm_reasoning=gate_decision.reason,
-                    company_id=merged_candidate.get("company_id"),
-                    db=db,
-                )
+                    # Persist outcome to PostgreSQL memory
+                    self.gate.record_search_outcome(
+                        company_name=company_name,
+                        missing_fact=missing_fact,
+                        query=query_to_run,
+                        research_strategy=gate_decision.research_strategy,
+                        result_count=len(raw_followup),
+                        useful_urls=useful_urls,
+                        new_evidence_found=has_material_evidence,
+                        evidence_type_found=evidence_type,
+                        source_domains=list(source_domains),
+                        funnel_state_before=current_cls,
+                        funnel_state_after=None,  # Updated after re-reasoning
+                        llm_reasoning=gate_decision.reason,
+                        company_id=merged_candidate.get("company_id"),
+                        db=db,
+                    )
 
-                existing_facts_count = current_facts_count
+                    existing_facts_count = current_facts_count
 
-            except Exception as exc:
-                logger.warning("Targeted research search error for '%s': %s", company_name, exc)
+                except Exception as exc:
+                    logger.warning("Targeted research search error for '%s': %s", company_name, exc)
 
             if len(executed_queries) >= MAX_FOLLOWUP_CALLS:
                 break

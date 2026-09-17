@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import os
+import sys
 import re
 import threading
 import time
@@ -177,7 +178,10 @@ _TELEMETRY: Dict[str, int] = {
     "FOLLOWUP_QUERY_REPETITION_BLOCKED": 0,
     "FOLLOWUP_RESERVATIONS_ACQUIRED": 0,
     "FOLLOWUP_RESERVATIONS_BLOCKED_CONCURRENT": 0,
+    "FOLLOWUP_RESERVATIONS_RENEWED": 0,
+    "FOLLOWUP_RESERVATIONS_BLOCKED_REDIS_UNAVAILABLE": 0,
     "FOLLOWUP_SEARCH_BLOCKED_CONCURRENT_RESERVATION": 0,
+    "FOLLOWUP_SEARCH_BLOCKED_REDIS_UNAVAILABLE": 0,
     "FOLLOWUP_LLM_NEW_SEARCH_JUSTIFIED": 0,
     "FOLLOWUP_LLM_EXISTING_EVIDENCE_SUFFICIENT": 0,
     "FOLLOWUP_LLM_FAILURE_DETERMINISTIC_FALLBACKS": 0,
@@ -283,16 +287,43 @@ class FollowupInformationGainGate:
         db_session: Optional[Session] = None,
         redis_client: Optional[Any] = None,
         fail_closed_on_llm_failure: bool = False,
+        allow_in_memory_reservation: Optional[bool] = None,
     ):
         self.primary_provider = primary_provider or DeepSeekProvider()
         self.fallback_provider = fallback_provider or GeminiProvider()
         self.db_session = db_session
         self._redis = redis_client
         self.fail_closed_on_llm_failure = fail_closed_on_llm_failure
-        self._reservations: Dict[str, Tuple[str, float]] = {}  # key -> (token, expiry_ts)
+        self._allow_in_memory_reservation = allow_in_memory_reservation
+        # key -> (token, expiry_ts, metadata)
+        self._reservations: Dict[str, Tuple[str, float, Dict[str, Any]]] = {}
         self._reservation_lock = threading.Lock()
         self._in_memory_store: Dict[str, List[Dict[str, Any]]] = {}
         self._store_lock = threading.Lock()
+
+    def is_in_memory_fallback_allowed(self) -> bool:
+        """Check if local process in-memory reservation is permitted.
+
+        Permitted ONLY in test/dev environments, single-process scripts, or when explicitly enabled.
+        Strictly forbidden in PRODUCTION / MULTI-PROCESS mode to prevent
+        uncoordinated duplicate Serper searches across FastAPI and Celery.
+        """
+        if self._allow_in_memory_reservation is not None:
+            return self._allow_in_memory_reservation
+        if os.environ.get("ALLOW_IN_MEMORY_RESERVATION", "").lower() in {"1", "true"}:
+            return True
+        if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
+            return True
+        try:
+            from config import settings
+            mode = str(getattr(settings, "SALESOORJA_MODE", "")).upper()
+            if mode in {"PRODUCTION", "LIVE", "24X7"}:
+                return False
+            if mode in {"TEST", "DEVELOPMENT", "DEV", "LOCAL"}:
+                return True
+        except Exception:
+            pass
+        return False
 
     def _get_redis(self) -> Optional[Any]:
         if self._redis is not None:
@@ -389,7 +420,7 @@ class FollowupInformationGainGate:
 
         return False, f"Entity '{company_name}' is ungrounded / unresolved"
 
-    # --- Atomic Search Reservation System (Task 3D.1F.1 Section 4, 5, 6) ---
+    # --- Atomic Search Reservation System (Task 3D.1F.1 & Task 3D.1F.2) ---
 
     def acquire_search_reservation(
         self,
@@ -402,16 +433,30 @@ class FollowupInformationGainGate:
     ) -> Tuple[bool, Optional[str]]:
         """Atomically reserve search execution for (company + missing_fact).
 
+        Authoritative distributed reservation scope (Task 3D.1F.2 Section 1):
+        normalized_operating_entity + canonical_missing_fact
+        ONE unresolved fact = ONE active web search at a time.
+        research_strategy, attempt, worker_id are metadata, NOT separate namespaces!
+
         Prevents two workers (e.g. FastAPI and Celery) from simultaneously deciding
         'no prior search exists' and issuing duplicate Serper calls.
-        Safe across multi-process workers via Redis SET NX EX, with thread-safe
-        in-memory fallback.
-        Lease naturally expires after lease_seconds to prevent permanent lockout on worker crash.
+        Safe across multi-process workers via Redis SET NX EX.
+        In production, if Redis is unavailable, fails closed to HOLD (Task 3D.1F.2 Section 5).
         """
         norm_entity = self._normalize_name(company_name)
         canon_fact = canonicalize_missing_fact(missing_fact)
         reservation_key = f"salesoorja:followup:reservation:{norm_entity}::{canon_fact}"
         token = worker_id or f"{os.getpid()}:{uuid.uuid4().hex[:8]}"
+        metadata = {
+            "token": token,
+            "company_name": company_name,
+            "normalized_operating_entity": norm_entity,
+            "missing_fact": canon_fact,
+            "strategy": strategy,
+            "attempt": attempt,
+            "pid": os.getpid(),
+            "created_at": time.time(),
+        }
 
         r = self._get_redis()
         if r is not None:
@@ -419,39 +464,53 @@ class FollowupInformationGainGate:
                 # Atomic SET if Not Exists with Expiration (bounded lease)
                 acquired = bool(r.set(reservation_key, token, nx=True, ex=lease_seconds))
                 if acquired:
+                    try:
+                        r.set(f"{reservation_key}:meta", json.dumps(metadata), ex=lease_seconds)
+                    except Exception:
+                        pass
                     increment_telemetry("FOLLOWUP_RESERVATIONS_ACQUIRED")
                     return True, token
                 else:
                     increment_telemetry("FOLLOWUP_RESERVATIONS_BLOCKED_CONCURRENT")
                     return False, None
             except Exception as e:
-                logger.warning("Redis reservation check failed, using local store: %s", e)
+                logger.warning("Redis reservation check failed: %s", e)
 
-        # In-memory lease reservation with automatic expiry check
-        now = time.time()
+        # Task 3D.1F.2 Section 5: Fail closed in production when Redis is unavailable!
+        if not self.is_in_memory_fallback_allowed():
+            logger.error(
+                "[FOLLOWUP_RESERVATION_REDIS_UNAVAILABLE] Redis is unavailable in production mode. "
+                "Failing closed to prevent uncoordinated duplicate Serper searches for (%s + %s).",
+                company_name, canon_fact,
+            )
+            increment_telemetry("FOLLOWUP_RESERVATIONS_BLOCKED_REDIS_UNAVAILABLE")
+            return False, "FOLLOWUP_RESERVATION_UNAVAILABLE_HOLD"
+
+        # In-memory lease reservation permitted ONLY in unit tests and local dev
+        now = time.monotonic()
         with self._reservation_lock:
             existing = self._reservations.get(reservation_key)
             if existing:
-                existing_token, expiry = existing
+                existing_token, expiry, _ = existing
                 if now < expiry:
                     # Still active! Reject concurrent reservation
                     increment_telemetry("FOLLOWUP_RESERVATIONS_BLOCKED_CONCURRENT")
                     return False, None
-                # Expired lease: worker crashed or timed out, allow reclaim
-
-            self._reservations[reservation_key] = (token, now + lease_seconds)
+                self._reservations.pop(reservation_key, None)
+            self._reservations[reservation_key] = (token, now + lease_seconds, metadata)
             increment_telemetry("FOLLOWUP_RESERVATIONS_ACQUIRED")
             return True, token
 
-    def release_search_reservation(
+    def renew_search_reservation(
         self,
         company_name: str,
         missing_fact: str,
-        token: Optional[str] = None,
-    ) -> None:
-        """Release search reservation after search completes or fails."""
-        if not token:
-            return
+        token: str,
+        lease_seconds: int = RESERVATION_LEASE_SECONDS,
+    ) -> bool:
+        """Renew/extend lease for an active reservation if held by the same token (Task 3D.1F.2 Section 3)."""
+        if not token or token == "FOLLOWUP_RESERVATION_UNAVAILABLE_HOLD":
+            return False
         norm_entity = self._normalize_name(company_name)
         canon_fact = canonicalize_missing_fact(missing_fact)
         reservation_key = f"salesoorja:followup:reservation:{norm_entity}::{canon_fact}"
@@ -459,9 +518,67 @@ class FollowupInformationGainGate:
         r = self._get_redis()
         if r is not None:
             try:
-                val = r.get(reservation_key)
-                if val == token:
-                    r.delete(reservation_key)
+                # Atomic Lua renewal script: only extend if key holds this worker's token
+                lua_renew = """
+                if redis.call("get", KEYS[1]) == ARGV[1] then
+                    redis.call("expire", KEYS[1], ARGV[2])
+                    if redis.call("exists", KEYS[1] .. ":meta") == 1 then
+                        redis.call("expire", KEYS[1] .. ":meta", ARGV[2])
+                    end
+                    return 1
+                else
+                    return 0
+                end
+                """
+                res = r.eval(lua_renew, 1, reservation_key, token, lease_seconds)
+                if bool(res == 1):
+                    increment_telemetry("FOLLOWUP_RESERVATIONS_RENEWED")
+                    return True
+                return False
+            except Exception as e:
+                logger.warning("Redis reservation renew failed: %s", e)
+                return False
+
+        if not self.is_in_memory_fallback_allowed():
+            return False
+
+        with self._reservation_lock:
+            existing = self._reservations.get(reservation_key)
+            if existing and existing[0] == token:
+                now = time.monotonic()
+                self._reservations[reservation_key] = (token, now + lease_seconds, existing[2])
+                increment_telemetry("FOLLOWUP_RESERVATIONS_RENEWED")
+                return True
+        return False
+
+    def release_search_reservation(
+        self,
+        company_name: str,
+        missing_fact: str,
+        token: Optional[str] = None,
+    ) -> bool:
+        """Release search reservation after search completes or fails."""
+        if not token or token == "FOLLOWUP_RESERVATION_UNAVAILABLE_HOLD":
+            return False
+        norm_entity = self._normalize_name(company_name)
+        canon_fact = canonicalize_missing_fact(missing_fact)
+        reservation_key = f"salesoorja:followup:reservation:{norm_entity}::{canon_fact}"
+
+        released = False
+        r = self._get_redis()
+        if r is not None:
+            try:
+                lua_release = """
+                if redis.call("get", KEYS[1]) == ARGV[1] then
+                    redis.call("del", KEYS[1])
+                    redis.call("del", KEYS[1] .. ":meta")
+                    return 1
+                else
+                    return 0
+                end
+                """
+                res = r.eval(lua_release, 1, reservation_key, token)
+                released = bool(res == 1)
             except Exception as e:
                 logger.debug("Redis reservation release error: %s", e)
 
@@ -469,6 +586,11 @@ class FollowupInformationGainGate:
             existing = self._reservations.get(reservation_key)
             if existing and existing[0] == token:
                 self._reservations.pop(reservation_key, None)
+                released = True
+            elif existing and time.monotonic() >= existing[1]:
+                self._reservations.pop(reservation_key, None)
+
+        return released
 
     def is_search_reserved(
         self,
@@ -485,14 +607,19 @@ class FollowupInformationGainGate:
             try:
                 if r.exists(reservation_key):
                     return True
+                return False
             except Exception:
                 pass
 
-        now = time.time()
+        if not self.is_in_memory_fallback_allowed():
+            # In production mode when Redis is unavailable, block searches
+            return True
+
+        now = time.monotonic()
         with self._reservation_lock:
             existing = self._reservations.get(reservation_key)
             if existing:
-                _, expiry = existing
+                _, expiry, _ = existing
                 if now < expiry:
                     return True
                 self._reservations.pop(reservation_key, None)
@@ -506,21 +633,60 @@ class FollowupInformationGainGate:
         strategy: str = "GENERAL_WEB",
         attempt: int = 1,
         lease_seconds: int = RESERVATION_LEASE_SECONDS,
+        heartbeat_interval: float = 15.0,
+        worker_id: Optional[str] = None,
     ):
-        """Context manager for clean atomic search reservation and release."""
+        """Context manager for clean atomic search reservation with background lease renewal.
+
+        Task 3D.1F.2 Section 3 & 4:
+        - Acquires atomic reservation scoped to (normalized_operating_entity + canonical_missing_fact).
+        - Spawns a background heartbeat thread renewing the lease every heartbeat_interval while work is active.
+        - Automatically stops heartbeat and releases lease on exit.
+        - If worker dies mid-execution, heartbeat stops and lease naturally expires after lease_seconds (no permanent lockout).
+        """
         acquired, token = self.acquire_search_reservation(
             company_name=company_name,
             missing_fact=missing_fact,
             strategy=strategy,
             attempt=attempt,
             lease_seconds=lease_seconds,
+            worker_id=worker_id,
         )
-        if not acquired:
-            yield False
+        if not acquired or not token or token == "FOLLOWUP_RESERVATION_UNAVAILABLE_HOLD":
+            yield False, token
             return
+
+        norm_entity = self._normalize_name(company_name)
+        stop_heartbeat = threading.Event()
+
+        def _heartbeat_worker():
+            interval = min(heartbeat_interval, max(0.1, lease_seconds / 3.0))
+            while not stop_heartbeat.wait(timeout=interval):
+                renewed = self.renew_search_reservation(
+                    company_name=company_name,
+                    missing_fact=missing_fact,
+                    token=token,
+                    lease_seconds=lease_seconds,
+                )
+                if not renewed:
+                    logger.warning(
+                        "[RESERVATION_HEARTBEAT_EXPIRED] Could not renew reservation for (%s + %s).",
+                        company_name, missing_fact,
+                    )
+                    break
+
+        hb_thread = threading.Thread(
+            target=_heartbeat_worker,
+            daemon=True,
+            name=f"FollowupHB-{norm_entity[:12]}",
+        )
+        hb_thread.start()
+
         try:
-            yield True
+            yield True, token
         finally:
+            stop_heartbeat.set()
+            hb_thread.join(timeout=1.0)
             self.release_search_reservation(company_name, missing_fact, token)
 
     # --- Query Memory Storage & Retrieval ---
@@ -735,6 +901,22 @@ class FollowupInformationGainGate:
                 alternative_action="HOLD",
                 decision_type="DETERMINISTIC_REJECT",
                 blocked_reason="UNSPECIFIED_MISSING_FACT",
+            )
+
+        # Step 0.2: Redis Availability in Production Check (Task 3D.1F.2 Section 5, 6)
+        if not self.is_in_memory_fallback_allowed() and self._get_redis() is None:
+            increment_telemetry("FOLLOWUP_SEARCH_BLOCKED_REDIS_UNAVAILABLE")
+            return InformationGainDecision(
+                search_needed=False,
+                missing_fact=canon_fact,
+                expected_information_gain="LOW",
+                reason=f"Distributed reservation system (Redis) is unavailable in production. Holding follow-up search for ({company_name} + {canon_fact}) to prevent duplicate searches across processes.",
+                suggested_query="",
+                research_strategy="OTHER",
+                alternative_action="HOLD",
+                decision_type="FOLLOWUP_RESERVATION_UNAVAILABLE_HOLD",
+                prior_attempt_count=0,
+                blocked_reason="REDIS_UNAVAILABLE_PRODUCTION_HOLD",
             )
 
         # Step 0.5: Concurrent Search Reservation Check (Task 3D.1F.1 Section 4, 5)

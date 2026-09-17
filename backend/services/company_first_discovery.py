@@ -168,29 +168,34 @@ class CompanyFirstDiscoveryService:
                 "hold_reason": gate_decision.blocked_reason or "STATIC_MANUFACTURER_NO_CURRENT_TRIGGER",
             }
 
-        # Atomic Multi-Process Search Reservation (Task 3D.1F.1 Section 4, 5, 6)
-        acquired, res_token = followup_information_gain_gate.acquire_search_reservation(
+        # Atomic Multi-Process Search Reservation with Heartbeat (Task 3D.1F.1 & Task 3D.1F.2)
+        with followup_information_gain_gate.reserve_search(
             company_name=company_name,
             missing_fact="CAPEX_EVENT",
             strategy=gate_decision.research_strategy,
             attempt=gate_decision.prior_attempt_count + 1,
-        )
-        if not acquired:
-            logger.info(
-                "[COMPANY_FIRST_SEARCH_BLOCKED_CONCURRENT] (%s + CAPEX_EVENT) already reserved by concurrent worker. Skipping duplicate search.",
-                company_name,
-            )
-            return {
-                "has_trigger": False,
-                "trigger_type": "NONE",
-                "evidence_url": None,
-                "evidence_snippet": None,
-                "hold_reason": "CONCURRENT_RESERVATION_ACTIVE",
-            }
+        ) as (acquired, res_token):
+            if not acquired:
+                hold_reason = (
+                    "REDIS_UNAVAILABLE_PRODUCTION_HOLD"
+                    if res_token == "FOLLOWUP_RESERVATION_UNAVAILABLE_HOLD"
+                    else "CONCURRENT_RESERVATION_ACTIVE"
+                )
+                logger.info(
+                    "[COMPANY_FIRST_SEARCH_BLOCKED_RESERVATION] (%s + CAPEX_EVENT) reservation not acquired (%s). Skipping search.",
+                    company_name,
+                    hold_reason,
+                )
+                return {
+                    "has_trigger": False,
+                    "trigger_type": "NONE",
+                    "evidence_url": None,
+                    "evidence_snippet": None,
+                    "hold_reason": hold_reason,
+                }
 
-        # Natural targeted query generated without static negative tails (-stock)
-        query = gate_decision.suggested_query or f'"{company_name}" (expansion OR capex OR "new plant" OR commissioned OR inaugurated) "{geography}"'
-        try:
+            # Natural targeted query generated without static negative tails (-stock)
+            query = gate_decision.suggested_query or f'"{company_name}" (expansion OR capex OR "new plant" OR commissioned OR inaugurated) "{geography}"'
             search_res = self.router.search(query, num_results=5, db=db)
             results = search_res.get("results", []) or []
 
@@ -268,8 +273,6 @@ class CompanyFirstDiscoveryService:
                 "evidence_snippet": snippet,
                 "hold_reason": f"Trigger recency or semantics unverified ({recency.get('recency_tier', 'UNKNOWN')})",
             }
-        finally:
-            followup_information_gain_gate.release_search_reservation(company_name, "CAPEX_EVENT", res_token)
 
 
 company_first_discovery = CompanyFirstDiscoveryService()
