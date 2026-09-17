@@ -274,5 +274,144 @@ class TestPersonalizationV2LLMFirst(unittest.TestCase):
         self.assertTrue(any("ndt" in v.lower() for v in result.violations))
 
 
+class TestPersonalizationGroundingHardeningPhase21C(unittest.TestCase):
+    """Rigorous Phase 2.1C grounding hardening verification test suite."""
+
+    def setUp(self):
+        self.harman_record = {
+            "company": "HARMAN",
+            "facility": "HARMAN Pune Automotive Manufacturing Plant",
+            "person": "Rohit Giri",
+            "first_name": "Rohit",
+            "designation": "Business Unit Head",
+            "trigger": "HARMAN Invests Rs 345 Crore to Expand Pune Automotive Manufacturing Plant",
+            "trigger_headline": "HARMAN Invests Rs 345 Crore to Expand Pune Automotive Manufacturing Plant",
+            "trigger_snippet": "Rs 345 crores new investment to expand Pune automotive manufacturing plant, boosting capacity by 50%",
+            "persona": "STRONG_PLANT_QUALITY_OWNER",
+            "industry": "automotive",
+        }
+        self.aarti_record = {
+            "company": "Aarti Pharmalabs",
+            "facility": "MIDC Tarapur Manufacturing Block",
+            "person": "Jayendra Chaphekar",
+            "first_name": "Jayendra",
+            "designation": "Quality Assurance Manager",
+            "trigger": "Aarti Pharmalabs inaugurates new manufacturing block at MIDC Tarapur",
+            "trigger_headline": "Aarti Pharmalabs inaugurates new manufacturing block at MIDC Tarapur",
+            "persona": "STRONG_PLANT_QUALITY_OWNER",
+            "industry": "pharmaceutical",
+        }
+
+    def test_existing_plant_expansion_cannot_claim_new_facility(self):
+        """HARMAN Pune expansion cannot be called 'new facility' or 'new plant'."""
+        mock_deepseek = MagicMock()
+        mock_deepseek.is_available.return_value = True
+        # LLM erroneously claims 'new facility' for an existing expansion
+        mock_deepseek.complete.return_value = MagicMock(
+            content='{"subject": "NABL Calibration Support — Pune Plant", "body": "Dear Rohit,\\n\\nI noticed the recent expansion at the Pune plant.\\n\\nAs you set up production lines for your new facility, ensuring measurement traceability is critical.\\n\\nOorja is an ISO/IEC 17025:2017 NABL-accredited laboratory (CC-3963).\\n\\nIf useful, please share your instrument list."}'
+        )
+
+        engine = SalesPersonalizationV2Engine(deepseek_provider=mock_deepseek)
+        result = engine.generate_outreach(self.harman_record)
+
+        self.assertEqual(result.status, "CLAIM_VIOLATION")
+        self.assertTrue(any("new facility" in v.lower() for v in result.violations))
+
+    def test_new_facility_allowed_with_explicit_evidence(self):
+        """When evidence explicitly proves a new facility, the phrasing is permitted."""
+        mock_deepseek = MagicMock()
+        mock_deepseek.is_available.return_value = True
+        mock_deepseek.complete.return_value = MagicMock(
+            content='{"subject": "NABL Calibration Support — Tarapur Facility", "body": "Dear Jayendra,\\n\\nI noticed the inauguration of your new manufacturing block at MIDC Tarapur.\\n\\nPlant quality depends on measurement traceability being audit-ready. Oorja is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (CC-3963), which may support documentation and traceability requirements where relevant.\\n\\nWe support thermal, pressure, and weighing calibration subject to scope and range feasibility.\\n\\nIf useful, you can share your instrument list to explore a practical calibration route."}'
+        )
+
+        engine = SalesPersonalizationV2Engine(deepseek_provider=mock_deepseek)
+        result = engine.generate_outreach(self.aarti_record)
+
+        self.assertEqual(result.status, "VALIDATED")
+        self.assertEqual(result.event_status, "NEW_FACILITY")
+
+    def test_detected_at_cannot_masquerade_as_event_date(self):
+        """Database timestamps such as detected_at cannot be used as event dates."""
+        from services.sales_personalization_v2 import resolve_event_date
+        rec = {
+            "trigger_date": "2026-09-17 08:09:26.151509",
+            "date_field": "detected_at",
+        }
+        phrase, source = resolve_event_date(rec)
+        self.assertEqual(source, "UNKNOWN")
+        self.assertNotIn("08:09:26", phrase)
+
+    def test_year_only_evidence_does_not_invent_month_day(self):
+        """Year-only evidence does not invent month or day."""
+        from services.sales_personalization_v2 import resolve_event_date
+        rec = {"event_date": "2026"}
+        phrase, source = resolve_event_date(rec)
+        self.assertEqual(source, "YEAR_ONLY")
+        self.assertEqual(phrase, "2026")
+        self.assertNotIn("january", phrase.lower())
+
+    def test_accreditation_compliance_guarantee_blocked(self):
+        """Accreditation cannot be represented as guaranteeing customer compliance."""
+        mock_deepseek = MagicMock()
+        mock_deepseek.is_available.return_value = True
+        mock_deepseek.complete.return_value = MagicMock(
+            content='{"subject": "Calibration", "body": "Dear Rohit,\\n\\nOur NABL accreditation ensures compliance for all your audit requirements at the Pune plant."}'
+        )
+
+        engine = SalesPersonalizationV2Engine(deepseek_provider=mock_deepseek)
+        result = engine.generate_outreach(self.harman_record)
+
+        self.assertEqual(result.status, "CLAIM_VIOLATION")
+        self.assertTrue(any("compliance" in v.lower() or "guarantee" in v.lower() for v in result.violations))
+
+    def test_unsupported_person_ownership_and_team_claims_blocked(self):
+        """Claims like 'your calibration team' or 'your torque-tool program' are blocked."""
+        mock_deepseek = MagicMock()
+        mock_deepseek.is_available.return_value = True
+        mock_deepseek.complete.return_value = MagicMock(
+            content='{"subject": "Calibration", "body": "Dear Rohit,\\n\\nWe can assist your calibration team with your torque-tool program at the Pune plant."}'
+        )
+
+        engine = SalesPersonalizationV2Engine(deepseek_provider=mock_deepseek)
+        result = engine.generate_outreach(self.harman_record)
+
+        self.assertEqual(result.status, "CLAIM_VIOLATION")
+        self.assertTrue(any("team" in v.lower() or "program" in v.lower() for v in result.violations))
+
+    def test_known_oorja_capability_allowlist_enforced(self):
+        """Unapproved capabilities (NDT, CMM alignment, optical, avionics) trigger CLAIM_VIOLATION."""
+        mock_deepseek = MagicMock()
+        mock_deepseek.is_available.return_value = True
+        mock_deepseek.complete.return_value = MagicMock(
+            content='{"subject": "Calibration", "body": "Dear Rohit,\\n\\nWe provide CMM alignment and optical calibration for your plant expansion."}'
+        )
+
+        engine = SalesPersonalizationV2Engine(deepseek_provider=mock_deepseek)
+        result = engine.generate_outreach(self.harman_record)
+
+        self.assertEqual(result.status, "CLAIM_VIOLATION")
+        self.assertTrue(any("unapproved" in v.lower() or "cmm" in v.lower() for v in result.violations))
+
+    def test_exact_signature_preserved(self):
+        """Exact sales signature must be cleanly appended to the body."""
+        from services.sales_personalization_v2 import SALES_SIGNATURE
+        mock_deepseek = MagicMock()
+        mock_deepseek.is_available.return_value = True
+        mock_deepseek.complete.return_value = MagicMock(
+            content='{"subject": "NABL Calibration Support — Pune Plant", "body": "Dear Rohit,\\n\\nI noticed the expansion activity at the HARMAN Pune plant.\\n\\nPlant quality depends on measurement traceability being audit-ready. Oorja is an ISO/IEC 17025:2017 NABL-accredited calibration laboratory (CC-3963), which may support documentation and traceability requirements where relevant.\\n\\nWe support electrical, dimensional, and torque calibration subject to instrument scope and range feasibility.\\n\\nIf useful, you can share your instrument list and I can suggest a practical calibration route."}'
+        )
+
+        engine = SalesPersonalizationV2Engine(deepseek_provider=mock_deepseek)
+        result = engine.generate_outreach(self.harman_record)
+
+        self.assertEqual(result.status, "VALIDATED")
+        self.assertTrue(result.body.endswith(SALES_SIGNATURE.strip()))
+        self.assertIn("Bablu Gurjar\nSales | Oorja Technical Services Pvt. Ltd.", result.body)
+        self.assertIn("Contact No.: 9201949296", result.body)
+        self.assertIn("Email: Bablu@oorjatechnical.org", result.body)
+
+
 if __name__ == "__main__":
     unittest.main()
+
