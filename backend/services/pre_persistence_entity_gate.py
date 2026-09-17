@@ -1,4 +1,4 @@
-"""Authoritative Pre-Persistence Entity Truth Gate (Task 3D.1E.1).
+"""Authoritative Pre-Persistence Entity Truth Gate (Task 3D.1E.1A).
 
 Enforces strict semantic, granular, and deterministic validation before ANY Company row is created:
 1. Deterministic Fast-Reject: Cheaply filters pronouns, URLs, emails, publication headers, isolated industry nouns, truncated fragments.
@@ -6,24 +6,33 @@ Enforces strict semantic, granular, and deterministic validation before ANY Comp
    - entity_type: TARGET_INDUSTRIAL_COMPANY, REAL_COMPANY_NON_TARGET, etc.
    - industrial_relevance: MANUFACTURER, INDUSTRIAL_OPERATOR, NON_INDUSTRIAL, UNKNOWN.
    - geographic_serviceability: SERVICEABLE, SERVICEABLE_SUBJECT_TO_PERMISSION, UNKNOWN.
-3. Decoupled Geography: Oorja calibration is global (subject to permissions). Foreign HQ or facilities != non-target.
-4. Corporate Entity Granularity: EXACT_OPERATING_COMPANY, SUBSIDIARY, JV, PARENT_GROUP, AMBIGUOUS_GROUP.
-5. Strict Zero-Invention: Canonical and operating entities must be strictly grounded in evidence text.
+3. Corporate Entity vs. Facility Distinction:
+   - Location qualifiers (e.g. 'New Jersey' in 'Hovione New Jersey') belong to facility_name/country, NOT corporate identity.
+   - Corporate identity: canonical_company_name = 'Hovione', entity_granularity = EXACT_OPERATING_COMPANY (not an invented subsidiary).
+4. Rigorous Corporate Entity Granularity:
+   - EXACT_OPERATING_COMPANY: Evidence identifies the operating company itself.
+   - SUBSIDIARY: Evidence explicitly establishes a legal subsidiary relationship.
+   - JV: Evidence explicitly establishes a joint venture.
+   - PARENT_GROUP: Evidence explicitly belongs at parent/group level AND downstream targetability is demonstrated.
+   - AMBIGUOUS_GROUP: Brand/group exists but exact operating entity cannot be grounded (e.g. bare 'Tata' with plant evidence but no named subsidiary).
+     AMBIGUOUS_GROUP MUST NEVER PERSIST.
+5. Strict Zero-Invention:
+   - Never infer subsidiaries from parent brand names (e.g. 'Tata' cannot become 'Tata Motors' or 'Agratas' unless explicitly named in evidence).
+   - Knowledge that company X owns company Y is NOT enough unless that relationship is present in the evidence packet.
 6. Authoritative Persistence Predicate:
-   PERSIST = (
-       entity_type == TARGET_INDUSTRIAL_COMPANY
-       AND industrial_relevance IN (MANUFACTURER, INDUSTRIAL_OPERATOR)
-       AND zero_invention_grounding_passed
-       AND (
-           entity_granularity IN (EXACT_OPERATING_COMPANY, SUBSIDIARY, JV)
-           OR (
-               entity_granularity == PARENT_GROUP
-               AND parent_group_event_is_explicitly_grounded
-               AND downstream_targetability_is_demonstrated
-           )
-       )
-   )
-   AMBIGUOUS_GROUP MUST NEVER PERSIST.
+   PERSIST ONLY WHEN ALL GLOBAL CONDITIONS PASS:
+   1. entity_type == TARGET_INDUSTRIAL_COMPANY
+   2. industrial_relevance IN (MANUFACTURER, INDUSTRIAL_OPERATOR)
+   3. zero_invention_grounding_passed (applies to BOTH branches)
+   4. entity_granularity satisfies ONE of these branches:
+      BRANCH A:
+        entity_granularity IN (EXACT_OPERATING_COMPANY, SUBSIDIARY, JV)
+      OR
+      BRANCH B:
+        entity_granularity == PARENT_GROUP
+        AND parent_group_event_is_explicitly_grounded
+        AND downstream_targetability_is_demonstrated
+   5. AMBIGUOUS_GROUP must NEVER persist.
 """
 from __future__ import annotations
 
@@ -116,11 +125,11 @@ ISOLATED_GENERIC_INDUSTRY_NOUNS = {
 
 DISALLOWED_DOMAIN_PATTERNS = [
     r"@[\w\.-]+\.\w+",               # Email addresses
-    r"\.gov(\.in)?\b",              # Government domains as entity names
-    r"\.nic(\.in)?\b",              # NIC domains
+    r"\.gov(\.in)?",              # Government domains as entity names
+    r"\.nic(\.in)?",              # NIC domains
     r"^https?://",                  # URLs
     r"^www\.",                      # Web addresses
-    r"\.com\b", r"\.in\b", r"\.org\b", r"\.net\b", r"\.ai\b", r"\.us\b",
+    r"\.com", r"\.in", r"\.org", r"\.net", r"\.ai", r"\.us",
 ]
 
 
@@ -130,6 +139,7 @@ class PrePersistenceEntityDecision:
     canonical_company_name: Optional[str]
     operating_entity_name: Optional[str] = None
     industrial_relevance: str = "UNKNOWN"
+    facility_name: Optional[str] = None
     facility_country: Optional[str] = None
     geographic_serviceability: str = "UNKNOWN"
     entity_granularity: str = "UNKNOWN"
@@ -137,6 +147,7 @@ class PrePersistenceEntityDecision:
     downstream_targetability_is_demonstrated: bool = False
     confidence: float = 0.0
     supporting_evidence: List[str] = field(default_factory=list)
+    evidence_supporting_entity_relationship: Optional[str] = None
     reason: str = ""
     is_target_industrial: bool = False
     should_persist: bool = False
@@ -148,6 +159,7 @@ class PrePersistenceEntityDecision:
             "canonical_company_name": self.canonical_company_name,
             "operating_entity_name": self.operating_entity_name,
             "industrial_relevance": self.industrial_relevance,
+            "facility_name": self.facility_name,
             "facility_country": self.facility_country,
             "geographic_serviceability": self.geographic_serviceability,
             "entity_granularity": self.entity_granularity,
@@ -155,6 +167,7 @@ class PrePersistenceEntityDecision:
             "downstream_targetability_is_demonstrated": self.downstream_targetability_is_demonstrated,
             "confidence": self.confidence,
             "supporting_evidence": self.supporting_evidence,
+            "evidence_supporting_entity_relationship": self.evidence_supporting_entity_relationship,
             "reason": self.reason,
             "is_target_industrial": self.is_target_industrial,
             "should_persist": self.should_persist,
@@ -173,53 +186,46 @@ CRITICAL PRINCIPLE 1 — GEOGRAPHY IS DECOUPLED FROM TARGET INDUSTRIAL STATUS:
 - A company is REAL_COMPANY_NON_TARGET ONLY if its BUSINESS MODEL is non-industrial (e.g. pure software SaaS like Inven, media publisher, financial services, consumer retail, consulting).
 - NEVER classify a manufacturer as REAL_COMPANY_NON_TARGET merely because its headquarters or facilities are outside India.
 
-CRITICAL PRINCIPLE 2 — THREE SEPARATE DIMENSIONS:
-You must evaluate and return three distinct dimensions:
-1. ENTITY_TYPE:
-   - TARGET_INDUSTRIAL_COMPANY: Real operating industrial manufacturer, factory operator, engineering, or processing company.
-   - REAL_COMPANY_NON_TARGET: Genuine commercial company, but non-industrial business model (software, banking, media, consulting, retail).
-   - PUBLISHER_MEDIA_PORTAL: News site, publisher, industry magazine, directory, aggregator.
-   - GOVERNMENT_ENTITY: Government department, ministry, regulatory authority.
-   - GENERIC_TEXT: Generic descriptive noun, product category, or label (e.g. 'Chemical', 'COVER STORY').
-   - HEADLINE_FRAGMENT: Truncated headline, article title snippet, or sentence fragment.
-   - PRODUCT_SERVICE: Specific product model or service offering rather than corporate entity.
-   - PERSON: Individual human name.
-   - UNKNOWN: Ambiguous, unverifiable, or insufficient evidence.
+CRITICAL PRINCIPLE 2 — CORPORATE ENTITY != FACILITY LOCATION:
+- Location qualifiers attached to a company name (e.g. 'New Jersey' in 'Hovione New Jersey', or 'Puerto Rico' in 'Lilly Puerto Rico', or 'Sanand' in 'Tata Sanand') indicate a FACILITY or location, NOT a corporate subsidiary or company name!
+- You MUST separate corporate identity from facility location:
+  - canonical_company_name: The clean corporate company name without facility/city/state words (e.g. 'Hovione', 'Eli Lilly', 'Tata').
+  - operating_entity_name: An exact operating company name ONLY if explicitly named as a corporate entity in evidence (e.g. 'Tata Motors Limited', 'Wipro GE Healthcare'). A facility/plant description like 'Tata (Grounded Sanand EV Cell Plant)' is NOT a company name and is FORBIDDEN.
+  - facility_name: The specific facility/plant site if mentioned (e.g. 'New Jersey manufacturing site', 'Sanand EV battery plant', 'Hosur precision machining plant').
+  - facility_country: Country where facility is located (e.g. 'India', 'USA', 'Puerto Rico').
+  - entity_granularity: EXACT_OPERATING_COMPANY (or SUBSIDIARY only if evidence proves a distinct legal subsidiary). Do NOT fabricate subsidiary status from a facility name or location.
 
-2. INDUSTRIAL_RELEVANCE:
-   - MANUFACTURER: Produces physical goods, hardware, formulation, components, machinery.
-   - INDUSTRIAL_OPERATOR: Operates plants, mills, energy facilities, industrial utilities.
-   - NON_INDUSTRIAL: Commercial services, software, finance, media, consulting.
-   - UNKNOWN: Indeterminate.
-
-3. GEOGRAPHIC_SERVICEABILITY:
-   - SERVICEABLE: Domestic Indian facility or direct domestic operating footprint.
-   - SERVICEABLE_SUBJECT_TO_PERMISSION: Foreign/international facility or global operations.
-   - UNKNOWN: Cannot be determined from evidence.
-
-CRITICAL PRINCIPLE 3 — CORPORATE ENTITY GRANULARITY:
+CRITICAL PRINCIPLE 3 — RIGOROUS ENTITY GRANULARITY:
 Classify ENTITY_GRANULARITY into:
-- EXACT_OPERATING_COMPANY: Specific operating company (e.g. 'Craftsman Automation Limited', 'USV Pvt. Ltd.').
-- SUBSIDIARY: Specific operating subsidiary (e.g. 'Amara Raja Advanced Technologies', 'Agratas', 'Wipro GE Healthcare').
-- JV: Joint Venture entity (e.g. 'IAMPL' / International Aerospace Manufacturing Pvt. Ltd.).
-- PARENT_GROUP: Broad conglomerate or parent group (e.g. 'Tata Group', 'Tata', 'Reliance Industries').
-- AMBIGUOUS_GROUP: Broad group/brand without any grounded operating company context in evidence.
+- EXACT_OPERATING_COMPANY: Evidence identifies the operating company itself (e.g. 'Craftsman Automation Limited', 'USV Pvt. Ltd.', 'Tata Motors Limited', 'Hovione', 'Arterex').
+- SUBSIDIARY: Evidence explicitly establishes a legal corporate subsidiary relationship (e.g. 'Amara Raja Advanced Technologies' as battery subsidiary of Amara Raja, 'Wipro GE Healthcare' as healthcare operating entity).
+- JV: Evidence explicitly establishes a corporate joint venture (e.g. 'IAMPL' / International Aerospace Manufacturing Pvt. Ltd. as Rolls-Royce and HAL JV).
+- PARENT_GROUP: Broad conglomerate or parent group (e.g. 'Tata Group', 'Reliance Industries') where evidence explicitly belongs at group/parent level (e.g. group-wide sovereign MoU or group capex commitment) AND downstream targetability is demonstrated.
+- AMBIGUOUS_GROUP: Brand or group identity exists, but the exact operating entity cannot be grounded from evidence.
+  CRITICAL RULE FOR AMBIGUOUS_GROUP:
+  - If evidence only says 'Tata' (e.g. 'Tata commits Rs 13,000 crore for EV battery plant in Sanand') and does NOT explicitly name which operating subsidiary (e.g. Tata Motors, Agratas, Tata AutoComp) will own/operate it:
+    - You MUST NOT infer or guess the subsidiary from industry, facility city, product category, or outside knowledge.
+    - A plant location does NOT prove which Tata operating company owns or operates that plant.
+    - 'Tata' is NOT itself a subsidiary. Never classify 'Tata' as SUBSIDIARY.
+    - Unless the event is explicitly and legitimately a group-level MoU/event satisfying PARENT_GROUP, classify bare 'Tata' as AMBIGUOUS_GROUP.
+    - AMBIGUOUS_GROUP must NEVER persist (should_persist = false).
 
-OPERATING ENTITY RESOLUTION & ZERO-INVENTION RULES:
-1. If evidence for a broad group explicitly mentions an operating subsidiary (e.g. text mentions 'Tata Motors' or 'Agratas' investing in EV battery plant), set operating_entity_name to that exact operating subsidiary.
-2. STRICT ZERO-INVENTION: You may NEVER guess or invent a subsidiary from general knowledge. If candidate is 'Tata' and snippet ONLY says 'Tata plans new plant' without naming the division, operating_entity_name MUST be null, and entity_granularity is 'AMBIGUOUS_GROUP'.
-3. For PARENT_GROUP: Only set entity_granularity = 'PARENT_GROUP' if evidence explicitly shows the event genuinely belongs to the parent group (e.g. group-wide capex agreement, sovereign MoU) AND downstream facility/person research can act on that parent group. Set parent_group_event_is_explicitly_grounded = true and downstream_targetability_is_demonstrated = true. Otherwise set entity_granularity = 'AMBIGUOUS_GROUP'.
-4. canonical_company_name and operating_entity_name MUST be strictly grounded in the provided text.
+CRITICAL PRINCIPLE 4 — ABSOLUTE ZERO-INVENTION:
+- Operating entity names must appear verbatim or as standard legal suffix normalizations in the supplied evidence.
+- Knowledge that company X owns company Y is NOT enough unless that relationship is explicitly stated in the supplied evidence.
+- If an operating subsidiary is not named in evidence, operating_entity_name MUST be null.
 
 OUTPUT FORMAT (Valid JSON only):
 {
   "entity_type": "TARGET_INDUSTRIAL_COMPANY" | "REAL_COMPANY_NON_TARGET" | "PUBLISHER_MEDIA_PORTAL" | "GOVERNMENT_ENTITY" | "GENERIC_TEXT" | "HEADLINE_FRAGMENT" | "PRODUCT_SERVICE" | "PERSON" | "UNKNOWN",
   "industrial_relevance": "MANUFACTURER" | "INDUSTRIAL_OPERATOR" | "NON_INDUSTRIAL" | "UNKNOWN",
+  "facility_name": "<Specific facility name or plant site, or null>",
   "facility_country": "<Country name e.g. India, USA, Puerto Rico, or null>",
   "geographic_serviceability": "SERVICEABLE" | "SERVICEABLE_SUBJECT_TO_PERMISSION" | "UNKNOWN",
   "entity_granularity": "EXACT_OPERATING_COMPANY" | "SUBSIDIARY" | "JV" | "PARENT_GROUP" | "AMBIGUOUS_GROUP",
-  "canonical_company_name": "<Evidence-grounded canonical company name, or null>",
-  "operating_entity_name": "<Specific operating company/subsidiary grounded in evidence, or null>",
+  "canonical_company_name": "<Evidence-grounded corporate company name without facility qualifiers, or null>",
+  "operating_entity_name": "<Specific operating company/subsidiary if explicitly established in text, or null>",
+  "evidence_supporting_entity_relationship": "<Concise quote or note establishing relationship, or null>",
   "parent_group_event_is_explicitly_grounded": true | false,
   "downstream_targetability_is_demonstrated": true | false,
   "confidence": <float between 0.0 and 1.0>,
@@ -319,8 +325,8 @@ class PrePersistenceEntityGate:
                 provider_used="DETERMINISTIC_FAST_REJECT",
             )
 
-        # 5. Malformed single-letter trailing words (e.g. "Waaree's N")
-        if re.search(r"['’]s\s+[A-Za-z]$", cand_clean) or re.search(r"\s+[A-Za-z]$", cand_clean):
+        # 5. Trailing truncated single-letter fragments (e.g. "Waaree's N", "Adani E")
+        if (re.search(r"['\s][A-Za-z]$", cand_clean) and not re.search(r"\b[A-Z]\.[A-Z]\b", cand_clean)) or re.search(r"['’]s\s+[A-Za-z]$", cand_clean):
             return PrePersistenceEntityDecision(
                 entity_type="HEADLINE_FRAGMENT",
                 canonical_company_name=None,
@@ -333,8 +339,8 @@ class PrePersistenceEntityGate:
                 provider_used="DETERMINISTIC_FAST_REJECT",
             )
 
-        # 6. Trailing prepositional fragments (e.g. "OFC industry in a take")
-        if re.search(r"\b(in a take|at a glance|on the rise|for the year|to roll out|to invest|to set up)\b", cand_lower):
+        # 6. Verb-phrase and trailing prepositional headline fragments
+        if re.search(r"\b(achieves?|sets up|expanding|announces?|launches?|invests?|in a take|at a glance|on the rise|for the year|to roll out|to invest|to set up)\b", cand_lower):
             return PrePersistenceEntityDecision(
                 entity_type="HEADLINE_FRAGMENT",
                 canonical_company_name=None,
@@ -362,13 +368,13 @@ class PrePersistenceEntityGate:
         name_lower = name_clean.lower()
         evidence_lower = (evidence_corpus or "").lower()
 
-        # Check exact or core tokens in evidence
+        # Direct containment
         if name_lower in evidence_lower:
             return True
 
-        # Strip standard corporate legal suffix and check core name
+        # Strip legal entity suffixes and check core stem
         core_name = re.sub(
-            r"\b(pvt|ltd|limited|private|inc|corp|corporation|llp|holdings|group|industries)\b",
+            r"\b(ltd|limited|pvt|private|corp|corporation|inc|incorporated|llc|co|company|group|holding|holdings)\b\.?",
             "",
             name_lower,
             flags=re.IGNORECASE,
@@ -389,64 +395,70 @@ class PrePersistenceEntityGate:
         candidate_name: str,
         evidence_packet: Dict[str, Any],
     ) -> PrePersistenceEntityDecision:
-        """Call DeepSeek (primary) or Gemini (fallback) for semantic arbitration."""
+        """Query LLM judge to classify candidate into 3 dimensions + entity granularity."""
+        clean_candidate = (candidate_name or "").strip()
         increment_prepersist_telemetry("ENTITY_PREPERSIST_LLM_CALLS")
 
-        user_prompt = f"""Audit the following candidate company entity:
-Candidate Entity Name: '{candidate_name}'
-Extracted Domain: '{evidence_packet.get('domain', '')}'
-Search Title: '{evidence_packet.get('title', '')}'
-Search Snippet: '{evidence_packet.get('snippet', '')}'
-Source URL: '{evidence_packet.get('url', '')}'
-Target Industry: '{evidence_packet.get('industry', '')}'
-Discovery Query: '{evidence_packet.get('query', '')}'
-Page Evidence Excerpt: '{evidence_packet.get('page_evidence', '')}'
-Facility Mentioned: '{evidence_packet.get('facility_name', '')}' in '{evidence_packet.get('facility_city', '')}, {evidence_packet.get('facility_state', '')}'
+        user_prompt = f"""EVALUATE CANDIDATE ENTITY:
+Candidate Name: "{clean_candidate}"
+Context Title: "{evidence_packet.get('title', '')}"
+Evidence Snippet: "{evidence_packet.get('snippet', '')}"
+Source URL: "{evidence_packet.get('url', '')}"
+Query Industry: "{evidence_packet.get('industry', '')}"
+Page Evidence: "{evidence_packet.get('page_evidence', '')[:1000]}"
+Facility Info: {json.dumps(evidence_packet.get('facility_name', ''))}
 
 Classify this entity according to the instructions and return ONLY valid JSON matching the schema."""
 
-        parsed = None
-        provider_name = "DeepSeek"
+        parsed: Optional[Dict[str, Any]] = None
+        provider_name = "DEEPSEEK"
 
-        # 1. Primary: DeepSeek
-        if self.primary_provider and getattr(self.primary_provider, "is_available", lambda: True)():
-            increment_prepersist_telemetry("DEEPSEEK_ENTITY_CALLS")
+        def _call_provider(prov):
+            if not prov:
+                return None
+            if hasattr(prov, "is_available") and not prov.is_available():
+                return None
+            kwargs = {
+                "system_prompt": PREPERSISTENCE_SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": user_prompt}],
+                "temperature": 0.0,
+                "max_tokens": 350,
+                "response_format": "json",
+            }
+            if hasattr(prov, "complete"):
+                return prov.complete(**kwargs)
+            elif hasattr(prov, "call"):
+                return prov.call(prompt=user_prompt, **kwargs)
+            elif callable(prov):
+                return prov(prompt=user_prompt, **kwargs)
+            return None
+
+        if self.primary_provider:
             try:
-                resp = self.primary_provider.complete(
-                    system_prompt=PREPERSISTENCE_SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": user_prompt}],
-                    temperature=0.0,
-                    max_tokens=350,
-                    response_format="json",
-                )
-                parsed = resp.parse_json() if resp else None
-            except Exception as d_err:
-                logger.warning("DeepSeek pre-persistence entity judge failed: %s; trying Gemini.", d_err)
+                increment_prepersist_telemetry("DEEPSEEK_ENTITY_CALLS")
+                resp = _call_provider(self.primary_provider)
+                parsed = resp.parse_json() if resp and hasattr(resp, "parse_json") else None
+            except Exception as e:
+                logger.warning("[PREPERSIST_GATE: PRIMARY_FAIL] %s, falling back", e)
+                increment_prepersist_telemetry("ENTITY_PROVIDER_FAILURES")
 
-        # 2. Fallback: Gemini
-        if not parsed and self.fallback_provider and getattr(self.fallback_provider, "is_available", lambda: True)():
-            provider_name = "Gemini"
-            increment_prepersist_telemetry("GEMINI_ENTITY_FALLBACKS")
+        if (not parsed or not isinstance(parsed, dict) or "entity_type" not in parsed) and self.fallback_provider:
             try:
-                resp = self.fallback_provider.complete(
-                    system_prompt=PREPERSISTENCE_SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": user_prompt}],
-                    temperature=0.0,
-                    max_tokens=350,
-                    response_format="json",
-                )
-                parsed = resp.parse_json() if resp else None
-            except Exception as g_err:
-                logger.warning("Gemini pre-persistence entity judge failed: %s", g_err)
+                increment_prepersist_telemetry("GEMINI_ENTITY_FALLBACKS")
+                provider_name = "GEMINI"
+                resp = _call_provider(self.fallback_provider)
+                parsed = resp.parse_json() if resp and hasattr(resp, "parse_json") else None
+            except Exception as e2:
+                logger.error("[PREPERSIST_GATE: ALL_LLMS_FAILED] %s", e2)
+                increment_prepersist_telemetry("ENTITY_PROVIDER_FAILURES")
 
-        if not parsed:
-            increment_prepersist_telemetry("ENTITY_PROVIDER_FAILURES")
-            increment_prepersist_telemetry("ENTITY_PREPERSIST_LLM_UNKNOWN")
+        if not parsed or not isinstance(parsed, dict):
             return PrePersistenceEntityDecision(
                 entity_type="UNKNOWN",
                 canonical_company_name=None,
                 operating_entity_name=None,
                 industrial_relevance="UNKNOWN",
+                facility_name=None,
                 facility_country=None,
                 geographic_serviceability="UNKNOWN",
                 entity_granularity="UNKNOWN",
@@ -461,13 +473,16 @@ Classify this entity according to the instructions and return ONLY valid JSON ma
         canonical_name = parsed.get("canonical_company_name")
         operating_name = parsed.get("operating_entity_name")
         ind_rel = str(parsed.get("industrial_relevance") or "UNKNOWN").strip().upper()
+        facility_name = parsed.get("facility_name")
         facility_country = parsed.get("facility_country")
         geo_serv = str(parsed.get("geographic_serviceability") or "UNKNOWN").strip().upper()
         granularity = str(parsed.get("entity_granularity") or "UNKNOWN").strip().upper()
+        rel_evidence = parsed.get("evidence_supporting_entity_relationship")
         
         # Target Industrial Check (geography decoupled)
         is_target = (entity_type == "TARGET_INDUSTRIAL_COMPANY")
 
+        # Backward compatibility default for test mocks omitting granularity
         if granularity in ("", "UNKNOWN", "NONE") and is_target:
             granularity = "EXACT_OPERATING_COMPANY"
 
@@ -495,6 +510,7 @@ Classify this entity according to the instructions and return ONLY valid JSON ma
             canonical_company_name=canonical_name if is_target else None,
             operating_entity_name=operating_name if is_target else None,
             industrial_relevance=ind_rel,
+            facility_name=facility_name,
             facility_country=facility_country,
             geographic_serviceability=geo_serv,
             entity_granularity=granularity,
@@ -502,6 +518,7 @@ Classify this entity according to the instructions and return ONLY valid JSON ma
             downstream_targetability_is_demonstrated=downstream_targetable,
             confidence=conf,
             supporting_evidence=supp_ev if isinstance(supp_ev, list) else [str(supp_ev)],
+            evidence_supporting_entity_relationship=rel_evidence,
             reason=reason,
             is_target_industrial=is_target,
             should_persist=False,  # Evaluated authoritatively in resolve_pre_persistence_decision
@@ -580,28 +597,60 @@ Classify this entity according to the instructions and return ONLY valid JSON ma
         # Step 3: LLM Semantic Entity Judge
         decision = self.judge_entity_with_llm(clean_candidate, evidence_packet)
 
+        # Step 3b: Facility vs Operating Entity Sanitization
+        # A facility/plant description is NEVER an operating corporate entity!
+        if decision.operating_entity_name:
+            op_lower = decision.operating_entity_name.lower()
+            if any(term in op_lower for term in ("plant", "facility", "factory", "site", "grounded", "gigafactory", "works")):
+                if not decision.facility_name:
+                    decision.facility_name = decision.operating_entity_name
+                decision.operating_entity_name = None
+
+        # If operating entity is identical to canonical company name, avoid redundancy unless SUBSIDIARY/JV
+        if decision.operating_entity_name and decision.canonical_company_name:
+            if decision.operating_entity_name.strip().lower() == decision.canonical_company_name.strip().lower():
+                if decision.entity_granularity not in ("SUBSIDIARY", "JV"):
+                    decision.operating_entity_name = None
+
         # Step 4: Strict Zero-Invention Enforcement (applies across all persistence paths)
         evidence_corpus = f"{clean_candidate} {title} {snippet} {url} {page_evidence}"
         
-        # Determine candidate name to check
+        # Verify operating entity grounding if proposed
+        if decision.operating_entity_name:
+            if not self.verify_zero_invention(decision.operating_entity_name, evidence_corpus):
+                logger.warning(
+                    "[PREPERSIST_UNGROUNDED_SUBSIDIARY] Operating entity '%s' ungrounded in evidence; demoting to None",
+                    decision.operating_entity_name,
+                )
+                decision.operating_entity_name = None
+
+        # Verify canonical name grounding
         name_to_persist = decision.operating_entity_name or decision.canonical_company_name or clean_candidate
         zero_invention_passed = self.verify_zero_invention(name_to_persist, evidence_corpus)
 
-        # If operating_entity_name was proposed by LLM but not grounded in evidence,
-        # fallback to canonical_company_name only if canonical is grounded
-        if not zero_invention_passed and decision.canonical_company_name and decision.canonical_company_name != name_to_persist:
-            if self.verify_zero_invention(decision.canonical_company_name, evidence_corpus):
-                logger.warning(
-                    "[PREPERSIST_UNGROUNDED_SUBSIDIARY] Operating entity '%s' ungrounded in evidence; demoting to canonical '%s'",
-                    decision.operating_entity_name,
-                    decision.canonical_company_name,
-                )
-                decision.operating_entity_name = None
-                name_to_persist = decision.canonical_company_name
-                zero_invention_passed = True
-                # If operating entity was demoted, broad group cannot assume SUBSIDIARY
-                if decision.entity_granularity == "SUBSIDIARY":
-                    decision.entity_granularity = "AMBIGUOUS_GROUP"
+        # Corporate Entity vs Facility: Location qualifier on candidate (e.g. "Hovione New Jersey")
+        # Do not invent SUBSIDIARY merely from a facility location qualifier!
+        if decision.entity_granularity == "SUBSIDIARY" and not decision.operating_entity_name:
+            # If no legal subsidiary was established in evidence, it's EXACT_OPERATING_COMPANY
+            decision.entity_granularity = "EXACT_OPERATING_COMPANY"
+
+        # Broad Conglomerate / Brand Group check (e.g. "Tata", "Reliance", "Adani", "Birla")
+        # A broad brand name with a plant is NOT a subsidiary!
+        cand_lower = clean_candidate.strip().lower()
+        canonical_lower = (decision.canonical_company_name or "").strip().lower()
+        is_broad_brand = (cand_lower in ("tata", "reliance", "adani", "birla", "mahindra", "godrej", "l&t", "vedanta")
+                          or canonical_lower in ("tata", "reliance", "adani", "birla", "mahindra", "godrej", "l&t", "vedanta"))
+
+        if is_broad_brand and not decision.operating_entity_name:
+            # If the event is NOT explicitly a legitimate group-wide MoU satisfying PARENT_GROUP
+            is_valid_parent_group = (
+                decision.entity_granularity == "PARENT_GROUP"
+                and decision.parent_group_event_is_explicitly_grounded
+                and decision.downstream_targetability_is_demonstrated
+            )
+            if not is_valid_parent_group:
+                # Brand/group identity exists but exact operating entity cannot be grounded
+                decision.entity_granularity = "AMBIGUOUS_GROUP"
 
         if decision.is_target_industrial and not zero_invention_passed:
             increment_prepersist_telemetry("ENTITY_PREPERSIST_EVIDENCE_REJECT")
@@ -621,20 +670,19 @@ Classify this entity according to the instructions and return ONLY valid JSON ma
             return decision
 
         # Step 5: Authoritative Persistence Predicate
-        # PERSIST = (
-        #     entity_type == TARGET_INDUSTRIAL_COMPANY
-        #     AND industrial_relevance IN (MANUFACTURER, INDUSTRIAL_OPERATOR)
-        #     AND zero_invention_grounding_passed
-        #     AND (
-        #         entity_granularity IN (EXACT_OPERATING_COMPANY, SUBSIDIARY, JV)
-        #         OR (
-        #             entity_granularity == PARENT_GROUP
-        #             AND parent_group_event_is_explicitly_grounded
-        #             AND downstream_targetability_is_demonstrated
-        #         )
-        #     )
-        # )
-        # AMBIGUOUS_GROUP must NEVER persist.
+        # PERSIST ONLY WHEN ALL GLOBAL CONDITIONS PASS:
+        # 1. entity_type == TARGET_INDUSTRIAL_COMPANY
+        # 2. industrial_relevance IN (MANUFACTURER, INDUSTRIAL_OPERATOR)
+        # 3. zero_invention_grounding_passed (applies to BOTH branches)
+        # 4. entity_granularity satisfies ONE of these branches:
+        #    BRANCH A:
+        #      entity_granularity IN (EXACT_OPERATING_COMPANY, SUBSIDIARY, JV)
+        #    OR
+        #    BRANCH B:
+        #      entity_granularity == PARENT_GROUP
+        #      AND parent_group_event_is_explicitly_grounded
+        #      AND downstream_targetability_is_demonstrated
+        # 5. AMBIGUOUS_GROUP must NEVER persist.
 
         is_target_type = (decision.entity_type == "TARGET_INDUSTRIAL_COMPANY")
         is_industrial_rel = (decision.industrial_relevance in ("MANUFACTURER", "INDUSTRIAL_OPERATOR"))
@@ -663,19 +711,19 @@ Classify this entity according to the instructions and return ONLY valid JSON ma
             decision.canonical_company_name = None
             decision.operating_entity_name = None
             if decision.entity_granularity == "AMBIGUOUS_GROUP":
-                decision.reason = f"Ambiguous broad group '{clean_candidate}' without evidence-grounded operating subsidiary; held from persistence"
+                decision.reason = f"Ambiguous broad brand/group '{clean_candidate}' without evidence-grounded operating subsidiary; held from persistence"
 
         record_prepersist_latency(_t.time() - _t0)
 
         if decision.should_persist:
             increment_prepersist_telemetry("ENTITY_PREPERSIST_FINAL_ACCEPT")
             logger.info(
-                "[PREPERSIST_ACCEPT: TARGET_INDUSTRIAL] '%s' -> Name: '%s' (Granularity: %s, Geo: %s, Provider: %s, Conf: %.2f)",
+                "[PREPERSIST_ACCEPT: TARGET_INDUSTRIAL] '%s' -> Name: '%s' (Granularity: %s, Facility: %s, Country: %s, Conf: %.2f)",
                 clean_candidate,
                 decision.canonical_company_name,
                 decision.entity_granularity,
-                decision.geographic_serviceability,
-                decision.provider_used,
+                decision.facility_name,
+                decision.facility_country,
                 decision.confidence,
             )
         else:
