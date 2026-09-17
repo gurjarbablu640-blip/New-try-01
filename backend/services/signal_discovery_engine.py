@@ -290,11 +290,12 @@ def ingest_discovered_signal_lead(
         facility_info=facility_evidence,
     )
 
-    if not prepersist_decision.is_target_industrial or not prepersist_decision.canonical_company_name:
+    if not prepersist_decision.should_persist or not (prepersist_decision.operating_entity_name or prepersist_decision.canonical_company_name):
         logger.warning(
-            "[PREPERSISTENCE_GATE] Blocked non-target '%s' (type=%s, reason=%s) from Company DB persistence",
+            "[PREPERSISTENCE_GATE] Blocked non-target '%s' (type=%s, granularity=%s, reason=%s) from Company DB persistence",
             clean_name,
             prepersist_decision.entity_type,
+            prepersist_decision.entity_granularity,
             prepersist_decision.reason,
         )
         return {
@@ -307,8 +308,8 @@ def ingest_discovered_signal_lead(
             "prepersistence_decision": prepersist_decision.to_dict(),
         }
 
-    # Authoritative canonical company name from truth gate
-    clean_name = prepersist_decision.canonical_company_name.strip()
+    # Authoritative canonical company name from truth gate (prefer grounded operating entity)
+    clean_name = (prepersist_decision.operating_entity_name or prepersist_decision.canonical_company_name).strip()
 
     # 1. Deduplicate or fetch company using normalized comparison key
     norm_key = get_normalized_comparison_key(clean_name)
