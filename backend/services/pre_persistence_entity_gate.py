@@ -34,7 +34,35 @@ PREPERSIST_TELEMETRY: Dict[str, int] = {
     "ENTITY_PREPERSIST_FINAL_ACCEPT": 0,
     "ENTITY_PREPERSIST_FINAL_REJECT": 0,
     "ENTITY_PREPERSIST_FALSE_ACCEPT_AUDIT": 0,
+    "DEEPSEEK_ENTITY_CALLS": 0,
+    "GEMINI_ENTITY_FALLBACKS": 0,
+    "ENTITY_PROVIDER_FAILURES": 0,
 }
+
+_PREPERSIST_LATENCIES: List[float] = []
+_REJECTED_CANDIDATES_LOG: List[Dict[str, Any]] = []
+
+def record_prepersist_latency(latency_sec: float) -> None:
+    with _prepersist_lock:
+        _PREPERSIST_LATENCIES.append(latency_sec)
+
+def get_prepersist_latencies() -> Tuple[float, float]:
+    with _prepersist_lock:
+        if not _PREPERSIST_LATENCIES:
+            return 0.0, 0.0
+        sorted_lats = sorted(_PREPERSIST_LATENCIES)
+        avg_lat = sum(sorted_lats) / len(sorted_lats)
+        p95_idx = int(len(sorted_lats) * 0.95)
+        p95_lat = sorted_lats[min(p95_idx, len(sorted_lats) - 1)]
+        return avg_lat, p95_lat
+
+def record_rejected_candidate(entry: Dict[str, Any]) -> None:
+    with _prepersist_lock:
+        _REJECTED_CANDIDATES_LOG.append(entry)
+
+def get_rejected_candidates() -> List[Dict[str, Any]]:
+    with _prepersist_lock:
+        return list(_REJECTED_CANDIDATES_LOG)
 
 def increment_prepersist_telemetry(metric: str, count: int = 1) -> None:
     with _prepersist_lock:
@@ -303,6 +331,7 @@ Classify this entity according to the instructions and return ONLY valid JSON ma
 
         # 1. Primary: DeepSeek
         if self.primary_provider and getattr(self.primary_provider, "is_available", lambda: True)():
+            increment_prepersist_telemetry("DEEPSEEK_ENTITY_CALLS")
             try:
                 resp = self.primary_provider.complete(
                     system_prompt=PREPERSISTENCE_SYSTEM_PROMPT,
@@ -318,6 +347,7 @@ Classify this entity according to the instructions and return ONLY valid JSON ma
         # 2. Fallback: Gemini
         if not parsed and self.fallback_provider and getattr(self.fallback_provider, "is_available", lambda: True)():
             provider_name = "Gemini"
+            increment_prepersist_telemetry("GEMINI_ENTITY_FALLBACKS")
             try:
                 resp = self.fallback_provider.complete(
                     system_prompt=PREPERSISTENCE_SYSTEM_PROMPT,
@@ -331,6 +361,7 @@ Classify this entity according to the instructions and return ONLY valid JSON ma
                 logger.warning("Gemini pre-persistence entity judge failed: %s", g_err)
 
         if not parsed:
+            increment_prepersist_telemetry("ENTITY_PROVIDER_FAILURES")
             increment_prepersist_telemetry("ENTITY_PREPERSIST_LLM_UNKNOWN")
             return PrePersistenceEntityDecision(
                 entity_type="UNKNOWN",
@@ -390,6 +421,8 @@ Classify this entity according to the instructions and return ONLY valid JSON ma
         2. Classified as TARGET_INDUSTRIAL_COMPANY by LLM Semantic Judge
         3. Zero-invention verification passes (name grounded in evidence)
         """
+        import time as _t
+        _t0 = _t.time()
         increment_prepersist_telemetry("ENTITY_PREPERSIST_CANDIDATES")
 
         clean_candidate = (candidate_name or "").strip()
@@ -397,6 +430,14 @@ Classify this entity according to the instructions and return ONLY valid JSON ma
         # Step 1: Deterministic Hard Reject
         hard_reject = self.deterministic_hard_reject(clean_candidate, context_text=title, url=url)
         if hard_reject:
+            record_prepersist_latency(_t.time() - _t0)
+            record_rejected_candidate({
+                "candidate": clean_candidate,
+                "evidence": f"{title} {snippet} {url}",
+                "gate_result": hard_reject.entity_type,
+                "provider": hard_reject.provider_used,
+                "reason": hard_reject.reason,
+            })
             increment_prepersist_telemetry("ENTITY_PREPERSIST_DETERMINISTIC_REJECT")
             increment_prepersist_telemetry("ENTITY_PREPERSIST_FINAL_REJECT")
             logger.info("[PREPERSIST_REJECT: DETERMINISTIC] Candidate '%s' -> %s (%s)", clean_candidate, hard_reject.entity_type, hard_reject.reason)
@@ -446,6 +487,7 @@ Classify this entity according to the instructions and return ONLY valid JSON ma
                     provider_used=llm_decision.provider_used,
                 )
 
+        record_prepersist_latency(_t.time() - _t0)
         if llm_decision.is_target_industrial:
             increment_prepersist_telemetry("ENTITY_PREPERSIST_FINAL_ACCEPT")
             logger.info(
@@ -456,6 +498,13 @@ Classify this entity according to the instructions and return ONLY valid JSON ma
                 llm_decision.confidence,
             )
         else:
+            record_rejected_candidate({
+                "candidate": clean_candidate,
+                "evidence": f"{title} {snippet} {url}",
+                "gate_result": llm_decision.entity_type,
+                "provider": llm_decision.provider_used,
+                "reason": llm_decision.reason,
+            })
             increment_prepersist_telemetry("ENTITY_PREPERSIST_FINAL_REJECT")
             logger.info(
                 "[PREPERSIST_REJECT: NON_TARGET] '%s' -> Class: %s (%s)",
