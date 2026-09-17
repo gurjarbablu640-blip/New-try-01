@@ -1604,6 +1604,8 @@ def run_full_discovery_pipeline(
             and (not active_signal.expires_at or active_signal.expires_at >= datetime.utcnow())
         )
     }
+    from services.person_enrichment_eligibility_gate import get_enrichment_eligibility_gate
+    _enrichment_gate = get_enrichment_eligibility_gate()
     apollo_gate_results: Dict[int, Tuple[bool, str]] = {}
     apollo_eligible = []
     for candidate in verified_candidates:
@@ -1611,17 +1613,26 @@ def run_full_discovery_pipeline(
             (candidate.candidate_name.casefold(), (candidate.candidate_title or "").casefold()),
             {},
         )
-        eligible, reason = is_apollo_eligible_lead(
-            {
+        _gate_decision = _enrichment_gate.evaluate(
+            candidate={
                 "composite_score": float(raw.get("person_score") or 0) / 100.0,
+                "candidate_name": candidate.candidate_name,
+                "candidate_title": candidate.candidate_title or "",
                 "current_employment": raw.get("current_employment"),
+                "current_employment_verified": str(raw.get("current_employment") or "").upper() == "VERIFIED",
                 "facility_relationship": raw.get("facility_relationship"),
                 "authority_class": raw.get("authority_class"),
             },
-            facility_info,
-            trigger_info,
-            {"evidence_level": "NOT_FOUND"},
+            facility_info=facility_info,
+            trigger_info=trigger_info,
             opportunity_icp_score=float(company.icp_score or 0),
+            contact_info={"evidence_level": "NOT_FOUND"},
+        )
+        eligible = _gate_decision.enrich_contact
+        reason = _gate_decision.reason
+        logger.info(
+            "[ENRICHMENT_GATE] Candidate: %s | Eligible: %s | Confidence: %s | Reason: %s",
+            candidate.candidate_name, eligible, _gate_decision.authority_confidence, reason,
         )
         apollo_gate_results[candidate.id] = (eligible, reason)
         raw["ready_for_contact_enrichment"] = eligible

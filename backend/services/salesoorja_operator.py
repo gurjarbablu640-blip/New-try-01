@@ -31,6 +31,7 @@ from services.rediff_transport_bridge import (
     RediffTransportBridge,
 )
 from services.sales_personalization import SalesPersonalizationPipeline
+from services.sales_personalization_v2 import SalesPersonalizationV2Engine
 
 try:
     import redis
@@ -146,6 +147,7 @@ class SalesoorjaOperator:
         self._discovery_fn = discovery_fn
         self._person_pipeline_fn = person_pipeline_fn
         self._personalization = personalization_pipeline or SalesPersonalizationPipeline()
+        self._personalization_v2 = SalesPersonalizationV2Engine()
         self._rediff = rediff_adapter or RediffSenderAdapter()
         self._imap_poll_fn = imap_poll_fn
         self._transport_bridge = transport_bridge or RediffTransportBridge()
@@ -1634,13 +1636,40 @@ class SalesoorjaOperator:
             record = self._build_production_record(account, candidate, result)
             self._update(last_action=f"Generating outreach for {company_name} with DeepSeek")
             logger.info("[PERSONALIZATION_STARTED] Company: %s | Candidate: %s | Role: %s", company_name, record.get("person"), record.get("title"))
-            personalized = self._personalization.personalize_record(record, force_provider="AUTO")
-            provider = str(personalized.get("llm_provider_used") or "")
+            # ── Phase 2: Try V2 engine first (persona-first + claim guard) ──
+            v2_result = None
+            try:
+                v2_result = self._personalization_v2.generate_outreach(record)
+                if v2_result.status == "VALIDATED" and v2_result.quality_score >= 85:
+                    logger.info(
+                        "[PERSONALIZATION_V2_PASS] Company: %s | Persona: %s | WordCount: %d | Score: %.1f",
+                        company_name, v2_result.persona_used, v2_result.word_count, v2_result.quality_score,
+                    )
+                    personalized = {
+                        "status": "VALIDATED",
+                        "subject": v2_result.subject,
+                        "body": v2_result.body,
+                        "quality_score": v2_result.quality_score,
+                        "llm_provider_used": "V2_DETERMINISTIC",
+                    }
+                    quality_score = v2_result.quality_score
+                    provider = "V2_DETERMINISTIC"
+                else:
+                    logger.info(
+                        "[PERSONALIZATION_V2_FALLBACK] Company: %s | V2 Status: %s | Score: %.1f | Violations: %s",
+                        company_name, v2_result.status if v2_result else "NONE",
+                        v2_result.quality_score if v2_result else 0.0,
+                        v2_result.violations if v2_result else [],
+                    )
+                    raise ValueError("V2 result below threshold; using V1")
+            except Exception:
+                personalized = self._personalization.personalize_record(record, force_provider="AUTO")
+                provider = str(personalized.get("llm_provider_used") or "")
+                quality_score = float(personalized.get("quality_score") or 0)
             if provider.startswith("DEEPSEEK"):
                 self._provider_call("DeepSeek")
             elif provider.startswith("GEMINI"):
                 self._provider_call("Gemini")
-            quality_score = float(personalized.get("quality_score") or 0)
             logger.info("[PERSONALIZATION_RESULT] Company: %s | Provider: %s | Quality Score: %s", company_name, provider, quality_score)
             self._update(last_action=f"Claim validation completed for {company_name}: {personalized.get('status', 'UNKNOWN')}")
             if personalized.get("status") != "VALIDATED" or quality_score < 85:
@@ -1753,7 +1782,13 @@ class SalesoorjaOperator:
         self._heartbeat(message)
 
     def _select_send_candidate(self, db: Any, result: Mapping[str, Any]) -> Any:
+        """Select the best verified candidate with a send-ready email.
+
+        Phase 2: gate uses PersonEnrichmentEligibilityGate logic (grace window
+        at score >= 0.80 for strong authority classes).
+        """
         from models.decision_maker_candidate import DecisionMakerCandidate
+        from services.person_enrichment_eligibility_gate import APOLLO_AUTHORITY_CLASSES
 
         raw_by_id = {int(item["id"]): item for item in result.get("candidates", []) if item.get("id") is not None}
         candidate_ids = list(raw_by_id)
@@ -1769,15 +1804,25 @@ class SalesoorjaOperator:
             raw = raw_by_id.get(candidate.id, {})
             apollo_person = (candidate.apollo_response_json or {}).get("person") or {}
             email_verified = str(apollo_person.get("email_status") or "").casefold() == "verified"
+            norm_score = float(raw.get("person_score") or 0) / 100.0 if float(raw.get("person_score") or 0) > 1.0 else float(raw.get("person_score") or 0)
+            authority = str(raw.get("authority_class") or "").upper()
+            # Accept: strong authority gate (>=0.80 grace window) OR classic >=0.85 threshold
+            score_ok = (
+                (norm_score >= 0.85)
+                or (norm_score >= 0.80 and authority in APOLLO_AUTHORITY_CLASSES)
+            )
             if (
                 raw.get("current_employment") == "VERIFIED"
-                and raw.get("facility_relationship") in {"FACILITY_OWNER", "FACILITY_FUNCTION_OWNER"}
-                and raw.get("authority_class") in {"DECISION_MAKER", "FUNCTION_OWNER", "FACILITY_OWNER", "GROUP_FUNCTION_OWNER"}
-                and float(raw.get("person_score") or 0) >= 85
+                and raw.get("facility_relationship") in {"FACILITY_OWNER", "FACILITY_FUNCTION_OWNER", "GROUP_FUNCTION_OWNER", "DIRECT", "STRONG"}
+                and score_ok
                 and candidate.apollo_email
                 and candidate.apollo_email_confidence == "HIGH"
                 and email_verified
             ):
+                logger.info(
+                    "[SELECT_CANDIDATE] Accepted: %s | Score: %.2f | Authority: %s | GraceWindow: %s",
+                    candidate.candidate_name, norm_score, authority, norm_score < 0.85,
+                )
                 return candidate
         return None
 
