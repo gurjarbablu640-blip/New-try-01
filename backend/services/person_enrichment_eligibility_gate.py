@@ -233,6 +233,8 @@ class PersonEnrichmentEligibilityGate:
         authority = str(
             candidate.get("authority_class")
             or candidate.get("authority_classification")
+            or candidate.get("function_ownership")
+            or candidate.get("authority")
             or ""
         ).upper()
         authority_strong = authority in APOLLO_AUTHORITY_CLASSES

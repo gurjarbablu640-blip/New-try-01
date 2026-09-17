@@ -1645,15 +1645,15 @@ class SalesoorjaOperator:
                         "[PERSONALIZATION_V2_PASS] Company: %s | Persona: %s | WordCount: %d | Score: %.1f",
                         company_name, v2_result.persona_used, v2_result.word_count, v2_result.quality_score,
                     )
+                    provider = v2_result.llm_provider_used or "DEEPSEEK"
                     personalized = {
                         "status": "VALIDATED",
                         "subject": v2_result.subject,
                         "body": v2_result.body,
                         "quality_score": v2_result.quality_score,
-                        "llm_provider_used": "V2_DETERMINISTIC",
+                        "llm_provider_used": provider,
                     }
                     quality_score = v2_result.quality_score
-                    provider = "V2_DETERMINISTIC"
                 else:
                     logger.info(
                         "[PERSONALIZATION_V2_FALLBACK] Company: %s | V2 Status: %s | Score: %.1f | Violations: %s",
@@ -1666,9 +1666,9 @@ class SalesoorjaOperator:
                 personalized = self._personalization.personalize_record(record, force_provider="AUTO")
                 provider = str(personalized.get("llm_provider_used") or "")
                 quality_score = float(personalized.get("quality_score") or 0)
-            if provider.startswith("DEEPSEEK"):
+            if "DEEPSEEK" in provider.upper():
                 self._provider_call("DeepSeek")
-            elif provider.startswith("GEMINI"):
+            elif "GEMINI" in provider.upper():
                 self._provider_call("Gemini")
             logger.info("[PERSONALIZATION_RESULT] Company: %s | Provider: %s | Quality Score: %s", company_name, provider, quality_score)
             self._update(last_action=f"Claim validation completed for {company_name}: {personalized.get('status', 'UNKNOWN')}")

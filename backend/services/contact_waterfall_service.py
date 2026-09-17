@@ -40,6 +40,12 @@ class EmailVerificationLevel(str, Enum):
     UNKNOWN = "UNKNOWN"                                # Cannot classify
 
 
+GENERIC_EMAIL_PREFIXES = {
+    "info", "sales", "quality", "contact", "support", "admin", "help",
+    "careers", "hr", "enquiry", "enquiries", "office", "general", "marketing"
+}
+
+
 @dataclass
 class WaterfallCandidate:
     name: str
@@ -61,6 +67,9 @@ class WaterfallResult:
     candidate_title: Optional[str]
     attempts: List[Dict[str, Any]] = field(default_factory=list)
     enrichment_calls: int = 0
+    new_apollo_calls: int = 0
+    reused_apollo_results: int = 0
+    dedup_skips: int = 0
     hold_reason: Optional[str] = None
     gate_reasons: List[str] = field(default_factory=list)
 
@@ -70,9 +79,19 @@ def classify_email_verification_level(
     email_status: Optional[str] = None,
     source: Optional[str] = None,
 ) -> EmailVerificationLevel:
-    """Classify an email address by its verification confidence level."""
+    """Classify an email address by its verification confidence level.
+    
+    Generic addresses (info@, sales@, quality@, contact@) are NEVER personal verified.
+    """
     if not email or not EMAIL_RE.match(str(email).strip()):
         return EmailVerificationLevel.UNKNOWN
+
+    local_part = email.strip().split("@")[0].lower()
+    if local_part in GENERIC_EMAIL_PREFIXES or any(
+        local_part == p or local_part.startswith(f"{p}.") or local_part.startswith(f"{p}_")
+        for p in GENERIC_EMAIL_PREFIXES
+    ):
+        return EmailVerificationLevel.DOMAIN_VALID_PATTERN_ONLY
 
     status_upper = str(email_status or "").upper()
 
@@ -88,7 +107,6 @@ def classify_email_verification_level(
         return EmailVerificationLevel.VERIFIED_PUBLIC_SOURCE
 
     # Pattern-only (first.last@domain.com with valid domain but no confirmation)
-    local_part = email.split("@")[0]
     if "." in local_part and len(local_part) >= 4:
         return EmailVerificationLevel.DOMAIN_VALID_PATTERN_ONLY
 
@@ -107,8 +125,15 @@ def is_send_ready_email(
     - DOMAIN_VALID_PATTERN_ONLY → NOT send-ready (MX_ONLY_SEND_ALLOWED = False)
     - EXTRAPOLATED → NOT send-ready
     - UNKNOWN → NOT send-ready
+    - Generic departmental inboxes → NOT send-ready
     """
     if not email or not EMAIL_RE.match(str(email).strip()):
+        return False
+    local_part = email.strip().split("@")[0].lower()
+    if local_part in GENERIC_EMAIL_PREFIXES or any(
+        local_part == p or local_part.startswith(f"{p}.") or local_part.startswith(f"{p}_")
+        for p in GENERIC_EMAIL_PREFIXES
+    ):
         return False
     return verification_level in {
         EmailVerificationLevel.VERIFIED_PROVIDER,
@@ -163,14 +188,48 @@ class ContactWaterfallService:
         gate = self._get_gate()
         attempts: List[Dict[str, Any]] = []
         enrichment_calls = 0
+        new_apollo_calls = 0
+        reused_apollo_results = 0
+        dedup_skips = 0
 
         for candidate in candidates[: self._max_candidates]:
             name = candidate.get("candidate_name") or candidate.get("name") or "Unknown"
             title = candidate.get("candidate_title") or candidate.get("title") or ""
 
+            # Check funnel state flags if present
+            state_value = str(candidate.get("funnel_state") or "")
+            if state_value in {"WRONG_PERSON", "WRONG_FACILITY", "CURRENT_EMPLOYMENT_CONTRADICTED"}:
+                attempts.append({
+                    "name": name,
+                    "title": title,
+                    "outcome": "GATE_BLOCKED",
+                    "funnel_state": state_value,
+                    "reason": state_value,
+                })
+                continue
+            if candidate.get("ready_for_contact_enrichment") is False:
+                attempts.append({
+                    "name": name,
+                    "title": title,
+                    "outcome": "GATE_BLOCKED",
+                    "funnel_state": "NOT_READY",
+                    "reason": "ready_for_contact_enrichment is False",
+                })
+                continue
+
+            # Normalize composite score if needed
+            raw_score = candidate.get("composite_score")
+            if raw_score is None:
+                raw_score = candidate.get("person_score") or candidate.get("score") or 0.0
+            norm_score = float(raw_score) / 100.0 if float(raw_score) > 1.0 else float(raw_score)
+            eval_candidate = dict(candidate)
+            eval_candidate["composite_score"] = norm_score
+            eval_candidate["candidate_name"] = name
+            eval_candidate["candidate_title"] = title
+
             # ── Eligibility gate ──────────────────────────────────────────
             decision = gate.evaluate(
-                candidate=candidate,
+                candidate=eval_candidate,
                 facility_info=facility_info,
                 trigger_info=trigger_info,
                 opportunity_icp_score=opportunity_icp_score,
@@ -207,6 +266,14 @@ class ContactWaterfallService:
                 continue
 
             enrichment_calls += 1
+            call_type = result.get("call_type") or ""
+            if result.get("status") == "SKIPPED_DEDUPLICATED" or call_type == "DEDUP_SKIPPED":
+                dedup_skips += 1
+            elif call_type == "REUSED_EXISTING_APOLLO_RESULT" or result.get("reused"):
+                reused_apollo_results += 1
+            else:
+                new_apollo_calls += 1
+
             email = result.get("email")
             email_status = result.get("email_status") or result.get("apollo_email_confidence")
             source = result.get("source") or result.get("email_source")
@@ -228,6 +295,7 @@ class ContactWaterfallService:
                 "authority_confidence": decision.authority_confidence,
                 "gate_reason": decision.reason,
                 "llm_used": decision.llm_used,
+                "call_type": call_type or ("DEDUP_SKIPPED" if result.get("status") == "SKIPPED_DEDUPLICATED" else "NEW_APOLLO_CALL"),
             }
             attempts.append(attempt_entry)
 
@@ -245,6 +313,9 @@ class ContactWaterfallService:
                     candidate_title=title,
                     attempts=attempts,
                     enrichment_calls=enrichment_calls,
+                    new_apollo_calls=new_apollo_calls,
+                    reused_apollo_results=reused_apollo_results,
+                    dedup_skips=dedup_skips,
                 )
 
             if email and not send_ready:
@@ -273,6 +344,9 @@ class ContactWaterfallService:
             candidate_title=None,
             attempts=attempts,
             enrichment_calls=enrichment_calls,
+            new_apollo_calls=new_apollo_calls,
+            reused_apollo_results=reused_apollo_results,
+            dedup_skips=dedup_skips,
             hold_reason="No verified email found across all eligible candidates",
             gate_reasons=gate_reasons,
         )

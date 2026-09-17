@@ -2042,48 +2042,53 @@ def run_contact_fallback_ladder(
     enrich_fn: Any,
     max_attempts: int = 3,
 ) -> Dict[str, Any]:
-    """Enrich verified people sequentially and stop at the first usable contact."""
-    attempts = []
-    enrichment_calls = 0
-    attempt_limit = min(max(int(max_attempts), 0), 3)
-    for candidate in candidates[:attempt_limit]:
-        state_value = str(candidate.get("funnel_state") or "WRONG_PERSON")
-        if state_value in {"WRONG_PERSON", "WRONG_FACILITY", "CURRENT_EMPLOYMENT_CONTRADICTED"}:
-            attempts.append({"name": candidate.get("name"), "state": state_value})
-            continue
-        gate_passed = bool(
-            candidate.get("bright_profile_verified")
-            and candidate.get("ready_for_contact_enrichment")
-            and candidate.get("current_employment") == "VERIFIED"
-            and candidate.get("facility_relationship")
-            in {"FACILITY_OWNER", "FACILITY_FUNCTION_OWNER", "GROUP_FUNCTION_OWNER"}
-            and candidate.get("function_ownership")
-            not in {"UNKNOWN", "COMPANY_ONLY", "GENERAL_QUALITY", "JUNIOR_IC"}
-            and candidate.get("authority") == "DECISION_MAKER"
-            and candidate.get("person_confidence") == "HIGH"
-            and float(candidate.get("person_score") or 0) >= 85
-        )
-        if not gate_passed:
-            attempts.append({"name": candidate.get("name"), "state": "PERSON_VERIFIED_CONTACT_MISSING"})
-            continue
-        result = enrich_fn(candidate)
-        enrichment_calls += 1
-        if result.get("email") or result.get("phone"):
-            attempts.append({"name": candidate.get("name"), "state": "CONTACT_FOUND"})
-            return {
-                "status": "CONTACT_FOUND",
-                "attempts": attempts,
-                "enrichment_calls": enrichment_calls,
-                "result": result,
-            }
-        candidate["funnel_state"] = "PERSON_VERIFIED_CONTACT_MISSING"
-        attempts.append({"name": candidate.get("name"), "state": candidate["funnel_state"]})
+    """Enrich verified people sequentially using authoritative ContactWaterfallService.
+
+    Backward-compatible delegator ensuring ContactWaterfallService is the sole waterfall owner.
+    """
+    from services.contact_waterfall_service import ContactWaterfallService
+
+    def _adapted_enrich(cand):
+        res = enrich_fn(cand)
+        if res and res.get("email") and not res.get("email_status"):
+            res = dict(res)
+            res["email_status"] = "verified"
+        return res
+
+    service = ContactWaterfallService(enrich_fn=_adapted_enrich, max_candidates=max_attempts)
+    wf_result = service.run(
+        candidates=candidates,
+        facility_info={"facility_verified": True, "linkage_confidence": "DIRECT"},
+        trigger_info={"valid_trigger": True},
+        opportunity_icp_score=90.0,
+    )
+
+    legacy_attempts = []
+    for att in wf_result.attempts:
+        outcome = att.get("outcome")
+        if outcome == "CONTACT_FOUND":
+            state = "CONTACT_FOUND"
+        elif outcome == "GATE_BLOCKED":
+            fs = att.get("funnel_state")
+            if fs in {"WRONG_PERSON", "WRONG_FACILITY", "CURRENT_EMPLOYMENT_CONTRADICTED"}:
+                state = fs
+            else:
+                state = "PERSON_VERIFIED_CONTACT_MISSING"
+        else:
+            state = "PERSON_VERIFIED_CONTACT_MISSING"
+        legacy_attempts.append({"name": att.get("name"), "state": state})
+
+    result_dict = None
+    if wf_result.email:
+        result_dict = {"email": wf_result.email, "phone": None}
+
     return {
-        "status": "HOLD_CONTACT_NOT_FOUND",
-        "attempts": attempts,
-        "enrichment_calls": enrichment_calls,
-        "result": None,
+        "status": wf_result.status,
+        "attempts": legacy_attempts,
+        "enrichment_calls": wf_result.enrichment_calls,
+        "result": result_dict,
     }
+
 
 
 def discover_people_with_brightdata(
